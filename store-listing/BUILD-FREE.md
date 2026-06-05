@@ -96,7 +96,8 @@ Prints secret names and opens the right pages:
 
 | Error | Fix |
 |-------|-----|
-| Exit code **65** (~30s fail) | Usually missing Xcode scheme or signing. Re-run on latest `main` (includes shared `App.xcscheme`). Open failed run **Summary** for xcodebuild errors. |
+| Exit code **65** (~30s fail) | Usually missing Xcode scheme. Re-run on latest `main` (includes shared `App.xcscheme`). |
+| Exit code **70** at `GatherProvisioningInputs` | Archive needs App Store Connect API key on the `xcodebuild archive` command. Confirm API key role is **App Manager** or **Admin**, bundle ID `rsvp.echelon.app` exists in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list). |
 | Secret is empty | Org secrets must grant access to **echelon** repo: Organization → Settings → Secrets → each secret → Repository access |
 | `No signing certificate` | Check `APPLE_TEAM_ID` and that bundle ID `rsvp.echelon.app` is registered |
 | API key rejected | Paste full `.p8` into `APPSTORE_PRIVATE_KEY`, including `BEGIN` / `END` lines |

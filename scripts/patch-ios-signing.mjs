@@ -30,11 +30,5 @@ if (text.includes("DEVELOPMENT_TEAM")) {
   );
 }
 
-// Let automatic signing pick the distribution identity during archive.
-text = text.replace(
-  /CODE_SIGN_IDENTITY = "iPhone Developer";/g,
-  'CODE_SIGN_IDENTITY = "";',
-);
-
 fs.writeFileSync(pbx, text);
-console.log(`patch-ios-signing: DEVELOPMENT_TEAM = ${team}, automatic signing`);
+console.log(`patch-ios-signing: DEVELOPMENT_TEAM = ${team}`);

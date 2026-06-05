@@ -88,12 +88,12 @@ function generateCsr() {
   return { keyFile, csrFile, csrContent: fs.readFileSync(csrFile, "utf8") };
 }
 
-function buildP12(keyFile, certPem) {
-  const certFile = path.join(outDir, "distribution.cer.pem");
+function buildP12(keyFile, certDerBase64) {
+  const certDerFile = path.join(outDir, "distribution.cer");
   const p12File = path.join(outDir, "distribution.p12");
-  fs.writeFileSync(certFile, certPem);
+  fs.writeFileSync(certDerFile, Buffer.from(certDerBase64, "base64"));
   execSync(
-    `openssl pkcs12 -export -out "${p12File}" -inkey "${keyFile}" -in "${certFile}" -password pass:${p12Password}`,
+    `openssl pkcs12 -export -out "${p12File}" -inkey "${keyFile}" -in "${certDerFile}" -password pass:${p12Password}`,
     { stdio: "inherit" },
   );
   return p12File;
@@ -107,10 +107,19 @@ async function getBundleIdId() {
 }
 
 async function getOrCreateDistributionCert(csrContent) {
+  const hasStoredKey =
+    Boolean(process.env.IOS_DISTRIBUTION_P12_BASE64?.trim()) ||
+    fs.existsSync(path.join(outDir, "distribution.p12"));
   const existing = await asc("GET", "/v1/certificates?filter[certificateType]=DISTRIBUTION&limit=20");
   if (existing.data?.length) {
-    console.log(`provision-ios-signing: found distribution cert ${existing.data[0].id}`);
-    return existing.data[0];
+    if (hasStoredKey) {
+      console.log(`provision-ios-signing: found distribution cert ${existing.data[0].id}`);
+      return existing.data[0];
+    }
+    for (const cert of existing.data) {
+      console.warn(`provision-ios-signing: revoking orphan distribution cert ${cert.id}`);
+      await asc("DELETE", `/v1/certificates/${cert.id}`);
+    }
   }
   for (const certificateType of ["DISTRIBUTION", "IOS_DISTRIBUTION"]) {
     try {
@@ -174,11 +183,11 @@ async function bootstrap() {
 
   const certDetail = await asc("GET", `/v1/certificates/${cert.id}`);
   const profileDetail = await asc("GET", `/v1/profiles/${profile.id}`);
-  const certPem = Buffer.from(certDetail.data.attributes.certificateContent, "base64").toString("utf8");
+  const certContent = certDetail.data.attributes.certificateContent;
   const profileFile = path.join(outDir, "Echelon_App_Store.mobileprovision");
   fs.writeFileSync(profileFile, Buffer.from(profileDetail.data.attributes.profileContent, "base64"));
 
-  const p12File = buildP12(keyFile, certPem);
+  const p12File = buildP12(keyFile, certContent);
   writeOutputs(p12File, profileFile, PROFILE_NAME);
 }
 

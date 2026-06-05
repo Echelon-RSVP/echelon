@@ -28,7 +28,7 @@ Tip: a **public** repo avoids burning through private-repo macOS minute quotas. 
 ### 2. Create App Store Connect API key (browser)
 
 1. https://appstoreconnect.apple.com → **Users and Access** → **Integrations** → **App Store Connect API**
-2. **+** → Name: `GitHub Actions` → Access: **App Manager**
+2. **+** → Name: `GitHub Actions` → Access: **Admin** (required for cloud signing on export; App Manager is not enough)
 3. Download the `.p8` file once
 4. Copy **Issuer ID** and **Key ID**
 
@@ -97,7 +97,8 @@ Prints secret names and opens the right pages:
 | Error | Fix |
 |-------|-----|
 | Exit code **65** (~30s fail) | Usually missing Xcode scheme. Re-run on latest `main` (includes shared `App.xcscheme`). |
-| Exit code **70** at `GatherProvisioningInputs` | Archive needs App Store Connect API key on the `xcodebuild archive` command. Confirm API key role is **App Manager** or **Admin**, bundle ID `rsvp.echelon.app` exists in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list). |
+| Exit code **70** at `GatherProvisioningInputs` | Archive needs App Store Connect API key on the `xcodebuild archive` command. Confirm bundle ID `rsvp.echelon.app` exists in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list). |
+| Exit code **70** at **Export IPA** / `Cloud signing permission error` | Recreate the API key with **Admin** access (not App Manager). Update `APPSTORE_KEY_ID` and `APPSTORE_PRIVATE_KEY` in GitHub secrets. Apple requires Admin for cloud-managed distribution certificates during export. |
 | `conflicting provisioning settings` on Capacitor/Pods | Do not pass global `CODE_SIGN_IDENTITY` to xcodebuild. Pods must have `CODE_SIGNING_ALLOWED=NO` (handled in `Podfile` + `patch-pods-signing.mjs`). |
 | `no devices` / `iOS App Development provisioning profiles` | Workflow registers a CI placeholder device automatically. Or add your iPhone UDID at [developer.apple.com/account/resources/devices/list](https://developer.apple.com/account/resources/devices/list). Ensure bundle ID `rsvp.echelon.app` exists under Identifiers. |
 | Secret is empty | Org secrets must grant access to **echelon** repo: Organization → Settings → Secrets → each secret → Repository access |

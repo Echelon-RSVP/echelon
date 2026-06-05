@@ -4,8 +4,10 @@
  */
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
-const pbx = path.join("ios", "App", "Pods", "Pods.xcodeproj", "project.pbxproj");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const pbx = path.join(root, "ios", "App", "Pods", "Pods.xcodeproj", "project.pbxproj");
 const team = (process.env.APPLE_TEAM_ID || "").trim();
 
 if (!fs.existsSync(pbx)) {

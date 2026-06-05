@@ -1,5 +1,5 @@
 # FREE iOS build from Windows: push to GitHub, click Run workflow.
-# Needs only 4 secrets (no .p12 certificate files). See store-listing/BUILD-FREE.md
+# Needs only 4 secrets. See store-listing/BUILD-FREE.md
 
 name: iOS App Store build
 
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build-ios:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -52,28 +52,44 @@ jobs:
           KEY_DIR="$RUNNER_TEMP/appstore_key"
           mkdir -p "$KEY_DIR"
           KEY_FILE="$KEY_DIR/AuthKey_${APPSTORE_KEY_ID}.p8"
-          printf '%s\n' "$APPSTORE_PRIVATE_KEY" > "$KEY_FILE"
+          printf '%s' "$APPSTORE_PRIVATE_KEY" > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
           echo "API_KEY_PATH=$KEY_FILE" >> "$GITHUB_ENV"
+          echo "App Store Connect API key configured at $KEY_FILE"
 
       - name: Build archive (automatic signing)
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_KEYPATH: ${{ env.API_KEY_PATH }}
         run: |
+          set -eo pipefail
           cd ios/App
           xcodebuild -workspace App.xcworkspace -scheme App -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Echelon.xcarchive" archive \
             -allowProvisioningUpdates \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
             -authenticationKeyPath "$API_KEY_PATH" \
             -authenticationKeyID "$APPSTORE_KEY_ID" \
-            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID"
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \
+            | tee "$RUNNER_TEMP/xcodebuild-archive.log"
 
       - name: Export IPA
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_KEYPATH: ${{ env.API_KEY_PATH }}
         run: |
+          set -eo pipefail
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -91,7 +107,8 @@ jobs:
             -allowProvisioningUpdates \
             -authenticationKeyPath "$API_KEY_PATH" \
             -authenticationKeyID "$APPSTORE_KEY_ID" \
-            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID"
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \
+            | tee "$RUNNER_TEMP/xcodebuild-export.log"
 
       - name: Upload to TestFlight
         uses: apple-actions/upload-testflight-build@v3
@@ -107,3 +124,14 @@ jobs:
           name: echelon-ios-ipa
           path: ${{ runner.temp }}/export/App.ipa
           retention-days: 14
+
+      - name: Upload xcodebuild logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-logs
+          path: |
+            ${{ runner.temp }}/xcodebuild-archive.log
+            ${{ runner.temp }}/xcodebuild-export.log
+          retention-days: 7
+          if-no-files-found: ignore

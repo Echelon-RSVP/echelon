@@ -6,10 +6,6 @@ name: iOS App Store build
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-  secrets: write
-
 concurrency:
   group: ios-appstore-${{ github.ref }}
   cancel-in-progress: true

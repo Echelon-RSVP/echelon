@@ -43,7 +43,7 @@ npm run deploy:app   # deploy web to echelon.rsvp
 Store copy: `store-listing/en-US/`  
 Organization: [Echelon-RSVP](https://github.com/Echelon-RSVP)  
 Org profile fields: `store-listing/organization-github-profile.txt`  
-Push org profile to GitHub: `node scripts/push-github-org.mjs` (after `gh auth login`)
+Fill org profile: `powershell -File scripts/setup-github-org-profile.ps1` (paste + upload `public/icons/icon-1024.png`). Auto API: `gh auth login` then `node scripts/push-github-org.mjs`
 
 ## License
 

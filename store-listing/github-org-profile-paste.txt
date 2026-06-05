@@ -1,0 +1,47 @@
+Open: https://github.com/organizations/Echelon-RSVP/settings/profile
+
+Paste each value into the matching field, then click Update profile at the bottom.
+
+--- Organization display name ---
+Echelon RSVP
+
+--- Email (will be public) ---
+hi@echelon.rsvp
+
+--- Description ---
+Echelon is where your best self is finally measurable. Social reputation app: feed, stories, messages, ratings, and discovery. iOS + web at echelon.rsvp.
+
+--- URL ---
+https://echelon.rsvp/
+
+--- Social account 1 ---
+https://echelon.rsvp/
+
+--- Social account 2 ---
+https://echelon.rsvp/app/
+
+--- Social account 3 ---
+mailto:hi@echelon.rsvp
+
+--- Location ---
+Portugal
+
+--- Profile picture ---
+Upload: public/icons/icon-1024.png (run npm run build first if missing)
+Or use Gravatar email: hi@echelon.rsvp
+
+--- Repository About (echelon repo) ---
+Open: https://github.com/Echelon-RSVP/echelon/settings
+
+Description:
+Echelon · social reputation app (Capacitor iOS + PWA)
+
+Website:
+https://echelon.rsvp/
+
+Topics (on repo main page, gear icon):
+social-networking, reputation, capacitor, ios, react, pwa
+
+--- Automatic (one-time, after gh auth login) ---
+gh auth login
+node scripts/push-github-org.mjs

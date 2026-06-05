@@ -28,8 +28,14 @@ Social accounts (add in profile UI):
 Repo: https://github.com/Echelon-RSVP/.github
 File: profile/README.md (source in this repo: org-github/profile/README.md)
 
-Push via script (after gh auth login):
+Quick paste (clipboard + opens browser):
+  powershell -ExecutionPolicy Bypass -File scripts/setup-github-org-profile.ps1
+  Values file: store-listing/github-org-profile-paste.txt
+  Profile picture file: public/icons/icon-1024.png
+
+Auto-fill via API (after gh auth login):
   node scripts/push-github-org.mjs
+  Note: API fills name, email, description, URL, location. Profile picture and social slots 2-4 need the web UI.
 
 === Repository About (echelon) ===
 https://github.com/Echelon-RSVP/echelon/settings

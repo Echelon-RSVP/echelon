@@ -21,7 +21,7 @@ text = text.replace(
   /(isa = XCBuildConfiguration;\n\t\t\tbaseConfigurationReference = [^\n]+\n\t\t\tbuildSettings = \{\n)/g,
   (match) => {
     if (match.includes("CODE_SIGNING_ALLOWED")) return match;
-    let extra = "\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n";
+    let extra = "\t\t\t\tEXPANDED_CODE_SIGN_IDENTITY = \"\";\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n";
     if (teamLine) extra += `\t\t\t\t${teamLine}\n`;
     return match + extra;
   },

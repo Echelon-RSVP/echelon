@@ -170,6 +170,7 @@ npm run cap:sync:ios
 | `iOS 26 SDK` / Xcode 26 required on upload | Use `macos-26`, not `macos-15`. |
 | Secret empty in workflow | Org secret → Repository access must include the repo. |
 | Invalid `.p8` | Paste full PEM with headers; check newlines in GitHub secret UI. |
+| **Missing Compliance** (TestFlight) | App uses only HTTPS/TLS (exempt). `patch-ios-plist.mjs` sets `ITSAppUsesNonExemptEncryption=false`. Fix current build in ASC: TestFlight → build → Manage Export Compliance → uses encryption, qualifies for exemption. |
 
 ---
 

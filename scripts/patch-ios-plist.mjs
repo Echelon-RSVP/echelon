@@ -11,6 +11,11 @@ if (!fs.existsSync(plistPath)) {
   process.exit(0);
 }
 
+// Standard HTTPS/TLS only (no proprietary crypto). Skips export compliance prompts per build.
+const booleans = {
+  ITSAppUsesNonExemptEncryption: false,
+};
+
 const entries = {
   NSCameraUsageDescription:
     "Echelon uses the camera for photos, videos, stories, and chat.",
@@ -25,6 +30,20 @@ const entries = {
 };
 
 let xml = fs.readFileSync(plistPath, "utf8");
+
+for (const [key, value] of Object.entries(booleans)) {
+  const boolTag = value ? "<true/>" : "<false/>";
+  const block = `  <key>${key}</key>\n  ${boolTag}\n`;
+  if (xml.includes(`<key>${key}</key>`)) {
+    xml = xml.replace(
+      new RegExp(`<key>${key}</key>\\s*<(?:true|false)\\/>`, "m"),
+      block.trimEnd(),
+    );
+  } else {
+    xml = xml.replace("</dict>\n</plist>", `${block}</dict>\n</plist>`);
+  }
+}
+
 for (const [key, value] of Object.entries(entries)) {
   if (xml.includes(`<key>${key}</key>`)) continue;
   const block = `  <key>${key}</key>\n  <string>${value}</string>\n`;
@@ -32,4 +51,4 @@ for (const [key, value] of Object.entries(entries)) {
 }
 
 fs.writeFileSync(plistPath, xml);
-console.log("patch-ios-plist: permission strings applied.");
+console.log("patch-ios-plist: permissions + export compliance (ITSAppUsesNonExemptEncryption=false) applied.");

@@ -110,5 +110,6 @@ Prints secret names and opens the right pages:
 | `pod install` failed | Re-run workflow; rare CocoaPods CDN glitch |
 | TestFlight upload: `iOS 26 SDK` required | Workflow uses `macos-26` + Xcode 26. Apple no longer accepts builds made with Xcode 16 / iOS 18 SDK. |
 | Blank app in TestFlight | Confirm https://echelon.rsvp/app/ loads on iPhone Safari |
+| **Missing Compliance** on build | Echelon uses only standard HTTPS (exempt). `ITSAppUsesNonExemptEncryption=false` is in Info.plist. For **build 1 already uploaded**: TestFlight → click build → answer export compliance (encryption yes, exempt yes). Or re-run workflow for a new build. |
 
 Support: hi@echelon.rsvp

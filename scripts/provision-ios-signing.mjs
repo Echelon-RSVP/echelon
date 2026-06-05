@@ -91,10 +91,12 @@ function generateCsr() {
 
 function buildP12(keyFile, certDerBase64) {
   const certDerFile = path.join(outDir, "distribution.cer");
+  const certPemFile = path.join(outDir, "distribution.pem");
   const p12File = path.join(outDir, "distribution.p12");
   fs.writeFileSync(certDerFile, Buffer.from(certDerBase64, "base64"));
+  execSync(`openssl x509 -inform DER -in "${certDerFile}" -out "${certPemFile}"`, { stdio: "inherit" });
   execSync(
-    `openssl pkcs12 -export -out "${p12File}" -inkey "${keyFile}" -in "${certDerFile}" -password pass:${p12Password}`,
+    `openssl pkcs12 -export -out "${p12File}" -inkey "${keyFile}" -in "${certPemFile}" -password pass:${p12Password}`,
     { stdio: "inherit" },
   );
   return p12File;

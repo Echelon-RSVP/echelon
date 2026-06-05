@@ -45,6 +45,7 @@ async function asc(method, route, body) {
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`ASC ${method} ${route} -> ${res.status}: ${text.slice(0, 600)}`);
+  if (!text.trim()) return {};
   return JSON.parse(text);
 }
 

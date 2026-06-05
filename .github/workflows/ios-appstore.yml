@@ -151,6 +151,7 @@ jobs:
 
       - name: Persist signing secrets (first bootstrap only)
         if: success() && env.IOS_SIGNING_BOOTSTRAPPED == 'true'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

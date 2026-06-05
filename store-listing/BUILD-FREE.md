@@ -96,8 +96,10 @@ Prints secret names and opens the right pages:
 
 | Error | Fix |
 |-------|-----|
+| Exit code **65** (~30s fail) | Usually missing Xcode scheme or signing. Re-run on latest `main` (includes shared `App.xcscheme`). Open failed run **Summary** for xcodebuild errors. |
+| Secret is empty | Org secrets must grant access to **echelon** repo: Organization → Settings → Secrets → each secret → Repository access |
 | `No signing certificate` | Check `APPLE_TEAM_ID` and that bundle ID `rsvp.echelon.app` is registered |
-| API key rejected | Paste full `.p8` into `APPSTORE_PRIVATE_KEY`, including header lines |
+| API key rejected | Paste full `.p8` into `APPSTORE_PRIVATE_KEY`, including `BEGIN` / `END` lines |
 | `pod install` failed | Re-run workflow; rare CocoaPods CDN glitch |
 | Blank app in TestFlight | Confirm https://echelon.rsvp/app/ loads on iPhone Safari |
 

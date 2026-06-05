@@ -10,6 +10,9 @@ concurrency:
   group: ios-appstore-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-ios:
     runs-on: macos-15
@@ -43,19 +46,53 @@ jobs:
           cd ios/App
           pod install
 
+      - name: Validate signing secrets
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+        run: |
+          set -eo pipefail
+          missing=0
+          for name in APPLE_TEAM_ID APPSTORE_KEY_ID APPSTORE_ISSUER_ID APPSTORE_PRIVATE_KEY; do
+            eval "val=\$$name"
+            if [ -z "$val" ]; then
+              echo "::error::$name is empty. Add org/repo secret and grant this repository access."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          if [ "${#APPLE_TEAM_ID}" -ne 10 ]; then
+            echo "::warning::APPLE_TEAM_ID length is ${#APPLE_TEAM_ID} (expected 10)"
+          fi
+          if ! printf '%s' "$APPSTORE_PRIVATE_KEY" | grep -q "BEGIN PRIVATE KEY"; then
+            echo "::error::APPSTORE_PRIVATE_KEY must include -----BEGIN PRIVATE KEY----- header"
+            exit 1
+          fi
+          echo "Signing secrets present."
+
       - name: Configure App Store Connect API key
         env:
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
         run: |
+          set -eo pipefail
           KEY_DIR="$RUNNER_TEMP/appstore_key"
           mkdir -p "$KEY_DIR"
           KEY_FILE="$KEY_DIR/AuthKey_${APPSTORE_KEY_ID}.p8"
-          printf '%s' "$APPSTORE_PRIVATE_KEY" > "$KEY_FILE"
+          printf '%s\n' "$APPSTORE_PRIVATE_KEY" > "$KEY_FILE"
           chmod 600 "$KEY_FILE"
           echo "API_KEY_PATH=$KEY_FILE" >> "$GITHUB_ENV"
           echo "App Store Connect API key configured at $KEY_FILE"
+
+      - name: Verify Xcode scheme
+        run: |
+          set -eo pipefail
+          cd ios/App
+          xcodebuild -workspace App.xcworkspace -list
+          test -f App.xcodeproj/xcshareddata/xcschemes/App.xcscheme
 
       - name: Build archive (automatic signing)
         env:
@@ -75,10 +112,13 @@ jobs:
             -allowProvisioningUpdates \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Automatic \
-            -authenticationKeyPath "$API_KEY_PATH" \
-            -authenticationKeyID "$APPSTORE_KEY_ID" \
-            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \
+            CODE_SIGN_IDENTITY="" \
             | tee "$RUNNER_TEMP/xcodebuild-archive.log"
+          if [ ! -d "$RUNNER_TEMP/Echelon.xcarchive" ]; then
+            echo "::error::Archive was not created"
+            grep -i "error:" "$RUNNER_TEMP/xcodebuild-archive.log" | tail -20 || true
+            exit 1
+          fi
 
       - name: Export IPA
         env:
@@ -135,3 +175,15 @@ jobs:
             ${{ runner.temp }}/xcodebuild-export.log
           retention-days: 7
           if-no-files-found: ignore
+
+      - name: Summarize xcodebuild errors
+        if: failure()
+        run: |
+          for log in "$RUNNER_TEMP/xcodebuild-archive.log" "$RUNNER_TEMP/xcodebuild-export.log"; do
+            if [ -f "$log" ]; then
+              echo "## $(basename "$log")" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+              grep -iE "error:|failed|signing|scheme|provisioning" "$log" | tail -40 >> "$GITHUB_STEP_SUMMARY" || tail -40 "$log" >> "$GITHUB_STEP_SUMMARY"
+              echo '```' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done

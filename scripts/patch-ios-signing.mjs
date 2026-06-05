@@ -19,8 +19,8 @@ if (!team) {
 }
 
 let text = fs.readFileSync(pbx, "utf8");
-
 const teamLine = `DEVELOPMENT_TEAM = ${team};`;
+
 if (text.includes("DEVELOPMENT_TEAM")) {
   text = text.replace(/DEVELOPMENT_TEAM = [^;]+;/g, teamLine);
 } else {
@@ -30,11 +30,11 @@ if (text.includes("DEVELOPMENT_TEAM")) {
   );
 }
 
-// Release archive needs distribution identity (not "iPhone Developer" at project level).
+// Let automatic signing pick the distribution identity during archive.
 text = text.replace(
   /CODE_SIGN_IDENTITY = "iPhone Developer";/g,
-  'CODE_SIGN_IDENTITY = "Apple Distribution";',
+  'CODE_SIGN_IDENTITY = "";',
 );
 
 fs.writeFileSync(pbx, text);
-console.log(`patch-ios-signing: DEVELOPMENT_TEAM = ${team}, distribution signing`);
+console.log(`patch-ios-signing: DEVELOPMENT_TEAM = ${team}, automatic signing`);

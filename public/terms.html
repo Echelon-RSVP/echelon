@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#FCF6FA">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" sizes="32x32" href="/app/icons/favicon-32.png" />
+  <title>Legal · echelon</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap');
+    :root { --text-main:#5A4A60; --text-muted:#9B8FA8; --accent:#8C6BD8; }
+    * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+    body {
+      font-family:Nunito,system-ui,sans-serif; color:var(--text-main); background:#FCF6FA;
+      line-height:1.65; min-height:100dvh; display:flex; flex-direction:column;
+    }
+    h1,h2,.font-brand { font-family:Quicksand,sans-serif; }
+    .legal-top {
+      position:sticky; top:0; z-index:10; background:rgba(252,246,250,.92);
+      backdrop-filter:blur(12px); border-bottom:1px solid rgba(235,217,240,.8);
+      padding:14px 16px max(14px, env(safe-area-inset-top));
+    }
+    .legal-top-inner { max-width:720px; margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .legal-page-close { flex-shrink:0; width:36px; height:36px; border-radius:12px; border:1px solid rgba(183,156,240,.28); background:rgba(255,255,255,.96); color:#6B5080; font-size:18px; font-weight:700; cursor:pointer; display:grid; place-items:center; line-height:1; }
+    .legal-page-close:active { transform:scale(.94); }
+    .legal-brand { font-size:22px; font-weight:700; text-decoration:none; background:linear-gradient(135deg,#FF9DC0,#B79CF0); -webkit-background-clip:text; background-clip:text; color:transparent; }
+    .langtabs { display:flex; gap:6px; flex-shrink:0; }
+    .langtab { border:none; background:rgba(255,255,255,.7); border:1px solid #EBD9F0; color:#7B6A86; font-weight:800; font-size:11px; padding:5px 9px; border-radius:999px; cursor:pointer; }
+    .langtab.on { background:linear-gradient(135deg,#FF9DC0,#B79CF0); color:#fff; border-color:transparent; }
+    .legal-wrap { flex:1; max-width:720px; width:100%; margin:0 auto; padding:28px 20px 48px; }
+    .legal-nav {
+      display:flex; flex-wrap:wrap; gap:10px 18px; justify-content:center;
+      margin:0 0 28px; padding:14px 16px; background:rgba(255,255,255,.55);
+      border:1px solid rgba(235,217,240,.85); border-radius:18px; font-size:13px; font-weight:700;
+    }
+    .legal-nav a { color:var(--accent); text-decoration:none; white-space:nowrap; }
+    .legal-nav a:hover, .legal-nav a[aria-current="page"] { text-decoration:underline; color:#6B4FA8; }
+    #legal-page-title { font-size:clamp(1.5rem,4vw,2rem); color:#5A4A60; margin-bottom:8px; line-height:1.25; }
+    #legal-page-body h2 { font-size:15px; color:#5A4A60; margin:22px 0 8px; }
+    #legal-page-body p, #legal-page-body li { font-size:14px; color:#6B5A76; margin-bottom:10px; }
+    #legal-page-body ul { padding-left:20px; margin-bottom:12px; }
+    .legal-updated { font-size:12px; color:var(--text-muted); margin-bottom:18px; }
+    .cookie-settings-panel {
+      margin-top:36px; padding:20px; background:rgba(255,255,255,.65);
+      border:1px solid rgba(235,217,240,.9); border-radius:20px;
+    }
+    .cookie-settings-panel h2 { font-size:17px; margin-bottom:12px; }
+    .cookie-pref-row { display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid #F1E8F0; font-size:13px; }
+    .cookie-btn { margin-top:14px; padding:10px 18px; border-radius:14px; font-weight:800; font-size:13px; cursor:pointer; border:none;
+      background:linear-gradient(135deg,#FF9DC0,#B79CF0); color:#fff; box-shadow:0 8px 20px rgba(183,156,240,.35); }
+    .legal-site-footer { text-align:center; padding:24px 20px max(28px, env(safe-area-inset-bottom)); border-top:1px solid rgba(235,217,240,.7); background:rgba(255,255,255,.35); }
+    .legal-site-footer .tagline { font-size:13px; font-weight:700; color:#8B7A95; margin-bottom:6px; }
+    .legal-site-footer .copy { font-size:11px; color:var(--text-muted); }
+    .cookie-banner-home { position:fixed; bottom:0; left:0; right:0; z-index:100; padding:16px; pointer-events:none; }
+    .cookie-banner-home-inner { pointer-events:auto; max-width:720px; margin:0 auto; background:rgba(255,251,254,.97); border:1px solid rgba(235,217,240,.9); border-radius:20px; padding:18px 20px; box-shadow:0 -8px 40px rgba(120,80,110,.2); }
+    .cookie-banner-home-inner h3 { font-family:Quicksand; font-size:16px; color:#5A4A60; margin-bottom:8px; }
+    .cookie-banner-home-inner p { font-size:13px; color:#7B6A86; line-height:1.55; margin-bottom:10px; }
+    .cookie-banner-home-actions { display:flex; flex-wrap:wrap; gap:10px; justify-content:flex-end; margin-top:12px; }
+    .cookie-btn-ghost { background:rgba(255,255,255,.8); border:1px solid #EBD9F0; color:#7B6A86; box-shadow:none; margin-top:0; }
+    .cookie-banner-links { display:flex; flex-wrap:wrap; gap:8px 16px; font-size:12px; font-weight:700; margin-bottom:4px; }
+    .cookie-banner-links a { color:var(--accent); text-decoration:underline; }
+  </style>
+</head>
+<body>
+  <header class="legal-top">
+    <div class="legal-top-inner">
+      <a href="/app/" class="legal-brand font-brand">echelon</a>
+      <div class="langtabs" id="lang-tabs" role="tablist" aria-label="Language"></div>
+    </div>
+  </header>
+
+  <main class="legal-wrap">
+    <nav class="legal-nav" id="legal-nav" aria-label="Legal"></nav>
+    <article>
+      <h1 id="legal-page-title">Legal</h1>
+      <div id="legal-page-body"></div>
+    </article>
+    <section id="cookie-settings-panel" class="cookie-settings-panel" hidden>
+      <h2 data-i18n="legal.cookieSettings">Cookie settings</h2>
+      <p data-i18n="cookie.settingsIntro">Choose which optional storage you allow. Strictly necessary storage is always active.</p>
+      <label class="cookie-pref-row">
+        <span data-i18n="cookie.functional">Functional storage</span>
+        <input type="checkbox" id="page-cookie-functional" checked>
+      </label>
+      <label class="cookie-pref-row" style="opacity:.7">
+        <span data-i18n="cookie.analytics">Analytics</span>
+        <input type="checkbox" disabled>
+      </label>
+      <button type="button" class="cookie-btn" id="page-cookie-save" data-i18n="cookie.save">Save preferences</button>
+    </section>
+  </main>
+
+  <footer class="legal-site-footer">
+    <p class="tagline" data-i18n="home.footer.tagline">Reputation as currency, by design.</p>
+    <p class="copy" data-i18n="home.footer.copy">© 2026 Fortune Comet, Unipessoal Lda (VAT PT516161440). All rights reserved.</p>
+  </footer>
+
+  <div id="cookie-banner" class="cookie-banner-home" role="dialog" aria-labelledby="cookie-title" hidden>
+    <div class="cookie-banner-home-inner">
+      <h3 id="cookie-title" data-i18n="cookie.banner.title">We value your privacy</h3>
+      <p data-i18n="cookie.banner.text">We use strictly necessary storage and, with your consent, functional preferences.</p>
+      <div class="cookie-banner-links">
+        <a href="privacy.html" data-i18n="legal.privacy">Privacy Policy</a>
+        <a href="cookies.html" data-i18n="legal.cookies">Cookie Policy</a>
+      </div>
+      <div id="cookie-prefs-panel" hidden>
+        <label class="cookie-pref-row"><span data-i18n="cookie.functional">Functional storage</span><input type="checkbox" id="cookie-functional" checked></label>
+        <label class="cookie-pref-row" style="opacity:.7"><span data-i18n="cookie.analytics">Analytics</span><input type="checkbox" disabled></label>
+      </div>
+      <div class="cookie-banner-home-actions">
+        <button type="button" class="cookie-btn cookie-btn-ghost" id="cookie-reject" data-i18n="cookie.reject">Reject non-essential</button>
+        <button type="button" class="cookie-btn cookie-btn-ghost" id="cookie-manage" data-i18n="cookie.manage">Manage preferences</button>
+        <button type="button" class="cookie-btn" id="cookie-accept" data-i18n="cookie.acceptAll">Accept all</button>
+        <button type="button" class="cookie-btn" id="cookie-save" hidden data-i18n="cookie.save">Save preferences</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="i18n.js"></script>
+  <script src="legal.js"></script>
+  <script src="legal-page.js"></script>
+</body>
+</html>

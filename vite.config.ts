@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { cpSync } from "fs";
+import { execSync } from "child_process";
 
 export default defineConfig({
   plugins: [
@@ -8,8 +9,8 @@ export default defineConfig({
     {
       name: "sync-shared-assets",
       buildStart() {
-        cpSync("i18n.js", "public/i18n.js");
-        cpSync("legal.js", "public/legal.js");
+        execSync("node scripts/sync-browser-scripts.mjs", { stdio: "inherit" });
+        execSync("node scripts/build-legal-pages.mjs", { stdio: "inherit" });
         cpSync("pwa-install.js", "public/pwa-install.js");
         cpSync("docs-page.js", "public/docs-page.js");
         cpSync("docs-page.html", "public/docs.html");

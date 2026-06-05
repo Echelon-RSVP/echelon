@@ -16,14 +16,14 @@ git commit -m "Echelon iOS App Store"
 git branch -M main
 ```
 
-Create a repo at https://github.com/new (public = unlimited free Actions minutes).
+This project lives at **https://github.com/Echelon-RSVP/echelon** (public = unlimited free Actions minutes).
 
 ```powershell
-git remote add origin https://github.com/YOUR_USER/echelon.git
+git remote add origin https://github.com/Echelon-RSVP/echelon.git
 git push -u origin main
 ```
 
-Tip: a **public** repo avoids burning through private-repo macOS minute quotas.
+Tip: a **public** repo avoids burning through private-repo macOS minute quotas. Organization secrets are already set on **Echelon-RSVP** (see `store-listing/organization-github-profile.txt`).
 
 ### 2. Create App Store Connect API key (browser)
 
@@ -38,7 +38,9 @@ https://developer.apple.com/account → **Membership** → **Team ID** (10 chara
 
 ### 4. Add 4 GitHub secrets
 
-Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+Add secrets at **organization** level (already done for Echelon-RSVP) or per repo:
+
+https://github.com/organizations/Echelon-RSVP/settings/secrets/actions
 
 | Secret name | Value |
 |-------------|-------|
@@ -57,7 +59,7 @@ No certificate files. No Codemagic. Xcode automatic signing creates the profile 
 
 ## Build (every time, from Windows)
 
-1. https://github.com/YOUR_USER/echelon → **Actions**
+1. https://github.com/Echelon-RSVP/echelon → **Actions**
 2. **iOS App Store build** → **Run workflow** → **Run workflow**
 3. Wait ~12–20 minutes
 4. Build appears in App Store Connect → **TestFlight** (processing may take 5–30 min more)

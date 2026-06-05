@@ -1,9 +1,9 @@
 /** Shared Echelon i18n: app (ESM) + homepage (window.EchelonI18n). */
 
-export const LANG_KEY = "echelon-lang";
-export const LANG_CHOSEN_KEY = "echelon-lang-chosen";
+const LANG_KEY = "echelon-lang";
+const LANG_CHOSEN_KEY = "echelon-lang-chosen";
 
-export const LANGS = [
+const LANGS = [
   { id: "en", label: "EN", name: "English" },
   { id: "es", label: "ES", name: "Español" },
   { id: "pt", label: "PT", name: "Português" },
@@ -22,18 +22,18 @@ const COUNTRY_LANG = {
   DE: "de", AT: "de", LI: "de",
 };
 
-export function countryToLang(code) {
+function countryToLang(code) {
   if (!code) return "en";
   const lang = COUNTRY_LANG[String(code).toUpperCase()];
   return IDS.includes(lang) ? lang : "en";
 }
 
-export function langFromBrowser() {
+function langFromBrowser() {
   const nav = (navigator.language || "en").slice(0, 2).toLowerCase();
   return IDS.includes(nav) ? nav : "en";
 }
 
-export async function detectLangFromIp() {
+async function detectLangFromIp() {
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 4500);
@@ -47,7 +47,7 @@ export async function detectLangFromIp() {
   }
 }
 
-export async function resolveLang() {
+async function resolveLang() {
   if (typeof localStorage !== "undefined") {
     const stored = localStorage.getItem(LANG_KEY);
     if (stored && IDS.includes(stored)) return stored;
@@ -58,14 +58,14 @@ export async function resolveLang() {
   return lang;
 }
 
-export function saveLang(lang, chosen = true) {
+function saveLang(lang, chosen = true) {
   if (typeof localStorage === "undefined" || !IDS.includes(lang)) return;
   localStorage.setItem(LANG_KEY, lang);
   if (chosen) localStorage.setItem(LANG_CHOSEN_KEY, "1");
   if (typeof document !== "undefined") document.documentElement.lang = lang;
 }
 
-export const STRINGS = {
+const STRINGS = {
   en: {
     "tabs.feed": "Feed",
     "tabs.rate": "Rate",
@@ -2468,7 +2468,7 @@ export const STRINGS = {
   },
 };
 
-export function t(lang, key, vars = {}) {
+function t(lang, key, vars = {}) {
   const bag = STRINGS[lang] || STRINGS.en;
   let s = bag[key] ?? STRINGS.en[key] ?? key;
   Object.entries(vars).forEach(([k, v]) => {
@@ -2477,7 +2477,7 @@ export function t(lang, key, vars = {}) {
   return s;
 }
 
-export function applyHomeI18n(lang) {
+function applyHomeI18n(lang) {
   if (typeof document === "undefined") return;
   document.documentElement.lang = lang;
   document.querySelectorAll("[data-i18n]").forEach((el) => {

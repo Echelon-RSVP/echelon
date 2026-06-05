@@ -58,7 +58,7 @@ Summary:
 5. Bundle ID: **rsvp.echelon.app** (create under Certificates, Identifiers & Profiles → Identifiers if missing)
 6. SKU: **echelon-ios-001**
 7. Copy text from `store-listing/en-US/*.txt` into the listing fields.
-8. Privacy Policy: `https://echelon.rsvp/app/docs.html#privacy`
+8. Privacy Policy: `https://echelon.rsvp/app/privacy.html`
 9. Support URL: `https://echelon.rsvp/app/`
 
 ### Step 3: App Store Connect API key (for uploads)
@@ -74,7 +74,7 @@ git init
 git add .
 git commit -m "Add iOS App Store cloud build"
 git branch -M main
-git remote add origin https://github.com/YOUR_USER/echelon.git
+git remote add origin https://github.com/Echelon-RSVP/echelon.git
 git push -u origin main
 ```
 

@@ -17,11 +17,25 @@ const DOC_SECTIONS = [
 const DOC_TIPS = ["docs.tip1", "docs.tip2", "docs.tip3", "docs.tip4", "docs.tip5"];
 
 const LEGAL_LINKS = [
-  ["/privacy.html", "legal.privacy"],
-  ["/terms.html", "legal.terms"],
-  ["/cookies.html", "legal.cookies"],
-  ["/data-deletion.html", "legal.dataDeletion"],
+  ["/app/privacy.html", "legal.privacy"],
+  ["/app/terms.html", "legal.terms"],
+  ["/app/cookies.html", "legal.cookies"],
+  ["/app/data-deletion.html", "legal.dataDeletion"],
 ];
+
+const HASH_TO_LEGAL = {
+  privacy: "privacy.html",
+  terms: "terms.html",
+  cookies: "cookies.html",
+  "data-deletion": "data-deletion.html",
+  data_deletion: "data-deletion.html",
+};
+
+function redirectLegalHash() {
+  const hash = (location.hash || "").replace(/^#/, "").toLowerCase();
+  const target = HASH_TO_LEGAL[hash];
+  if (target) location.replace(`/app/${target}`);
+}
 
 let tipIdx = 0;
 let quizPick = null;
@@ -151,6 +165,7 @@ function renderDocs(lang) {
 }
 
 function init() {
+  redirectLegalHash();
   const I = window.EchelonI18n;
   if (!I) return;
   let lang = localStorage.getItem(I.LANG_KEY);

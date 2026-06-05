@@ -1,4 +1,4 @@
-Privacy Policy URL: https://echelon.rsvp/app/docs.html#privacy
+Privacy Policy URL: https://echelon.rsvp/app/privacy.html
 Support URL: https://echelon.rsvp/app/
 Marketing URL: https://echelon.rsvp/
 Bundle ID: rsvp.echelon.app

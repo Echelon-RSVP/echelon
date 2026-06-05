@@ -7,6 +7,13 @@
   <meta name="robots" content="index, follow">
   <link rel="icon" type="image/png" sizes="32x32" href="/app/icons/favicon-32.png" />
   <title>Documentation · echelon</title>
+  <script>
+    (function () {
+      var map = { privacy: "privacy.html", terms: "terms.html", cookies: "cookies.html", "data-deletion": "data-deletion.html", data_deletion: "data-deletion.html" };
+      var hash = (location.hash || "").slice(1).toLowerCase();
+      if (map[hash]) location.replace("/app/" + map[hash]);
+    })();
+  </script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
     :root { --text:#121212; --muted:#737373; --accent:#8C6BD8; --border:#efefef; }

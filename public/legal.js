@@ -1,9 +1,9 @@
 /** GDPR / ePrivacy legal texts + cookie consent helpers (shared app + homepage). */
 
-export const COOKIE_CONSENT_KEY = "echelon-cookie-consent";
-export const COOKIE_CONSENT_VERSION = "2.0";
+const COOKIE_CONSENT_KEY = "echelon-cookie-consent";
+const COOKIE_CONSENT_VERSION = "2.0";
 
-export function getCookieConsent() {
+function getCookieConsent() {
   if (typeof localStorage === "undefined") return null;
   try {
     const raw = localStorage.getItem(COOKIE_CONSENT_KEY);
@@ -15,7 +15,7 @@ export function getCookieConsent() {
   }
 }
 
-export function saveCookieConsent(consent) {
+function saveCookieConsent(consent) {
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(COOKIE_CONSENT_KEY, JSON.stringify({
     necessary: true,
@@ -26,7 +26,7 @@ export function saveCookieConsent(consent) {
   }));
 }
 
-export function hasCookieConsent() {
+function hasCookieConsent() {
   return !!getCookieConsent();
 }
 
@@ -51,7 +51,7 @@ function doc(lang, type) {
   return bag[type] || LEGAL.en[type];
 }
 
-export function getLegalDoc(lang, type) {
+function getLegalDoc(lang, type) {
   return doc(lang, type);
 }
 
@@ -69,13 +69,13 @@ function renderSectionsHtml(d) {
   return html;
 }
 
-export function renderLegalBodyHtml(lang, type) {
+function renderLegalBodyHtml(lang, type) {
   const d = doc(lang, type);
   if (!d) return "";
   return renderSectionsHtml(d);
 }
 
-export function renderLegalHtml(lang, type) {
+function renderLegalHtml(lang, type) {
   const d = doc(lang, type);
   if (!d) return "";
   return `<h1>${d.title}</h1>${renderSectionsHtml(d)}`;

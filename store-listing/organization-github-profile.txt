@@ -1,27 +1,37 @@
 GitHub organization: Echelon-RSVP
-Paste at: https://github.com/organizations/Echelon-RSVP/settings/profile
+Org page: https://github.com/Echelon-RSVP
 
-=== General (organization profile) ===
+=== Organization profile (Settings → Profile) ===
+https://github.com/organizations/Echelon-RSVP/settings/profile
 
 Organization display name:
 Echelon RSVP
 
-Email (will be public):
+Email (public):
 hi@echelon.rsvp
 
 Description:
 Echelon is where your best self is finally measurable. Social reputation app: feed, stories, messages, ratings, and discovery. iOS + web at echelon.rsvp.
 
-URL:
+URL (blog):
 https://echelon.rsvp/
 
-Social account 1:
-https://echelon.rsvp/
-
-Location (optional):
+Location:
 Portugal
 
-=== Repository About (echelon repo) ===
+Social accounts (add in profile UI):
+1. https://echelon.rsvp/
+2. https://echelon.rsvp/app/
+3. mailto:hi@echelon.rsvp
+
+=== Organization profile README (shown on org homepage) ===
+Repo: https://github.com/Echelon-RSVP/.github
+File: profile/README.md (source in this repo: org-github/profile/README.md)
+
+Push via script (after gh auth login):
+  node scripts/push-github-org.mjs
+
+=== Repository About (echelon) ===
 https://github.com/Echelon-RSVP/echelon/settings
 
 Description:
@@ -30,20 +40,23 @@ Echelon · social reputation app (Capacitor iOS + PWA)
 Website:
 https://echelon.rsvp/
 
-Topics (add on repo main page):
+Topics:
 social-networking, reputation, capacitor, ios, react, pwa
 
-=== Organization Actions secrets (optional, shared by all repos) ===
+=== Organization Actions secrets (configured) ===
 https://github.com/organizations/Echelon-RSVP/settings/secrets/actions
 
-Same 4 secrets as the repo (if you want every repo in the org to build iOS):
+Secrets (do not commit values to git):
+- APPLE_TEAM_ID
+- APPSTORE_KEY_ID
+- APPSTORE_ISSUER_ID
+- APPSTORE_PRIVATE_KEY
 
-APPLE_TEAM_ID = 4W6N6K8TQ9
-APPSTORE_KEY_ID = JC9JDQ4AJ3
-APPSTORE_ISSUER_ID = 28ac4946-339a-4837-9504-aaa5a981a137
-APPSTORE_PRIVATE_KEY = (full .p8 contents, never commit to git)
+Visibility: Public repositories (works for echelon while repo stays public).
+Note: Org secrets on free plans are limited to public repos.
 
-Repository secrets already work for echelon alone. Org secrets are only needed for multiple repos.
+iOS workflow: Actions → iOS App Store build → Run workflow
+Guide: store-listing/BUILD-FREE.md
 
 === App / product reference ===
 
@@ -51,7 +64,10 @@ App name: Echelon RSVP (App Store)
 Bundle ID: rsvp.echelon.app
 SKU: echelon-ios-001
 Support: https://echelon.rsvp/app/
-Privacy: https://echelon.rsvp/app/docs.html#privacy
+Privacy: https://echelon.rsvp/app/privacy.html
+Terms: https://echelon.rsvp/app/terms.html
+Cookies: https://echelon.rsvp/app/cookies.html
+Data deletion: https://echelon.rsvp/app/data-deletion.html
 Category: Social Networking
 Copyright: 2026 Echelon
 

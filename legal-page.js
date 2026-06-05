@@ -1,5 +1,13 @@
 /** Standalone legal pages (privacy.html, terms.html, cookies.html). */
 
+function isAppLegalPage() {
+  return location.pathname.includes("/app/");
+}
+
+function legalHomeHref() {
+  return isAppLegalPage() ? "/app/" : "/";
+}
+
 const FILE_DOC = {
   "privacy.html": "privacy",
   "terms.html": "terms",
@@ -19,12 +27,13 @@ function t(lang, key) {
 function renderLegalNav(lang, activeDoc) {
   const nav = document.getElementById("legal-nav");
   if (!nav) return;
+  const prefix = isAppLegalPage() ? "" : "/";
   const links = [
-    ["privacy", "/privacy.html", "legal.privacy"],
-    ["terms", "/terms.html", "legal.terms"],
-    ["cookies", "/cookies.html", "legal.cookies"],
-    ["data_deletion", "/data-deletion.html", "legal.dataDeletion"],
-    ["settings", "/cookies.html#settings", "legal.cookieSettings"],
+    ["privacy", `${prefix}privacy.html`, "legal.privacy"],
+    ["terms", `${prefix}terms.html`, "legal.terms"],
+    ["cookies", `${prefix}cookies.html`, "legal.cookies"],
+    ["data_deletion", `${prefix}data-deletion.html`, "legal.dataDeletion"],
+    ["settings", `${prefix}cookies.html#settings`, "legal.cookieSettings"],
   ];
   nav.innerHTML = links.map(([doc, href, key]) => {
     const isActive = doc === "settings"
@@ -131,11 +140,7 @@ function initLegalCloseButton(lang) {
       return;
     }
     const ref = document.referrer || "";
-    if (ref.includes("/app") || ref.includes("echelon")) {
-      window.location.href = "/";
-      return;
-    }
-    window.location.href = "/";
+    window.location.href = legalHomeHref();
   });
   inner.appendChild(btn);
 }
@@ -192,6 +197,9 @@ export function initLegalPage() {
       initCookieSettingsPanel(lang);
       initLegalCloseButton(lang);
     }
+
+    const brand = document.querySelector(".legal-brand");
+    if (brand) brand.href = legalHomeHref();
 
     applyLang(lang);
     initLangTabs(() => lang, (id) => applyLang(id), () => {});

@@ -7,7 +7,7 @@ Echelon is a social reputation app where your score moves through real interacti
 - **Live app:** [echelon.rsvp/app/](https://echelon.rsvp/app/)
 - **Marketing:** [echelon.rsvp](https://echelon.rsvp/)
 - **Support:** hi@echelon.rsvp
-- **Privacy:** [Privacy policy](https://echelon.rsvp/app/docs.html#privacy)
+- **Privacy:** [Privacy policy](https://echelon.rsvp/app/privacy.html)
 
 ## Product
 
@@ -41,7 +41,9 @@ npm run deploy:app   # deploy web to echelon.rsvp
 3. Upload screenshots from `store-listing/screenshots/`
 
 Store copy: `store-listing/en-US/`  
-Organization profile fields: `store-listing/organization-github-profile.txt`
+Organization: [Echelon-RSVP](https://github.com/Echelon-RSVP)  
+Org profile fields: `store-listing/organization-github-profile.txt`  
+Push org profile to GitHub: `node scripts/push-github-org.mjs` (after `gh auth login`)
 
 ## License
 

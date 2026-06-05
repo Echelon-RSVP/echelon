@@ -1,7 +1,7 @@
 /**
  * CI signing for App Store archive:
  * - DEVELOPMENT_TEAM on App target
- * - Apple Distribution on Release only (in pbxproj, not xcodebuild CLI)
+ * - Drop inherited "iPhone Developer" from project Release (automatic signing picks distribution)
  * - Pods are unsigned separately (patch-pods-signing.mjs)
  */
 import fs from "fs";
@@ -9,7 +9,6 @@ import path from "path";
 
 const team = (process.env.APPLE_TEAM_ID || "").trim();
 const pbx = path.join("ios", "App", "App.xcodeproj", "project.pbxproj");
-const distLine = 'CODE_SIGN_IDENTITY = "Apple Distribution";';
 
 if (!fs.existsSync(pbx)) {
   console.warn("patch-ios-signing: project.pbxproj not found. Run cap sync first.");
@@ -33,19 +32,17 @@ if (text.includes("DEVELOPMENT_TEAM")) {
   );
 }
 
-// Project Release config: iPhone Developer forces development profiles on archive.
+// Project Release: inherited iPhone Developer forces dev profiles; automatic signing sets identity.
 text = text.replace(
-  /(504EC3151FED79650016851F \/\* Release \*\/[\s\S]*?)CODE_SIGN_IDENTITY = "iPhone Developer";/,
-  `$1${distLine}`,
+  /(504EC3151FED79650016851F \/\* Release \*\/[\s\S]*?)\t\t\t\tCODE_SIGN_IDENTITY = "iPhone Developer";\n/,
+  "$1",
 );
 
-// App target Release only (not Debug, not pods).
-if (!text.match(/504EC318[\s\S]*?CODE_SIGN_IDENTITY = "Apple Distribution"/)) {
-  text = text.replace(
-    /(504EC3181FED79650016851F \/\* Release \*\/[\s\S]*?CODE_SIGN_STYLE = Automatic;\n)/,
-    `$1\t\t\t\t${distLine}\n`,
-  );
-}
+// App target Release: never pin CODE_SIGN_IDENTITY (conflicts with automatic signing).
+text = text.replace(
+  /(504EC3181FED79650016851F \/\* Release \*\/[\s\S]*?)\t\t\t\tCODE_SIGN_IDENTITY = "[^"]*";\n/g,
+  "$1",
+);
 
 fs.writeFileSync(pbx, text);
-console.log(`patch-ios-signing: team=${team}, Release=Apple Distribution (App target + project Release)`);
+console.log(`patch-ios-signing: team=${team}, Release identity cleared for automatic signing`);

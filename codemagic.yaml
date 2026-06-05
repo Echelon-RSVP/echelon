@@ -1,0 +1,47 @@
+# Echelon iOS build from Windows (no Mac required on your laptop).
+# 1. Push this repo to GitHub
+# 2. Sign up at https://codemagic.io and connect the repo
+# 3. Add Apple Developer credentials in Codemagic UI (see APP-STORE-FROM-WINDOWS.md)
+# 4. Click "Start new build"
+
+workflows:
+  echelon-ios-appstore:
+    name: Echelon iOS App Store
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: rsvp.echelon.app
+      vars:
+        XCODE_WORKSPACE: ios/App/App.xcworkspace
+        XCODE_SCHEME: App
+        APP_STORE_APP_ID: 0000000000
+      node: 22
+      xcode: latest
+    scripts:
+      - name: Install dependencies
+        script: npm ci
+      - name: Build web app
+        script: npm run build && npm run ios:prepare
+      - name: Capacitor iOS
+        script: |
+          npm run cap:sync:ios
+      - name: Patch iOS permissions
+        script: node scripts/patch-ios-plist.mjs
+      - name: Set up code signing
+        script: xcode-project use-profiles
+      - name: Build ipa
+        script: |
+          xcode-project build-ipa \
+            --workspace "$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        beta_groups:
+          - Internal testers

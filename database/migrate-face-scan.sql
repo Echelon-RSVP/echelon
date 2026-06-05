@@ -1,0 +1,4 @@
+SET NAMES utf8mb4;
+
+ALTER TABLE users ADD COLUMN face_scan_fallback TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN face_scan_retry_used TINYINT(1) NOT NULL DEFAULT 0;

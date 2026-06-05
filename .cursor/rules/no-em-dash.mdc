@@ -1,0 +1,21 @@
+---
+description: Never use em dashes in user-facing text or assistant replies for this project
+alwaysApply: true
+---
+
+# No em dashes
+
+Never use the em dash character (U+2014, `—`) in:
+
+- UI copy, i18n strings, comments shown to users, API error messages, commit messages, or PR descriptions for Echelon
+- Assistant replies to the user
+
+Use instead:
+
+- A period and new sentence
+- A comma
+- A colon
+- Parentheses
+- A middle dot (`·`) only as a compact separator between short labels (e.g. `name · score`)
+
+Do not substitute en dash (`–`) as a workaround when an em dash would have been used. Prefer plain punctuation.

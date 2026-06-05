@@ -1,0 +1,7 @@
+Privacy Policy URL: https://echelon.rsvp/app/docs.html#privacy
+Support URL: https://echelon.rsvp/app/
+Marketing URL: https://echelon.rsvp/
+Bundle ID: rsvp.echelon.app
+SKU: echelon-ios-001
+Primary category: Social Networking
+Copyright: 2026 Echelon

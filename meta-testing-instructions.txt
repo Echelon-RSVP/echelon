@@ -1,0 +1,121 @@
+META APP REVIEW — TESTING INSTRUCTIONS FOR WEB (Echelon)
+Operator: Fortune Comet, Unipessoal Lda · https://echelon.rsvp
+Last updated: 30 May 2026
+
+================================================================================
+FIELD 1 — Where can we find the app?
+================================================================================
+
+Primary app URL (web application):
+https://echelon.rsvp/app/
+
+Marketing / homepage:
+https://echelon.rsvp/
+
+The app is a progressive web application. Open the primary URL in Chrome, Safari, or Edge (desktop or mobile). No download from an app store is required.
+
+Instagram OAuth redirect URI (for reference):
+https://echelon.rsvp/api/v1/instagram/callback
+
+Legal pages:
+- Privacy Policy: https://echelon.rsvp/privacy.html
+- Terms & Conditions: https://echelon.rsvp/terms.html
+- Cookie Policy: https://echelon.rsvp/cookies.html
+- Data deletion: https://echelon.rsvp/data-deletion.html
+
+================================================================================
+FIELD 2 — Provide instructions for accessing the app so we may complete our review
+================================================================================
+
+OVERVIEW
+Echelon is a social reputation web app. We integrate Meta’s Instagram Platform (Instagram Login / Instagram API with Instagram Login). We do NOT use Facebook Login. Reviewers do not need a Facebook account to test the app; an Instagram account (added as an Instagram Tester on our Meta app) is required only to test Instagram connect.
+
+META / INSTAGRAM INTEGRATION
+- Meta app name: Echelon-IG
+- Instagram App ID: 4273823969497618
+- Product: Instagram Platform — Instagram Login (OAuth 2.0)
+- Permission / scopes requested: instagram_business_basic
+- Purpose: (1) Verify the user’s Instagram identity and display their @handle on their Echelon profile with a “Verified” badge; (2) Optionally sync the user’s own recent Instagram photos/videos into their Echelon feed (posts marked as sourced from Instagram); (3) Receive Instagram messaging and comment webhooks for in-app notifications.
+- Webhook callback URL: https://echelon.rsvp/api/v1/instagram/webhook
+- Webhook verify token: echelon_ig_webhook_2026 (configured server-side; Meta verifies via GET hub.mode=subscribe)
+- OAuth flow: User must already be signed into Echelon → taps “Connect Instagram” → browser redirects to instagram.com/oauth/authorize → user approves → redirect to https://echelon.rsvp/api/v1/instagram/callback → user returned to https://echelon.rsvp/app/?ig=connected
+- Disconnect: Settings → Instagram → Disconnect (or Profile → Instagram settings)
+- Data deletion: When a user removes Echelon from Instagram (Apps and websites), Meta calls our deletion callback: https://echelon.rsvp/api/v1/instagram/deletion — we purge Instagram tokens, handle, and synced Instagram posts. Instructions: https://echelon.rsvp/data-deletion.html
+
+STEP-BY-STEP — GENERAL APP ACCESS
+1. Open https://echelon.rsvp/app/ in Chrome or Safari.
+2. On the cookie banner, tap “Accept all” (or “Accept” / manage preferences — functional cookies help store language preference).
+3. Create an account OR sign in with the test credentials provided in Field 3 below.
+4. Complete onboarding:
+   - Choose display name and username (@handle).
+   - Optional: allow camera access for a onboarding selfie (used for initial in-app score suggestion). If camera is denied, onboarding can still proceed.
+5. You will land on the Feed tab. Bottom navigation: Feed | Lens | Messages | Friends | Me.
+
+STEP-BY-STEP — TEST INSTAGRAM CONNECT (PRIMARY META FEATURE)
+Prerequisite: Add the reviewer’s Instagram account as an Instagram Tester (Roles → Instagram Testers) in our Meta app dashboard, and ensure the Instagram account is a Professional (Business or Creator) account per Instagram API requirements.
+
+1. Sign in to Echelon (see Field 3).
+2. Go to the “Me” tab (profile) OR open Settings from the profile screen.
+3. Tap “Connect Instagram” / “Connect Instagram to verify”.
+4. You will be redirected to Instagram’s authorization page in the same browser tab (on iOS, stay in Safari — do not switch to the Instagram app for OAuth).
+5. Log in with the Instagram Tester account and approve access for instagram_business_basic.
+6. After approval, you are redirected back to Echelon. The profile shows the Instagram handle with a verified badge.
+7. On the Feed tab, synced Instagram media may appear in the user’s feed (posts tagged with an Instagram indicator).
+8. To test disconnect: Settings → Instagram → Disconnect. Instagram-derived data is removed from the Echelon account.
+9. To test Meta data-deletion callback: On Instagram, go to Settings → Website permissions → Apps and websites → Active → remove Echelon. Meta sends a signed deletion request to our callback; status URL format: https://echelon.rsvp/data-deletion.html?code=...
+
+OTHER FEATURES (OPTIONAL FOR REVIEW)
+- Friends: Friends tab → search users → send/accept friend requests.
+- Messages: Messages tab → open a chat → send text; optional disappearing / view-once modes in chat.
+- Lens / proximity: Lens tab → enable Lens → allow location when prompted → nearby users within ~1 mile may appear (optional; requires browser geolocation permission).
+- Settings → Legal: Privacy Policy, Terms, Cookies, Data deletion pages open in-app.
+
+FACEBOOK LOGIN
+Not used. Echelon authentication is via email/password, Google Sign-In, or Sign in with Apple. Instagram Login is separate from Facebook Login.
+
+BROWSER NOTES
+- Use a modern browser with third-party cookies / storage enabled for the OAuth redirect to complete.
+- Desktop Chrome or Safari recommended for review. Mobile Safari also supported.
+- If OAuth fails, retry in a regular browser window (not an in-app WebView).
+
+CONTACT FOR REVIEW ISSUES
+miguelmirpuricasal@gmail.com
+
+================================================================================
+FIELD 3 — Access codes / test credentials (if payment or membership required)
+================================================================================
+
+Payment or membership: NOT required. Echelon is free. No paywall, subscription, or in-app purchases.
+
+Test Echelon account (email / password sign-in):
+Email: meta.reviewer@echelon.rsvp
+Password: EchelonMeta2026!
+
+(If this account is unavailable, register a new account at https://echelon.rsvp/app/ using any valid email and a password of at least 8 characters, then complete onboarding.)
+
+Instagram testing:
+- Use an Instagram account added as an Instagram Tester on our Meta app.
+- The Instagram account should be a Professional (Business or Creator) account.
+- Approve instagram_business_basic when prompted during Connect Instagram.
+
+No Facebook test user is required (Facebook Login is not implemented).
+
+================================================================================
+FIELD 4 — Gift codes for app store download (if payment required to download)
+================================================================================
+
+Not applicable. Echelon is a web application only. There is no iOS App Store or Google Play download. Access is free at:
+
+https://echelon.rsvp/app/
+
+No gift codes, promo codes, or store purchases are needed.
+
+================================================================================
+FIELD 5 — Geographic restrictions / geo-blocking bypass
+================================================================================
+
+Not applicable. Echelon is available worldwide at https://echelon.rsvp/app/ with no geo-blocking or geo-fencing on account access or Instagram OAuth.
+
+Optional location features (Lens / proximity scan) use the browser’s geolocation API only after the user explicitly enables Lens and grants location permission. These features are not required to test Instagram Login. Reviewers may deny location permission and still fully test Instagram connect, messaging, feed, and profile features.
+
+No VPN or bypass instructions are needed.

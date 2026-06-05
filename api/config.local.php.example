@@ -1,0 +1,32 @@
+<?php
+/** Copy to config.local.php on the server (not committed). */
+return [
+    'db_host' => 'localhost',
+    'db_name' => 'echelon_app',
+    'db_user' => 'echelon_app',
+    'db_pass' => 'CHANGE_ME',
+    'install_key' => 'CHANGE_INSTALL_KEY',
+    'upload_dir' => __DIR__ . '/uploads',
+    'upload_url' => '/api/uploads',
+    'session_days' => 90,
+    'app_url' => 'https://echelon.rsvp/app/',
+    'mail_from' => 'Echelon <hi@echelon.rsvp>',
+
+    // Google Sign-In (Google Cloud Console → OAuth 2.0 Web client)
+    'google_client_id' => '73520219376-5bvlfjlkuejnega5r9h5nqiu84r1s9si.apps.googleusercontent.com',
+
+    // Apple (optional — when Developer account is approved)
+    'apple_client_id' => '',
+    'apple_redirect_uri' => 'https://echelon.rsvp/app/',
+
+    // Google Gemini — face-scan baseline scoring
+    'google_ai_api_key' => 'YOUR_GOOGLE_AI_KEY',
+    'google_ai_model' => 'gemini-2.0-flash',
+
+    // Instagram (Meta Developer → Instagram → API setup with Instagram login → Business login settings)
+    // Use the Instagram App ID and Instagram App Secret from that page — NOT the top-level Facebook App ID.
+    'instagram_app_id' => '',
+    'instagram_app_secret' => '',
+    'instagram_redirect_uri' => 'https://echelon.rsvp/api/v1/instagram/callback',
+    'instagram_webhook_verify_token' => 'echelon_ig_webhook_2026',
+];

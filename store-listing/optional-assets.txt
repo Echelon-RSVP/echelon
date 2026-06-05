@@ -1,0 +1,25 @@
+App Store Connect optional sections (Echelon RSVP)
+
+Routing App Coverage File
+  SKIP. Only for turn-by-turn routing apps (Maps, navigation).
+  Echelon is a social app. Do not upload a GeoJSON file here.
+
+App Clip
+  SKIP unless your iOS build includes an App Clip target.
+  App Store Connect shows metadata only after you upload a build that contains a clip.
+  This repo does not include an App Clip extension.
+
+iMessage App
+  Screenshots are only required if you ship a Messages framework extension.
+  Echelon does not include an iMessage extension today.
+  If App Store Connect still shows the iMessage tab, you may upload the prepared folders:
+    store-listing/screenshots/imessage/iphone-6.5-inch/  (1284 x 2778)
+    store-listing/screenshots/imessage/ipad-13-inch/      (2048 x 2732)
+  Or leave iMessage empty and remove the iMessage capability from the bundle if you added it by mistake.
+
+iPad (main app listing)
+  If the iPad tab appears under the main iPhone screenshots section:
+    store-listing/screenshots/ipad-13-inch/
+
+Regenerate everything:
+  npm run appstore:screenshots

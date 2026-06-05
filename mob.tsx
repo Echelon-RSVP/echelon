@@ -1,0 +1,17362 @@
+/* ============================================================================
+   ECHELON: "Where your best self is finally measurable."™
+   ----------------------------------------------------------------------------
+   A fictional, satirical social-rating ecosystem inspired by the Black Mirror
+   episode "Nosedive". Every interaction ends in a rating; every rating moves a
+   single, always-visible 1.0-5.0 reputation score; every score buys (or denies)
+   access to the rest of life. The UI is deliberately sweet, soft, and a little
+   too happy; the wrongness lives in the constant, real-time scoring.
+
+   ARCHITECTURE (mirrors a React Native app; ports 1:1 to Expo)
+   ┌───────────────────────────────────────────────────────────────────────┐
+   │  config/        TIERS, FEATURE_GATES, EMOTION_TAGS                       │
+   │  services/      user registry, API client, scoring engine                 │
+   │  store/         useReducer + Context  (global, live score updates)       │
+   │  components/     Avatar, ScoreRing, TierPill, ScoreBadge, Mascot, ...     │
+   │  screens/        Onboarding, Feed, People, Perks, Alerts, Profile,        │
+   │                  Settings, Interaction (sheet)                            │
+   │  modals/         RatingModal, FeatureLockModal, AppealModal, FriendWarn   │
+   └───────────────────────────────────────────────────────────────────────┘
+   In real React Native: <View>→<div>, <Text>→<span/p>, StyleSheet→CSS,
+   AsyncStorage→store, FlatList→.map, Reanimated→the CSS keyframes below.
+============================================================================ */
+
+import React, {
+    createContext, useContext, useReducer, useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback, useId,
+  } from "react";
+  import { createPortal } from "react-dom";
+  import {
+    AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
+  } from "recharts";
+  import { api, setToken, tryBootstrap, getToken, mediaUrl } from "./api.js";
+  import { startGeoWatch, geoSupported } from "./proximity.js";
+  import { initAppleAuth, signInWithApple, fetchAppleConfig, tryAutoSignInWithApple, shouldAutoSignInWithApple } from "./apple-auth.js";
+  import { initGoogleAuth, signInWithGmail, fetchAuthConfig } from "./web-auth.js";
+  import { initPwaInstall, requestInstall, openInExternalBrowser, triggerWebShareInstall, isIos } from "./pwa-install.js";
+  import { openInstagramAuth } from "./instagram-auth.js";
+  import { isScreenshotDemoMode, buildScreenshotDemoSession, SCREENSHOT_DEMO_USER_ID } from "./screenshot-demo.js";
+  import {
+    Star, Heart, Sparkles, Lock, Eye, EyeOff, Bell, User, Home, Users, Settings,
+    Phone, MessageCircle, MapPin, TrendingUp, TrendingDown, ShieldAlert, Scale,
+    Zap, Crown, Check, X, ChevronRight, ChevronLeft, ChevronDown, Plus, Search,
+    Camera, Award, Plane, Building2, CalendarHeart, Coffee, Info, Gauge, Loader,
+    Instagram, BadgeCheck, Volume2, VolumeX, Ticket, Radar, Crosshair, BellOff, Moon, Shield,
+    Video, Image as ImageIcon, Play, Pause, Send, Mic, MicOff, Smile, LogOut, Smartphone, Share,
+    Clock, UserMinus, UserPlus, UserCheck, Share2, Bookmark, Sparkles as SparklesIcon, MoreHorizontal, Trash2, Timer, Flame,
+    Map as MapIcon, Compass, QrCode, AlertCircle,
+    BookOpen, SlidersHorizontal, Ruler, Type, AtSign, AlignLeft, AlignCenter, AlignRight, GripVertical, Minus, PlusCircle,
+    RotateCcw, LayoutGrid, Infinity, Link2, Download, Music2, Pencil, SquarePlay, ChevronUp, Circle,
+    Disc3, Radio, UserRound, BarChart2, Hash, Scissors,
+  } from "lucide-react";
+  import ViewFinderMap, { resetViewfinderMapView } from "./viewfinder-map";
+  import PartyPinMap from "./party-pin-map";
+  import {
+    LANGS, saveLang, t as translate, langFromBrowser, detectLangFromIp, LANG_KEY,
+  } from "./i18n.js";
+  import {
+    getLegalDoc, getCookieConsent, saveCookieConsent, hasCookieConsent,
+  } from "./legal.js";
+  import {
+    loadIgExtras, saveIgExtras, patchIgExtras, saveToCollection, removeFromAllCollections,
+    allSavedPostIds, addHighlight, addAlbumItems, removeAlbumItem, recordMediaMention, removeMediaMention, mentionsForUser,
+    hidePost, getPostAnalytics, recordPostAnalytics, voteStoryPoll, STORY_STICKER_PACK,
+    loadCustomStickers, addCustomSticker,
+    isReelPost, isFeedPost, REEL_MAX_SEC, defaultAlgorithmTopics,
+    getStoryPollVotes, filterHiddenWords, buildExploreGrid, defaultBroadcastChannel,
+    defaultGroupChat, createStorySticker, reelEditorTools, ECHELON_AUDIO_LIBRARY, searchFreeMusic,
+    PROFILE_CATEGORIES, STORY_STICKER_TYPES,
+  } from "./ig-features.js";
+  import QRCode from "qrcode";
+  
+  /* ============================================================================
+     0. SOUND: original procedural SFX recreating the bright, synthetic,
+     hyper-pleasant "rating app" sound world (NOT the show's copyrighted audio).
+     Pure Web Audio API: no assets, works offline. Unlocks on first user tap.
+  ============================================================================ */
+  const sfx = {
+    enabled: true,
+    ctx: null,
+    unlocked: false,
+    ac() {
+      try {
+        if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (this.ctx.state === "suspended") this.ctx.resume();
+        this.unlocked = this.ctx.state === "running";
+      } catch (e) { return null; }
+      return this.ctx;
+    },
+    unlock() {
+      const ctx = this.ac();
+      if (!ctx) return;
+      if (ctx.state === "suspended") ctx.resume();
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      g.gain.value = 0.0001;
+      o.connect(g).connect(ctx.destination);
+      o.frequency.value = 440;
+      o.start(t);
+      o.stop(t + 0.02);
+      this.unlocked = true;
+    },
+    blip(freq, t0, dur, type = "sine", vol = 0.22) {
+      const ctx = this.ac(); if (!ctx || !this.enabled) return;
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type; o.frequency.setValueAtTime(freq, t0);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol, t0 + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g).connect(ctx.destination);
+      o.start(t0); o.stop(t0 + dur + 0.03);
+    },
+    seq(notes, type, vol) {
+      if (!this.enabled) return;
+      const ctx = this.ac(); if (!ctx) return;
+      const t = ctx.currentTime;
+      notes.forEach(([f, off, dur]) => this.blip(f, t + off, dur, type, vol));
+    },
+    noise(t0, dur, vol) {
+      const ctx = this.ac(); if (!ctx) return;
+      const n = Math.floor(ctx.sampleRate * dur);
+      const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+      const s = ctx.createBufferSource(); s.buffer = buf;
+      const g = ctx.createGain(); g.gain.value = vol;
+      const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 1600;
+      s.connect(f).connect(g).connect(ctx.destination);
+      s.start(t0);
+    },
+    // the affirming "you've been rated" chime
+    rate()    { this.seq([[784, 0, 0.09], [988, 0.07, 0.09], [1319, 0.14, 0.18]], "triangle", 0.22); },
+    up()      { this.seq([[880, 0, 0.08], [1175, 0.06, 0.16]], "triangle", 0.20); },
+    down()    { this.seq([[466, 0, 0.13], [392, 0.09, 0.2]], "sine", 0.18); },
+    notify()  { this.seq([[1047, 0, 0.1], [1568, 0.09, 0.15]], "sine", 0.16); },
+    penalty() { this.seq([[220, 0, 0.14], [165, 0.08, 0.22], [130, 0.16, 0.28]], "sawtooth", 0.16); },
+    boost()   { this.seq([[784, 0, 0.1], [988, 0.06, 0.1], [1319, 0.12, 0.1], [1760, 0.18, 0.26]], "triangle", 0.18); },
+    celebrate() {
+      this.seq([
+        [523, 0, 0.1], [659, 0.07, 0.1], [784, 0.14, 0.12],
+        [988, 0.26, 0.14], [1175, 0.4, 0.16], [1319, 0.56, 0.22], [1568, 0.72, 0.28],
+      ], "triangle", 0.17);
+    },
+    success() { this.seq([[523, 0, 0.12], [659, 0.08, 0.12], [784, 0.16, 0.24]], "triangle", 0.22); },
+    ring()    { this.seq([[440, 0, 0.18], [523, 0.22, 0.18], [440, 0.44, 0.22]], "sine", 0.16); },
+    tap()     { this.seq([[660, 0, 0.05], [880, 0.04, 0.04]], "sine", 0.12); },
+    star(n)   {
+      const freqs = [523, 587, 659, 784, 880];
+      const f = freqs[Math.max(1, Math.min(5, n)) - 1];
+      this.seq([[f, 0, 0.05], [f * 1.12, 0.04, 0.07]], "sine", 0.1);
+    },
+    rateCommit(stars) {
+      const s = Math.max(1, Math.min(5, stars || 3));
+      if (s >= 4) {
+        this.seq([[523, 0, 0.07], [659, 0.06, 0.08], [784, 0.14, 0.14]], "sine", 0.14);
+      } else if (s === 3) {
+        this.seq([[440, 0, 0.08], [523, 0.07, 0.12]], "sine", 0.12);
+      } else {
+        this.seq([[349, 0, 0.1], [294, 0.08, 0.14]], "sine", 0.1);
+      }
+    },
+    lock()    { this.seq([[180, 0, 0.16], [138, 0.05, 0.22]], "square", 0.08); },
+    shutter() { if (!this.enabled) return; const ctx = this.ac(); if (!ctx) return; const t = ctx.currentTime; this.noise(t, 0.04, 0.18); this.noise(t + 0.07, 0.05, 0.13); },
+  };
+  
+  // Google "G" for Continue with Gmail
+  function GmailGlyph({ size = 16 }) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+      </svg>
+    );
+  }
+
+  // Apple glyph for the native "Continue with Apple" button.
+  function AppleGlyph({ size = 16, color = "#fff" }) {
+    return (
+      <svg width={size} height={size * 1.18} viewBox="0 0 16 19" fill={color} aria-hidden="true">
+        <path d="M13.18 14.62c-.27.62-.4.9-.74 1.45-.48.77-1.16 1.73-2 1.74-.75.01-.94-.49-1.96-.48-1.02 0-1.23.49-1.98.48-.84-.01-1.48-.87-1.96-1.64-1.34-2.16-1.48-4.7-.65-6.05.58-.96 1.5-1.52 2.36-1.52.88 0 1.43.48 2.16.48.7 0 1.13-.48 2.15-.48.77 0 1.59.42 2.17 1.14-1.9 1.04-1.6 3.76.25 4.45z" />
+        <path d="M10.4 4.2c.42-.54.74-1.3.65-2.07-.68.05-1.48.48-1.95 1.04-.42.5-.78 1.26-.68 2 .73.06 1.5-.42 1.98-.97z" />
+      </svg>
+    );
+  }
+
+  function WhatsAppGlyph({ size = 28 }) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="24" fill="#25D366" />
+        <path fill="#fff" d="M34.3 13.6C31.5 10.8 27.9 9.2 24 9.2c-7.7 0-14 6.3-14 14 0 2.5.7 4.9 1.9 7L9 39l8.9-2.3c2 .9 4.2 1.4 6.5 1.4 7.7 0 14-6.3 14-14 0-3.9-1.6-7.5-4.1-10.5zm-7.3 22.8c-2.1 0-4.1-.6-5.9-1.6l-.4-.2-5.3 1.4 1.4-5.2-.3-.5c-1.1-1.8-1.7-3.9-1.7-6.1 0-6.4 5.2-11.6 11.6-11.6 3.1 0 6 1.2 8.2 3.4s3.4 5.1 3.4 8.2c0 6.4-5.2 11.6-11.4 11.6zm6.4-8.7c-.3-.2-2-.9-2.3-1-.3-.1-.5-.2-.7.2-.2.3-.8 1-.9 1.2-.2.2-.3.2-.6.1-.3-.2-1.3-.5-2.4-1.5-.9-.8-1.5-1.8-1.7-2.1-.2-.3 0-.5.1-.6.1-.1.3-.3.4-.5.1-.1.1-.3.2-.5.1-.2 0-.3 0-.5-.1-.2-.7-1.7-.9-2.3-.2-.6-.5-.5-.7-.5h-.6c-.2 0-.5.1-.8.4-.3.3-1.1 1.1-1.1 2.6s1.1 3 1.3 3.2c.2.2 2.1 3.2 5.1 4.5.7.3 1.3.5 1.7.6.7.2 1.4.2 1.9.1.6-.1 2-.8 2.3-1.6.3-.8.3-1.4.2-1.6-.1-.1-.3-.2-.6-.3z" />
+      </svg>
+    );
+  }
+
+  function InstagramGlyph({ size = 28 }) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+        <defs>
+          <linearGradient id="ig-share-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="#F58529" />
+            <stop offset="35%" stopColor="#DD2A7B" />
+            <stop offset="65%" stopColor="#8134AF" />
+            <stop offset="100%" stopColor="#515BD4" />
+          </linearGradient>
+        </defs>
+        <rect width="48" height="48" rx="12" fill="url(#ig-share-grad)" />
+        <rect x="12" y="12" width="24" height="24" rx="7" fill="none" stroke="#fff" strokeWidth="2.4" />
+        <circle cx="24" cy="24" r="6.2" fill="none" stroke="#fff" strokeWidth="2.4" />
+        <circle cx="33.2" cy="14.8" r="2.2" fill="#fff" />
+      </svg>
+    );
+  }
+
+  function TelegramGlyph({ size = 28 }) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="24" fill="#26A5E4" />
+        <path fill="#fff" d="M33.2 14.8L11.6 23.4c-1.2.5-1.2 1.2-.2 1.5l5.5 1.7 2.1 6.4c.3.8.6 1 1 .1.4-.6.8-1.5 1.2-2.1l2.5-2.4 5.2 3.8c1 .7 1.7.3 2-.9l3-14.2c.4-1.6-.6-2.3-1.7-1.8zM20.4 28.5l-.2 3.5c0 .7.3.7.6.4l1.6-1.5 3.3 2.4-3.7-4.8-2.6-2.6z" />
+      </svg>
+    );
+  }
+
+  function FacebookGlyph({ size = 28 }) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="24" fill="#1877F2" />
+        <path fill="#fff" d="M28.8 24.8h-3.1v11.6h-4.8V24.8h-2.4v-4.1h2.4v-2.7c0-2.4 1.4-3.7 3.6-3.7 1 0 2 .2 2 .2v3.3h-1.1c-1.1 0-1.4.7-1.4 1.4v2.5h3.5l-.5 4.1z" />
+      </svg>
+    );
+  }
+
+  function XGlyph({ size = 28 }) {
+    return (
+      <svg width={size} height={size} viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="24" fill="#111" />
+        <path fill="#fff" d="M28.6 14h3.5l-7.6 8.7L33.8 34h-6.8l-5.3-6.9-6.1 6.9h-3.5l8.1-9.3L14.2 14h7l4.8 6.3 6.6-6.3zm-1.2 17.8h1.9L19.8 16.2h-2l10.6 15.6z" />
+      </svg>
+    );
+  }
+  
+  /* ============================================================================
+     1. CONFIG: social stratification, feature gates, emotional vocabulary
+  ============================================================================ */
+  
+  // Tiers map a score onto a social caste. The boundaries echo the episode:
+  // 4.5+ is the rarefied air, below 2.6 you become a person to be avoided.
+  const TIERS = [
+    {
+      key: "elite", label: "Elite", min: 4.5,
+      accent: "#D9A625", ink: "#7A5A05", soft: "#FFF4D6",
+      grad: ["#FFE9A8", "#FFD6E4"],
+      ring: ["#F4C84B", "#FF9DC0"],
+      icon: Crown,
+      blurb: "The radiant few. Doors open before you knock.",
+    },
+    {
+      key: "high", label: "High", min: 4.0,
+      accent: "#8C6BD8", ink: "#4B3A78", soft: "#EFE9FF",
+      grad: ["#E6DBFF", "#D8ECFF"],
+      ring: ["#B79CF0", "#7FB8F0"],
+      icon: Sparkles,
+      blurb: "Trusted, pleasant, going places. Keep smiling.",
+    },
+    {
+      key: "mid", label: "Mid", min: 2.6,
+      accent: "#4FA98C", ink: "#2E6553", soft: "#E7F6EF",
+      grad: ["#D7F2E6", "#EFF6E4"],
+      ring: ["#7FD4B4", "#BFE08A"],
+      icon: Gauge,
+      blurb: "Acceptable. A little more warmth wouldn't hurt.",
+    },
+    {
+      key: "low", label: "Low", min: 1.0,
+      accent: "#B07E7E", ink: "#7A4F4F", soft: "#EFE6E6",
+      grad: ["#E7D7D7", "#E2DDE2"],
+      ring: ["#C9A0A0", "#B8AEC0"],
+      icon: ShieldAlert,
+      blurb: "Below community standards. Please reflect and improve.",
+    },
+  ];
+  
+  const getTier = (score) => TIERS.find((t) => score >= t.min) || TIERS[TIERS.length - 1];
+  
+  // Feature gates: score thresholds that unlock or restrict real life.
+  const FEATURE_GATES = [
+    { id: "feed",    label: "Premium Radiance Feed", req: 4.0, icon: Sparkles, copy: "See the most beautiful, highest-rated lives. Mid & Low tiers receive a gentler, filtered feed." },
+    { id: "dining",  label: "Fine Dining Reservations", req: 4.0, icon: Coffee, copy: "Book curated venues that screen guests by score." },
+    { id: "travel",  label: "Priority Travel Lane",  req: 4.2, icon: Plane, copy: "Skip the standard queue. Board, drive, and arrive ahead of lower tiers." },
+    { id: "housing", label: "Premier Residences",    req: 4.5, icon: Building2, copy: "Unlock the 20% Prime Influencer housing discount and exclusive buildings." },
+    { id: "events",  label: "Invitation-Only Events", req: 4.5, icon: CalendarHeart, copy: "Weddings, galas, openings. The room is curated; the room curates you back." },
+    { id: "boost",   label: "Endorse & Boost Others", req: 4.5, icon: Zap, copy: "Lend your influence. Temporarily amplify someone you believe in." },
+  ];
+  
+  // Optional one-tap emotional tags attached to a rating. Sweet on top, sour below.
+  const EMOTION_TAGS = {
+    positive: ["radiant ✨", "warm 🤍", "so authentic 💫", "uplifting 🌷", "polished 🪞", "kind 🍃", "magnetic 🔆", "effortless 🫧"],
+    negative: ["a little flat 😶", "tried too hard 😅", "off-brand 📉", "intense 😬", "draining 🥀", "inauthentic 🫥", "needy 😟", "cold 🧊"],
+  };
+
+  const COMPOSE_FILTERS = [
+    { label: "Normal", scene: ["#FFE9A8", "#FFC6DA"], overlay: "none", css: "" },
+    { label: "Clarendon", scene: ["#FFE9C8", "#E6DBFF"], overlay: "rgba(255,255,255,.08)", css: "contrast(1.18) saturate(1.25) brightness(1.04)" },
+    { label: "Gingham", scene: ["#F5F0E8", "#E8E0F0"], overlay: "rgba(180,160,200,.1)", css: "contrast(.92) brightness(1.08) saturate(.88)" },
+    { label: "Moon", scene: ["#2A2438", "#4A4060"], overlay: "rgba(30,20,50,.32)", css: "grayscale(.35) contrast(1.12) brightness(.88)" },
+    { label: "Lark", scene: ["#FFF8E8", "#FFE8D8"], overlay: "rgba(255,240,200,.14)", css: "contrast(.9) brightness(1.12) saturate(.85)" },
+    { label: "Reyes", scene: ["#F8E8D0", "#E8D8C8"], overlay: "rgba(255,220,180,.16)", css: "sepia(.22) contrast(.85) brightness(1.14) saturate(.78)" },
+    { label: "Juno", scene: ["#FFE8C8", "#FFD8A8"], overlay: "rgba(255,200,120,.14)", css: "sepia(.18) saturate(1.35) contrast(1.05)" },
+    { label: "Slumber", scene: ["#3A2848", "#5A4868"], overlay: "rgba(60,40,80,.28)", css: "saturate(.65) brightness(.9) hue-rotate(-8deg)" },
+    { label: "Crema", scene: ["#FFF4E8", "#F0E8DC"], overlay: "rgba(255,245,230,.2)", css: "sepia(.15) contrast(.92) brightness(1.1)" },
+    { label: "Ludwig", scene: ["#E8D8C8", "#C8B8A8"], overlay: "rgba(80,60,40,.12)", css: "contrast(1.2) brightness(.95) saturate(.9)" },
+    { label: "Aden", scene: ["#FFE8F0", "#E8F0FF"], overlay: "rgba(255,200,220,.12)", css: "hue-rotate(-12deg) saturate(.9) brightness(1.06)" },
+    { label: "Perpetua", scene: ["#D8E8E0", "#C8D8E8"], overlay: "rgba(160,200,180,.14)", css: "contrast(.95) brightness(1.08) saturate(.82)" },
+    { label: "Amaro", scene: ["#483838", "#685848"], overlay: "rgba(40,20,20,.22)", css: "contrast(1.15) brightness(1.08) hue-rotate(-5deg)" },
+    { label: "Mayfair", scene: ["#FFE0EC", "#F0D0E8"], overlay: "rgba(255,180,200,.12)", css: "contrast(1.05) saturate(1.2) brightness(1.06)" },
+    { label: "Rise", scene: ["#FFF0D8", "#FFE8C0"], overlay: "rgba(255,220,160,.16)", css: "sepia(.12) brightness(1.1) saturate(1.15)" },
+    { label: "Hudson", scene: ["#384858", "#586878"], overlay: "rgba(20,40,60,.24)", css: "contrast(1.2) brightness(.92) saturate(1.1)" },
+    { label: "Valencia", scene: ["#FFE8D0", "#FFD0A8"], overlay: "rgba(255,160,80,.14)", css: "sepia(.28) saturate(1.2) contrast(1.05)" },
+    { label: "X-Pro II", scene: ["#2A2030", "#4A3848"], overlay: "rgba(20,10,30,.3)", css: "contrast(1.35) saturate(1.15) brightness(.88)" },
+    { label: "Sierra", scene: ["#E8E0D8", "#D0C8C0"], overlay: "rgba(100,90,80,.14)", css: "contrast(.88) brightness(1.06) saturate(.75)" },
+    { label: "Willow", scene: ["#484838", "#686858"], overlay: "rgba(40,40,30,.2)", css: "grayscale(.55) contrast(1.05) brightness(1.02)" },
+    { label: "Lo-Fi", scene: ["#382838", "#583848"], overlay: "rgba(60,20,40,.26)", css: "contrast(1.25) saturate(1.35) brightness(.9)" },
+    { label: "Inkwell", scene: ["#282828", "#484848"], overlay: "rgba(0,0,0,.12)", css: "grayscale(1) contrast(1.12) brightness(.95)" },
+    { label: "Hefe", scene: ["#FFE0A0", "#FFB860"], overlay: "rgba(255,180,60,.18)", css: "saturate(1.55) contrast(1.15) brightness(1.04)" },
+    { label: "Nashville", scene: ["#FFE8C8", "#E8C8A8"], overlay: "rgba(255,200,140,.2)", css: "sepia(.2) contrast(1.08) brightness(1.1) saturate(1.2)" },
+    { label: "Stinson", scene: ["#FFF8F0", "#F0E8E0"], overlay: "rgba(255,255,255,.18)", css: "contrast(.82) brightness(1.14) saturate(.7)" },
+    { label: "Vesper", scene: ["#384850", "#586870"], overlay: "rgba(40,60,80,.22)", css: "contrast(1.1) brightness(.94) saturate(.85) hue-rotate(6deg)" },
+    { label: "Earlybird", scene: ["#483828", "#685848"], overlay: "rgba(80,50,30,.2)", css: "sepia(.45) contrast(.95) brightness(.96)" },
+    { label: "Brannan", scene: ["#E8E0D0", "#D0C8B8"], overlay: "rgba(120,100,80,.16)", css: "sepia(.25) contrast(1.05) saturate(.8)" },
+    { label: "Sutro", scene: ["#283038", "#485058"], overlay: "rgba(20,30,40,.28)", css: "saturate(.7) brightness(.88) contrast(1.15) hue-rotate(8deg)" },
+    { label: "Toaster", scene: ["#584838", "#786858"], overlay: "rgba(60,40,20,.24)", css: "sepia(.35) contrast(1.2) brightness(.92)" },
+    { label: "Walden", scene: ["#C8E8D8", "#A8D8C8"], overlay: "rgba(100,180,140,.14)", css: "hue-rotate(15deg) saturate(1.1) brightness(1.06)" },
+    { label: "1977", scene: ["#FFE0D0", "#E8C0B0"], overlay: "rgba(255,180,140,.16)", css: "sepia(.3) contrast(1.08) saturate(1.25) brightness(1.08)" },
+    { label: "Kelvin", scene: ["#FFE8A0", "#FFB840"], overlay: "rgba(255,160,40,.2)", css: "sepia(.35) saturate(1.4) contrast(1.1) brightness(1.06)" },
+    { label: "Maven", scene: ["#483848", "#684868"], overlay: "rgba(40,20,40,.22)", css: "contrast(1.18) saturate(1.2) brightness(.94) hue-rotate(-6deg)" },
+    { label: "Ginza", scene: ["#F0F0F0", "#D8D8D8"], overlay: "rgba(255,255,255,.12)", css: "contrast(1.08) brightness(1.12) saturate(.65)" },
+    { label: "Skyline", scene: ["#A8C8E8", "#88A8C8"], overlay: "rgba(100,160,220,.16)", css: "hue-rotate(12deg) saturate(1.15) contrast(1.05)" },
+    { label: "Dogpatch", scene: ["#584830", "#786850"], overlay: "rgba(60,40,20,.18)", css: "sepia(.2) contrast(1.12) saturate(.95)" },
+    { label: "Brooklyn", scene: ["#383028", "#585040"], overlay: "rgba(30,25,20,.2)", css: "sepia(.15) contrast(1.15) brightness(.96) saturate(.88)" },
+    { label: "Helena", scene: ["#E8D8E8", "#D0C0D0"], overlay: "rgba(180,160,180,.14)", css: "hue-rotate(-8deg) contrast(.95) brightness(1.08)" },
+    { label: "Ashby", scene: ["#584848", "#786868"], overlay: "rgba(40,30,30,.2)", css: "sepia(.12) saturate(.75) contrast(1.08)" },
+    { label: "Charmes", scene: ["#483850", "#685870"], overlay: "rgba(60,40,60,.22)", css: "hue-rotate(-15deg) saturate(1.05) contrast(1.1)" },
+    { label: "Prism", scene: ["#FFD1E1", "#B79CF0"], overlay: "rgba(255,100,180,.1)", css: "saturate(1.55) contrast(1.12) brightness(1.04)" },
+    { label: "Neon", scene: ["#080818", "#181828"], overlay: "rgba(120,80,255,.18)", css: "saturate(1.8) contrast(1.25) brightness(1.08) hue-rotate(8deg)" },
+    { label: "Dream", scene: ["#E8D8FF", "#FFD8F0"], overlay: "rgba(200,160,255,.14)", css: "saturate(1.2) brightness(1.1) hue-rotate(-10deg)" },
+    { label: "Golden", scene: ["#FFD878", "#FFB830"], overlay: "rgba(255,200,80,.2)", css: "sepia(.25) saturate(1.35) brightness(1.08)" },
+    { label: "Noir", scene: ["#101010", "#303030"], overlay: "rgba(0,0,0,.18)", css: "grayscale(1) contrast(1.35) brightness(.82)" },
+  ];
+
+  const COMPOSE_STICKERS = [
+    "✨", "🔥", "💫", "🌸", "😍", "🎉", "💜", "☀️", "🌊", "🦋",
+    "💖", "🌈", "⭐", "🎀", "🌺", "🍒", "💎", "🌙", "🎵", "👑",
+    "🫧", "🌷", "💋", "🪩", "🌴", "🎈", "💐", "🧸", "🍭", "🦋",
+  ];
+
+  const COMPOSE_ADJUST_DEFAULT = {
+    brightness: 100, contrast: 100, saturate: 100, warmth: 0,
+    exposure: 0, highlights: 0, shadows: 0, tint: 0, fade: 0, sharpen: 0,
+    vignette: 0, grain: 0, blur: 0,
+  };
+  
+  /* ============================================================================
+     2. SERVICES: user registry + scoring engine
+  ============================================================================ */
+  
+  const PROX_MILE = 1.0;
+  const MIN_RATER_SCORE = 2.6;
+  let contactRegistry = {};
+  const byId = new Proxy({}, {
+    get(_t, prop) { return contactRegistry[prop]; },
+  });
+  const contactsFor = (state) => state.contacts || [];
+
+  const registerUsers = (users) => {
+    if (!users?.length) return;
+    contactRegistry = {
+      ...contactRegistry,
+      ...Object.fromEntries(users.filter(Boolean).map((u) => [u.id, { ...contactRegistry[u.id], ...u, avatarUrl: mediaUrl(u.avatarUrl) || u.avatarUrl }])),
+    };
+  };
+
+  const hydrateUsers = (payload) => {
+    const pool = [
+      ...(payload.contacts || []),
+      ...(payload.friendRequests?.incoming || []).map((r) => r.user),
+      ...(payload.friendRequests?.outgoing || []).map((r) => r.user),
+    ].filter(Boolean);
+    registerUsers(pool);
+  };
+
+  const PROX_COOLDOWN_MS = 86400000;
+
+  const proxCooldownLeft = (state, userId) => {
+    const last = state.proximityCooldowns?.[userId];
+    if (!last) return 0;
+    return Math.max(0, PROX_COOLDOWN_MS - (Date.now() - last));
+  };
+
+  const formatCooldown = (ms) => {
+    const h = Math.floor(ms / 3600000);
+    const m = Math.ceil((ms % 3600000) / 60000);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const liveProximityActive = (state) =>
+    state.liveData && (state.proximityScan || state.screen === "lens");
+
+  const proximityPool = (state) =>
+    liveProximityActive(state) ? (state.nearbyUsers || []) : [];
+
+  const milesOf = (state, c) => state.contactMiles[c.id] ?? c.miles;
+  const withinMile = (state, c) => milesOf(state, c) <= PROX_MILE;
+  const MAP_LOCATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+  const friendLocationTs = (f) => {
+    const raw = f?.locationAt ?? f?.lastLocationAt ?? f?.presenceAt ?? f?.locationUpdatedAt ?? null;
+    if (raw == null) return null;
+    return typeof raw === "number" ? raw : new Date(raw).getTime();
+  };
+
+  const isMapVisibleFriend = (f) => {
+    if (!f?.lensOn) return false;
+    if (f.lat == null || f.lng == null) return false;
+    const ts = friendLocationTs(f);
+    if (!ts || Number.isNaN(ts)) return false;
+    return Date.now() - ts <= MAP_LOCATION_MAX_AGE_MS;
+  };
+
+  const mutualLens = (state, c) => state.lens && c.lensOn;
+
+  const scoreForCompare = (s) => Math.round((Number(s) || 0) * 100) / 100;
+  const hasHigherScoreThan = (state, c) => scoreForCompare(state.user.score) > scoreForCompare(c?.score ?? 0);
+
+  const canRateFeed = (state, c) => {
+    if (state.user.locked || state.user.score < MIN_RATER_SCORE) return false;
+    if (!hasHigherScoreThan(state, c)) return false;
+    if (!state.strangerRatings && !state.friends.includes(c.id)) return false;
+    return true;
+  };
+
+  const canShowProfileRate = (state, user, serverCanRate) => {
+    if (!user || !canRateFeed(state, user)) return false;
+    if (proxCooldownLeft(state, user.id) > 0) return false;
+    if (state.liveData) return serverCanRate === true;
+    return true;
+  };
+
+  const canRateNearby = (state, c) => {
+    if (!withinMile(state, c)) return false;
+    if (!mutualLens(state, c)) return false;
+    return canRateFeed(state, c);
+  };
+
+  /** @deprecated use canRateFeed or canRateProximity */
+  const canRateUser = (state, c) => canRateFeed(state, c);
+
+  const canRateProximity = (state, c) => {
+    if (proxCooldownLeft(state, c.id) > 0) return false;
+    return canRateNearby(state, c);
+  };
+  const canBeRatedByNearby = (state, c) => canRateNearby(state, c);
+  const nearbyContacts = (state) =>
+    proximityPool(state).filter((c) => withinMile(state, c)).sort((a, b) => milesOf(state, a) - milesOf(state, b));
+  const rateableNearby = (state) => proximityPool(state).filter((c) => canRateProximity(state, c));
+  const lensVisibleNearby = (state) =>
+    state.lens
+      ? proximityPool(state).filter((c) => withinMile(state, c) && c.lensOn)
+      : [];
+  const proxReason = (state, c) => {
+    if (!state.lens) return "Your Lens is off";
+    if (!c.lensOn) return "Their Lens is off";
+    if (state.friends.includes(c.id)) return "Friend · mutual Lens";
+    return "Mutual Lens";
+  };
+
+  const feedBlockReason = (state, c, tr) => {
+    if (state.user.locked) return tr("rate.blockLocked", { min: MIN_RATER_SCORE.toFixed(1) });
+    if (state.user.score < MIN_RATER_SCORE) {
+      return tr("rate.blockMinScore", { min: MIN_RATER_SCORE.toFixed(1), mine: state.user.score.toFixed(2) });
+    }
+    if (!hasHigherScoreThan(state, c)) {
+      return tr("rate.blockScoreHierarchy", {
+        mine: state.user.score.toFixed(2),
+        theirs: (c?.score ?? 0).toFixed(2),
+      });
+    }
+    if (!state.strangerRatings && !state.friends.includes(c.id)) {
+      return tr("rate.blockFriendsOnly");
+    }
+    return "";
+  };
+
+  const lensBlockReason = (state, c, tr) => {
+    const base = feedBlockReason(state, c, tr);
+    if (base) return base;
+    if (!state.lens && !c.lensOn) return "Turn Lens on · they need Lens too (proximity only)";
+    if (!state.lens) return "Turn Lens on to rate nearby (within 1 mi)";
+    if (!c.lensOn) return "They need Lens on for proximity rating";
+    if (!withinMile(state, c)) return "Move within 1 mi for proximity rating";
+    const left = proxCooldownLeft(state, c.id);
+    if (left > 0) return `Rated recently · try again in ${formatCooldown(left)}`;
+    return "";
+  };
+  const ME_ID = "me";
+  const isPostOwner = (state, post) => !!post && (post.author === ME_ID || (!!state.user?.id && post.author === state.user.id));
+
+  const quickDeletePost = (state, dispatch, post, tr) => {
+    sfx.tap();
+    if (!window.confirm(tr("postOptions.deleteConfirm"))) return;
+    dispatch({ type: "DELETE_FEED_POST", postId: post.id });
+    dispatch({ type: "SET_APP_TOAST", message: tr("postOptions.deleted") });
+    if (state.liveData) api.deletePost(post.id).catch(() => {});
+  };
+
+  const formatEngagementCount = (n) => {
+    const v = Number(n) || 0;
+    if (v <= 0) return "0";
+    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+    if (v >= 10_000) return `${Math.round(v / 1000)}k`;
+    if (v >= 1_000) return `${(v / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+    return String(v);
+  };
+
+  const postDeepLink = (postId) => {
+    const origin = typeof window !== "undefined" && window.location?.origin ? window.location.origin : "https://echelon.rsvp";
+    return `${origin.replace(/\/$/, "")}/app/?post=${encodeURIComponent(postId)}`;
+  };
+  const UI_TEST_USER_ID = "test01";
+  const UI_TEST_POST_ID = "ptest_ui";
+  const isUiTestPost = (post) => !!(post?.uiTest || post?.id === UI_TEST_POST_ID);
+
+  const UI_TEST_POST_FALLBACK = {
+    id: UI_TEST_POST_ID,
+    author: UI_TEST_USER_ID,
+    uiTest: true,
+    kind: "post",
+    caption: "UI test post · drag to rate, double-tap to like, tap comment or share",
+    mediaUrl: "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=1080&q=80",
+    mediaType: "image",
+    source: "echelon",
+    scene: ["#FFE9A8", "#FFC6DA"],
+    emoji: "✨",
+    ts: Date.now() - 3600000,
+    likes: 128,
+    avgRating: 4.2,
+    ratingCount: 42,
+    musicTitle: "Echelon · Test Track",
+  };
+
+  const DEMO_REEL_POSTS = [
+    {
+      id: "reel_demo_1",
+      author: UI_TEST_USER_ID,
+      kind: "reel",
+      isReel: true,
+      caption: "Morning routine · 0:32",
+      mediaUrl: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=720&q=80",
+      mediaType: "video",
+      durationSec: 32,
+      source: "echelon",
+      scene: ["#1a1a2e", "#3d2a4a"],
+      ts: Date.now() - 7200000,
+      likes: 84,
+      avgRating: 4.6,
+    },
+    {
+      id: "reel_demo_2",
+      author: UI_TEST_USER_ID,
+      kind: "reel",
+      isReel: true,
+      caption: "City lights · 0:45",
+      mediaUrl: "https://images.unsplash.com/photo-1477959858607-67ae85e6c175?w=720&q=80",
+      mediaType: "video",
+      durationSec: 45,
+      source: "echelon",
+      scene: ["#111", "#333"],
+      ts: Date.now() - 14400000,
+      likes: 56,
+      avgRating: 4.3,
+    },
+  ];
+
+  const isTestHostUser = (state) => {
+    const h = (state.user?.handle || "").replace(/^@/, "").toLowerCase();
+    return h === "test" || state.user?.id === UI_TEST_USER_ID || state.user?.id === "test";
+  };
+
+  const canHostParties = (state, effective) => isTestHostUser(state) || effective >= 4.0;
+
+  const isTestCredentials = (identifier, password) => {
+    if (password !== "test") return false;
+    const id = (identifier || "").trim().toLowerCase();
+    return id === "test" || id === "@test" || id === "test@test.com";
+  };
+
+  const buildLocalTestSession = (user) => ({
+    liveData: false,
+    user: {
+      ...user,
+      id: user.id || UI_TEST_USER_ID,
+      name: user.name || "test",
+      handle: user.handle || "@test",
+      email: user.email || "test@test.com",
+      score: user.score ?? 4.2,
+      onboarded: true,
+      authMethod: "password",
+      emoji: user.emoji || "✨",
+      color: user.color || "#E6DBFF",
+    },
+    contacts: [],
+    gatherings: [],
+    feed: [UI_TEST_POST_FALLBACK, ...DEMO_REEL_POSTS],
+    friends: [],
+    rsvps: [],
+    history: [{ t: Date.now() - 86400000, s: 4.1 }, { t: Date.now(), s: 4.2 }],
+    notifications: [],
+    settings: { lens: true, sound: true },
+    stories: [],
+  });
+
+  const ensureTestAuthor = (state) => {
+    if (!contactRegistry[UI_TEST_USER_ID]) {
+      registerUsers([{
+        id: UI_TEST_USER_ID,
+        name: "test",
+        handle: "@test",
+        emoji: "✨",
+        color: "#E6DBFF",
+        score: 4.2,
+      }]);
+    }
+  };
+
+  const testPostPinned = (state) => {
+    if (isScreenshotDemoMode()) return null;
+    ensureTestAuthor(state);
+    const all = feedPostsOnly(buildFeed(state));
+    const found = all.find((p) => isUiTestPost(p));
+    if (found) return found;
+    if (isTestHostUser(state)) return { ...UI_TEST_POST_FALLBACK };
+    return null;
+  };
+
+  const hiddenPostIds = (state) => new Set(state.igExtras?.hiddenPosts || []);
+
+  const ALGORITHM_INTERESTS = ["travel", "food", "music", "fashion", "fitness", "art", "nightlife", "tech"];
+  const ALGORITHM_MUTE = ["politics", "ads", "sports", "gaming"];
+
+  const defaultAlgorithmPrefs = () => ({
+    boostRated: true,
+    boostFollowing: true,
+    boostFresh: true,
+    mix: "balanced",
+    interests: [],
+    muteTopics: [],
+  });
+
+  const algorithmPrefsFromState = (state) => ({
+    ...defaultAlgorithmPrefs(),
+    ...(state.igExtras?.algorithmPrefs || {}),
+  });
+
+  const postMatchesInterests = (post, interests) => {
+    if (!interests?.length) return false;
+    const hay = [
+      post.caption, post.musicTitle, post.location,
+      ...(post.tags || []),
+      ...(post.captionStyle?.overlays || []).map((o) => o.text || o.handle || ""),
+    ].join(" ").toLowerCase();
+    return interests.some((t) => hay.includes(t));
+  };
+
+  const postMatchesMute = (post, muteTopics) => {
+    if (!muteTopics?.length) return false;
+    const hay = [
+      post.caption, post.musicTitle,
+      ...(post.tags || []),
+      ...(post.captionStyle?.overlays || []).map((o) => o.text || o.handle || ""),
+    ].join(" ").toLowerCase();
+    return muteTopics.some((t) => hay.includes(t));
+  };
+
+  const forYouFeedPosts = (state, now = Date.now()) => {
+    const testPost = testPostPinned(state);
+    const friends = new Set(state.friends || []);
+    const hidden = hiddenPostIds(state);
+    const prefs = algorithmPrefsFromState(state);
+    const ownPosts = feedGridPostsOnly(buildFeed(state))
+      .filter((p) => isPostOwner(state, p) && !hidden.has(p.id))
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const posts = feedGridPostsOnly(buildFeed(state))
+      .filter((p) => {
+        if (isUiTestPost(p) || isPostOwner(state, p) || hidden.has(p.id)) return false;
+        if (prefs.boostFresh && now - (p.ts || 0) >= 86400000) return false;
+        if (postMatchesMute(p, prefs.muteTopics)) return false;
+        return true;
+      });
+    const score = (p) => {
+      let s = 0;
+      if (prefs.boostFollowing && friends.has(p.author)) s += 22;
+      if (prefs.boostRated) s += (p.avgRating ?? 0) * 20;
+      s += Math.min(36, (p.likes ?? 0) * 0.35);
+      if (prefs.boostFresh && now - (p.ts || 0) < 43200000) s += 8;
+      if (postMatchesInterests(p, prefs.interests)) s += 14;
+      if (prefs.mix === "reels" && isReelPost(p)) s += 12;
+      if (prefs.mix === "posts" && !isReelPost(p)) s += 10;
+      return s;
+    };
+    const ranked = [...posts].sort((a, b) => score(b) - score(a));
+    const ownIds = new Set(ownPosts.map((p) => p.id));
+    if (isScreenshotDemoMode()) {
+      return ranked.filter((p) => !ownIds.has(p.id)).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    }
+    const tail = [...ownPosts, ...ranked.filter((p) => !ownIds.has(p.id))];
+    return testPost ? [testPost, ...tail] : tail;
+  };
+
+  const globalExplorePosts = (state, now = Date.now()) => {
+    const hidden = hiddenPostIds(state);
+    return [...feedGridPostsOnly(buildFeed(state)), ...reelPostsOnly(buildFeed(state))]
+      .filter((p) => !isUiTestPost(p) && !hidden.has(p.id) && now - (p.ts || 0) < 86400000)
+      .sort((a, b) => (b.avgRating ?? 0) - (a.avgRating ?? 0) || (b.likes ?? 0) - (a.likes ?? 0));
+  };
+
+  const filterExploreQuery = (posts, q, state) => {
+    const needle = (q || "").trim().toLowerCase();
+    if (!needle) return posts;
+    return posts.filter((p) => {
+      const author = getAuthor(state, p.author);
+      const handle = (author.handle || "").replace(/^@/, "").toLowerCase();
+      const name = (author.name || "").toLowerCase();
+      const caption = (p.caption || p.musicTitle || "").toLowerCase();
+      const tags = (p.captionStyle?.overlays || []).filter((o) => o.type === "hashtag" || o.type === "tag").map((o) => (o.text || o.handle || "").toLowerCase()).join(" ");
+      const loc = (p.location || p.captionStyle?.overlays?.find?.((o) => o.type === "location")?.text || "").toLowerCase();
+      const music = (p.musicTitle || "").toLowerCase();
+      return handle.includes(needle) || name.includes(needle) || caption.includes(needle) || loc.includes(needle) || tags.includes(needle) || music.includes(needle);
+    });
+  };
+
+  const exploreSearchUsers = (state, q) => {
+    const needle = (q || "").trim().toLowerCase();
+    if (!needle) return [];
+    const seen = new Set();
+    const pool = [...(state.contacts || []), ...Object.values(contactRegistry)];
+    return pool.filter((u) => {
+      if (!u?.id || seen.has(u.id) || u.id === ME_ID) return false;
+      seen.add(u.id);
+      const handle = (u.handle || "").replace(/^@/, "").toLowerCase();
+      const name = (u.name || "").toLowerCase();
+      const bio = (u.bio || "").toLowerCase();
+      return handle.includes(needle) || name.includes(needle) || bio.includes(needle);
+    }).slice(0, 12);
+  };
+
+  const followingFeedPosts = (state) => {
+    const posts = friendFeedPosts(state).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    return posts;
+  };
+
+  const favoritesFeedPosts = (state, saved) => {
+    const igIds = allSavedPostIds(state.igExtras || loadIgExtras());
+    return feedPostsOnly(buildFeed(state))
+      .filter((p) => saved?.has?.(p.id) || igIds.has(p.id))
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  };
+
+  const RECENT_MEDIA_KEY = "echelon-recent-media";
+  const ACCOUNTS_KEY = "echelon-saved-accounts";
+
+  const loadSavedAccounts = () => {
+    try {
+      const raw = localStorage.getItem(ACCOUNTS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const persistAccountSnapshot = (user, token) => {
+    if (!user?.id || !token) return;
+    try {
+      const list = loadSavedAccounts().filter((a) => a.id !== user.id);
+      list.unshift({
+        id: user.id,
+        handle: user.handle,
+        name: user.name,
+        emoji: user.emoji,
+        color: user.color,
+        avatarUrl: user.avatarUrl || null,
+        token,
+      });
+      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(list.slice(0, 6)));
+    } catch { /* ignore */ }
+  };
+  const pushRecentMedia = (file) => {
+    if (!file) return;
+    try {
+      const prev = JSON.parse(localStorage.getItem(RECENT_MEDIA_KEY) || "[]");
+      const entry = { name: file.name, type: file.type, ts: Date.now(), blob: null };
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        const next = [{ ...entry, dataUrl }, ...prev.filter((x) => x.dataUrl !== dataUrl)].slice(0, 24);
+        localStorage.setItem(RECENT_MEDIA_KEY, JSON.stringify(next));
+      };
+      reader.readAsDataURL(file);
+    } catch { /* ignore */ }
+  };
+  const loadRecentMedia = () => {
+    try {
+      return JSON.parse(localStorage.getItem(RECENT_MEDIA_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  };
+
+  const removeRecentMediaAt = (indices) => {
+    try {
+      const prev = loadRecentMedia();
+      const removeSet = new Set(indices);
+      const next = prev.filter((_, i) => !removeSet.has(i));
+      localStorage.setItem(RECENT_MEDIA_KEY, JSON.stringify(next));
+      return next;
+    } catch {
+      return loadRecentMedia();
+    }
+  };
+
+  const ECHELON_TRACKS = ECHELON_AUDIO_LIBRARY;
+
+  const makePost = ({ author, caption, mediaUrl, mediaType, fromStory, source, scene, emoji, likes }) => ({
+    id: "p_" + Date.now() + Math.random().toString(36).slice(2, 7),
+    author,
+    caption: caption || "",
+    mediaUrl: mediaUrl || null,
+    mediaType: mediaType || null,
+    fromStory: !!fromStory,
+    source: source || "echelon",
+    scene: scene || ["#FFE9A8", "#FFC6DA"],
+    emoji: emoji || null,
+    ts: Date.now(),
+    likes: likes ?? 0,
+    premium: false,
+  });
+
+  const getAuthor = (state, id) => {
+    if (id === ME_ID) {
+      return { id: ME_ID, name: state.user.name, handle: state.user.handle, emoji: state.user.emoji, color: state.user.color, score: state.user.score, avatarUrl: state.user.avatarUrl };
+    }
+    const hit = byId[id] || state.contacts?.find((c) => c.id === id) || state.nearbyUsers?.find((c) => c.id === id);
+    return hit ? { id, ...hit } : { id, name: "User", handle: "@user", emoji: "😊", color: "#FFE0EC", score: 4.0 };
+  };
+
+  const buildFeed = (state) => {
+    const hidden = hiddenPostIds(state);
+    return [...state.feedPosts]
+      .filter((p) => !hidden.has(p.id))
+      .sort((a, b) => b.ts - a.ts);
+  };
+
+  /** Keep local pending/own posts when server refresh omits them. */
+  const mergeFeedPosts = (serverFeed, localPosts, userId, hiddenIds = []) => {
+    const hidden = new Set(hiddenIds || []);
+    const map = new Map();
+    for (const p of serverFeed || []) {
+      if (!hidden.has(p.id)) map.set(p.id, p);
+    }
+    for (const p of localPosts || []) {
+      if (hidden.has(p.id)) continue;
+      if (p.pending || String(p.id).startsWith("tmp_")) {
+        map.set(p.id, p);
+        continue;
+      }
+      if ((p.author === userId || p.author === ME_ID) && !map.has(p.id)) map.set(p.id, p);
+    }
+    return [...map.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  };
+
+  const openPostViewer = (dispatch, postId, opts = {}) => {
+    if (!postId) return;
+    sfx.tap();
+    dispatch({ type: "OPEN_MODAL", modal: "postviewer", payload: { postId, fromExplore: !!opts.fromExplore } });
+  };
+
+  const followUiForUser = (state, userId) => {
+    if (!userId || userId === ME_ID || state.friends.includes(userId)) return "none";
+    if ((state.blocked || []).includes(userId)) return "none";
+    const pending = state.friendRequestsOutgoing.some((r) => (r.user?.id || r.userId) === userId);
+    if (pending) return "pending";
+    return "follow";
+  };
+
+  const activeStories = (stories, now) =>
+    stories.filter((s) => s.isLive || s.expiresAt > now);
+
+  const mergeStories = (local, remote, now = Date.now()) => {
+    const keep = (arr) => activeStories(arr || [], now);
+    const map = new Map();
+    for (const s of keep(local)) map.set(s.author, s);
+    for (const s of keep(remote)) {
+      const prev = map.get(s.author);
+      if (!prev || s.ts >= prev.ts) map.set(s.author, s);
+    }
+    return [...map.values()].sort((a, b) => b.ts - a.ts);
+  };
+
+  const buildStoryQueue = (stories, state, startAuthorId, now) => {
+    const active = activeStories(stories, now);
+    const byAuthor = new Map(active.map((s) => [s.author, s]));
+    const storyUnseen = (authorId) => {
+      const s = byAuthor.get(authorId);
+      return s && !state.storyViewed[s.id];
+    };
+    const friendAuthors = state.friends.filter((id) => byAuthor.has(id));
+    friendAuthors.sort((a, b) => {
+      const ua = storyUnseen(a) ? 0 : 1;
+      const ub = storyUnseen(b) ? 0 : 1;
+      if (ua !== ub) return ua - ub;
+      return (byAuthor.get(b)?.ts || 0) - (byAuthor.get(a)?.ts || 0);
+    });
+    let queue = [...friendAuthors];
+    if (startAuthorId === ME_ID && byAuthor.has(ME_ID)) {
+      queue = [ME_ID, ...queue.filter((id) => id !== ME_ID)];
+    } else if (startAuthorId && byAuthor.has(startAuthorId)) {
+      queue = [startAuthorId, ...queue.filter((id) => id !== startAuthorId)];
+    }
+    return queue.filter((id) => byAuthor.has(id));
+  };
+
+  const formatPostAge = (ts, now) => {
+    const m = Math.max(0, Math.floor((now - ts) / 60000));
+    if (m < 1) return "now";
+    if (m < 60) return m + "m";
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + "h";
+    return Math.floor(h / 24) + "d";
+  };
+
+  const formatPortfolioDate = (ts, now) => {
+    if (!ts) return "";
+    const age = formatPostAge(ts, now);
+    if ((now - ts) < 86400000 * 7) return age;
+    const d = new Date(ts);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+
+  const CHAT_EMOJIS = [
+    "😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "😉", "😊", "😇", "🥰", "😍", "🤩", "😘",
+    "😗", "😚", "😙", "🥲", "😋", "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🫢", "🤫", "🤔", "🫡",
+    "🤐", "🤨", "😐", "😑", "😶", "🫥", "😏", "😒", "🙄", "😬", "😮‍💨", "🤥", "😌", "😔", "😪", "🤤",
+    "😴", "😷", "🤒", "🤕", "🤢", "🤮", "🥵", "🥶", "🥴", "😵", "🤯", "🤠", "🥳", "🥸", "😎", "🤓",
+    "🧐", "😕", "🫤", "😟", "🙁", "😮", "😯", "😲", "😳", "🥺", "🥹", "😦", "😧", "😨", "😰", "😥",
+    "😢", "😭", "😱", "😖", "😣", "😞", "😓", "😩", "😫", "🥱", "😤", "😡", "😠", "🤬", "👍", "👎",
+    "👏", "🙌", "🤝", "🙏", "💪", "❤️", "🧡", "💛", "💚", "💙", "💜", "🖤", "🤍", "🤎", "💔", "❤️‍🔥",
+    "💕", "💞", "💓", "💗", "💖", "💘", "💝", "💋", "✨", "⭐", "🌟", "💫", "🔥", "💯", "🎉", "🎊",
+    "🎈", "🎁", "🏆", "🥇", "⚡", "☀️", "🌈", "🌸", "🌺", "🌻", "🌷", "🍀", "🍕", "🍔", "🍓", "🧁",
+    "☕", "🍷", "🥂", "🍾", "🎵", "🎶", "📸", "🎬", "✈️", "🏖️", "🌊", "🐶", "🐱", "🦋", "🌙", "💬",
+  ];
+
+  const FEED_QUICK_REACTS = ["❤️", "🔥", "😂", "😮", "😢", "👏", "💯", "✨", "🥰", "🙌", "💜", "👀"];
+  const FEED_QUICK_REACT_KEY = "echelon-feed-quick-react";
+
+  const CHAT_REACTS = ["❤️", "😂", "😮", "😢", "👏", "🔥", "🥰", "👍", "💯", "✨", "🙌", "😍"];
+  const CHAT_TIP_KEY = "echelon-chat-tip";
+  const CHAT_THREADS_KEY = "echelon-chat-threads";
+  const CHAT_STATUSES_KEY = "echelon-chat-statuses";
+
+  const loadChatStatuses = () => {
+    try {
+      const raw = localStorage.getItem(CHAT_STATUSES_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const saveChatStatus = (userId, text) => {
+    try {
+      const all = loadChatStatuses();
+      if (text) all[userId] = { text, ts: Date.now() };
+      else delete all[userId];
+      localStorage.setItem(CHAT_STATUSES_KEY, JSON.stringify(all));
+    } catch { /* ignore */ }
+  };
+
+  const getChatStatus = (state, userId) => {
+    const entry = state.userStatuses?.[userId];
+    if (entry?.text) return entry.text;
+    const contact = byId[userId];
+    if (contact?.chatStatus) return contact.chatStatus;
+    if (userId === ME_ID && state.dmNotes?.[0]?.text) return state.dmNotes[0].text;
+    return "";
+  };
+
+  const loadChatThread = (contactId) => {
+    try {
+      const raw = localStorage.getItem(CHAT_THREADS_KEY);
+      const all = raw ? JSON.parse(raw) : {};
+      return Array.isArray(all[contactId]) ? all[contactId] : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveChatThread = (contactId, rows) => {
+    try {
+      const raw = localStorage.getItem(CHAT_THREADS_KEY);
+      const all = raw ? JSON.parse(raw) : {};
+      all[contactId] = rows;
+      localStorage.setItem(CHAT_THREADS_KEY, JSON.stringify(all));
+    } catch { /* ignore */ }
+  };
+
+  const SPARK_HEIGHT_PRESETS_MEN = [
+    { id: "any", min: 1.40, max: 2.20 },
+    { id: "short", min: 1.40, max: 1.64 },
+    { id: "medium", min: 1.65, max: 1.80 },
+    { id: "tall", min: 1.80, max: 1.95 },
+    { id: "vtall", min: 1.96, max: 2.20 },
+  ];
+
+  const SPARK_HEIGHT_PRESETS_WOMEN = [
+    { id: "any", min: 1.40, max: 2.20 },
+    { id: "short", min: 1.40, max: 1.54 },
+    { id: "medium", min: 1.55, max: 1.70 },
+    { id: "tall", min: 1.70, max: 1.85 },
+    { id: "vtall", min: 1.86, max: 2.20 },
+  ];
+  const FEED_IX_KEY = "echelon-feed-ix";
+  const BURN_TIMERS = [5, 10, 30, 60];
+  const CHAT_QUICK_REPLIES = ["👋 Hey!", "🔥 Love it", "On my way", "Thanks ✨", "Let's go"];
+
+  const formatChatDayLabel = (ts, now, tr) => {
+    const d = new Date(ts);
+    const today = new Date(now);
+    const yesterday = new Date(now);
+    yesterday.setDate(today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return tr("chat.today");
+    if (d.toDateString() === yesterday.toDateString()) return tr("chat.yesterday");
+    return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  };
+
+  const formatChatTime = (ts) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  };
+  const MAX_VOICE_SEC = 60;
+  const MAX_VIDEO_SEC = 60;
+
+  const pickVideoMime = () => {
+    const candidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
+    for (const m of candidates) {
+      if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return "";
+  };
+
+  const previewFromMessage = (m) => {
+    if (m.expired) return "Message expired";
+    if (m.consumed && m.viewOnce) return "Opened · view once";
+    if (m.sharedPost) {
+      const cap = (m.sharedPost.caption || "").trim();
+      return cap ? `📎 ${cap.slice(0, 80)}` : "📎 Shared post";
+    }
+    if (m.voice) return "🎤 Voice message";
+    if (m.viewOnce && m.mediaType === "video") return "👁 View-once video";
+    if (m.viewOnce && m.mediaType === "image") return "👁 View-once photo";
+    if (m.mediaType === "video") return "🎬 Video";
+    if (m.mediaType === "sticker") return "🎭 Sticker";
+    if (m.mediaUrl && m.mediaType === "image") return "📷 Photo";
+    if (m.burnMode === "timer") {
+      const t = (m.text || "").trim();
+      return t ? `⏱ ${t.slice(0, 80)}` : "⏱ Disappearing message";
+    }
+    const t = (m.text || "").trim();
+    return t ? t.slice(0, 120) : "Message";
+  };
+
+  const inboxFromApi = (rows) => {
+    const out = {};
+    (rows || []).forEach((c) => {
+      out[c.contactId] = {
+        lastTs: c.lastTs,
+        lastPreview: c.lastPreview,
+        lastFrom: c.lastFrom,
+        unread: c.unread || 0,
+      };
+    });
+    return out;
+  };
+
+  const loadFeedIx = () => {
+    try {
+      const raw = localStorage.getItem(FEED_IX_KEY);
+      if (!raw) return { liked: [], saved: [], comments: {}, ratedPosts: [], ratedPostScores: {}, ratedStories: [], ratedStoryScores: {} };
+      const d = JSON.parse(raw);
+      return {
+        liked: Array.isArray(d.liked) ? d.liked : [],
+        saved: Array.isArray(d.saved) ? d.saved : [],
+        comments: d.comments && typeof d.comments === "object" ? d.comments : {},
+        ratedPosts: Array.isArray(d.ratedPosts) ? d.ratedPosts : [],
+        ratedPostScores: d.ratedPostScores && typeof d.ratedPostScores === "object" ? d.ratedPostScores : {},
+        ratedStories: Array.isArray(d.ratedStories) ? d.ratedStories : [],
+        ratedStoryScores: d.ratedStoryScores && typeof d.ratedStoryScores === "object" ? d.ratedStoryScores : {},
+      };
+    } catch {
+      return { liked: [], saved: [], comments: {}, ratedPosts: [], ratedPostScores: {}, ratedStories: [], ratedStoryScores: {} };
+    }
+  };
+
+  const saveRatedPostScore = (postId, stars) => {
+    const ix = loadFeedIx();
+    saveFeedIx({
+      ratedPostScores: { ...(ix.ratedPostScores || {}), [postId]: stars },
+    });
+  };
+
+  const getRatedPostScore = (postId) => {
+    const scores = loadFeedIx().ratedPostScores || {};
+    const s = scores[postId];
+    return s != null && s >= 1 && s <= 5 ? s : null;
+  };
+
+  const saveRatedStoryScore = (storyItemId, stars) => {
+    const ix = loadFeedIx();
+    const ratedStories = [...new Set([...(ix.ratedStories || []), storyItemId])];
+    saveFeedIx({
+      ratedStories,
+      ratedStoryScores: { ...(ix.ratedStoryScores || {}), [storyItemId]: stars },
+    });
+  };
+
+  const getRatedStoryScore = (storyItemId) => {
+    const scores = loadFeedIx().ratedStoryScores || {};
+    const s = scores[storyItemId];
+    return s != null && s >= 1 && s <= 5 ? s : null;
+  };
+
+  const isStoryRated = (storyItemId) => (loadFeedIx().ratedStories || []).includes(storyItemId);
+
+  const postPopularity = (state, post) => {
+    const author = getAuthor(state, post.author);
+    return (post.likes || 0) * 12 + (author?.score || 0);
+  };
+
+  const feedPostsOnly = (posts) => posts.filter((p) => !p.fromStory);
+  const feedGridPostsOnly = (posts) => feedPostsOnly(posts).filter((p) => !isReelPost(p));
+  const reelPostsOnly = (posts) => feedPostsOnly(posts).filter((p) => isReelPost(p));
+
+  const friendFeedPosts = (state) =>
+    feedGridPostsOnly(buildFeed(state)).filter((p) => p.author !== ME_ID && state.friends.includes(p.author));
+
+  const discoverFeedPosts = (state, now = Date.now()) =>
+    feedPostsOnly(buildFeed(state))
+      .filter((p) => p.author !== ME_ID && now - (p.ts || 0) < 86400000)
+      .sort((a, b) => postPopularity(state, b) - postPopularity(state, a));
+
+  const canRatePost = (state, post, author, canSeePremium, ratedPosts) => {
+    if (!post || post.author === ME_ID) return false;
+    if (isUiTestPost(post)) return true;
+    if (post.premium && !canSeePremium) return false;
+    if (ratedPosts?.has?.(post.id)) return false;
+    return canRateFeed(state, author);
+  };
+
+  const canRateExplorePost = (state, post, author, canSeePremium, ratedPosts) => {
+    if (!post || post.author === ME_ID) return false;
+    if (isUiTestPost(post)) return true;
+    if (post.premium && !canSeePremium) return false;
+    if (ratedPosts?.has?.(post.id)) return false;
+    if (state.user.locked) return false;
+    if (state.user.score < MIN_RATER_SCORE) return false;
+    if (!hasHigherScoreThan(state, author)) return false;
+    return true;
+  };
+
+  const postRateBlockReason = (state, post, author, canSeePremium, ratedPosts, tr) => {
+    if (isUiTestPost(post)) return "";
+    if (post?.premium && !canSeePremium) return tr("rate.blockPremium");
+    if (ratedPosts?.has?.(post.id)) return tr("rate.blockPost");
+    return feedBlockReason(state, author, tr);
+  };
+
+  const saveFeedIx = (patch) => {
+    try {
+      const prev = loadFeedIx();
+      localStorage.setItem(FEED_IX_KEY, JSON.stringify({ ...prev, ...patch }));
+    } catch { /* ignore */ }
+  };
+
+  const sharePost = async (post, author, tr) => {
+    const caption = (post.caption || "").trim();
+    const text = caption ? `${author.name}: ${caption}` : `${author.name} on Echelon`;
+    const url = `${window.location.origin}${window.location.pathname.replace(/\/?$/, "/")}?post=${encodeURIComponent(post.id)}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Echelon", text, url });
+        return tr("feed.shared");
+      } catch (e) {
+        if (e?.name === "AbortError") return null;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(`${text}\n${url}`);
+      return tr("feed.linkCopied");
+    } catch {
+      return null;
+    }
+  };
+
+  const parseVoiceDur = (s) => {
+    const parts = (s || "0:03").split(":");
+    const m = parseInt(parts[0], 10) || 0;
+    const sec = parseInt(parts[1], 10) || 3;
+    return m * 60 + sec;
+  };
+
+  const pickVoiceMime = () => {
+    const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/aac", "audio/ogg"];
+    for (const m of candidates) {
+      if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return "";
+  };
+
+  const playSyntheticVoice = (seed, durStr, onEnd) => {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) { onEnd?.(); return null; }
+      const ctx = new Ctx();
+      const secs = parseVoiceDur(durStr);
+      const t0 = ctx.currentTime;
+      const steps = Math.min(28, Math.max(4, Math.floor(secs * 4)));
+      for (let i = 0; i < steps; i++) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = 160 + ((seed || 0) + i * 7) % 320;
+        gain.gain.value = 0.07;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        const start = t0 + i * 0.2;
+        osc.start(start);
+        osc.stop(start + 0.14);
+      }
+      const t = setTimeout(() => { ctx.close().catch(() => {}); onEnd?.(); }, secs * 1000);
+      return () => { clearTimeout(t); ctx.close().catch(() => {}); onEnd?.(); };
+    } catch {
+      onEnd?.();
+      return null;
+    }
+  };
+
+  const replySnippet = (m) => {
+    if (m.voice) return "🎤 Voice message";
+    if (m.mediaUrl) return m.mediaType === "video" ? "🎬 Video" : "📷 Photo";
+    const t = (m.text || "").trim();
+    return t.length > 72 ? t.slice(0, 72) + "…" : t || "…";
+  };
+
+  // --- Scoring engine -------------------------------------------------------- //
+  // The "Echelon Algorithm" (publicly: a black box; here: legible).
+  //   • recency: newer ratings dominate; older ones decay (~7-day half-life)
+  //   • influence: a rater near 5.0 moves you ~1.5×; a rater near 1.0 ~0.5×
+  //   • inertia: your score resists, so every point feels hard-won / fragile
+  const clampScore = (s) => Math.max(1.0, Math.min(5.0, s));
+  const round2 = (s) => Math.round(s * 100) / 100;
+
+  const SCORE_RANGE_MS = {
+    all: null,
+    day: 86400000,
+    week: 7 * 86400000,
+    month: 30 * 86400000,
+    year: 365 * 86400000,
+  };
+
+  const hashSeed = (str) => {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  };
+
+  const synthesizeUserHistory = (userId, currentScore, pointCount = 40) => {
+    const now = Date.now();
+    let seed = hashSeed(String(userId || "anon"));
+    const rand = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const target = clampScore(Number(currentScore) || 3);
+    const span = 320 * 86400000;
+    const points = [];
+    let walk = clampScore(target - 0.35 + rand() * 0.25);
+    for (let i = pointCount - 1; i >= 0; i--) {
+      const t = now - Math.round((i / Math.max(1, pointCount - 1)) * span);
+      if (i === 0) walk = target;
+      else walk = clampScore(walk + (rand() - 0.47) * 0.1);
+      points.push({ t, s: round2(walk) });
+    }
+    return points;
+  };
+
+  const resolveScoreHistory = (history, userId, score) => {
+    const rows = Array.isArray(history) ? history.filter((h) => h && h.t != null && h.s != null) : [];
+    if (rows.length >= 2) return [...rows].sort((a, b) => a.t - b.t);
+    return synthesizeUserHistory(userId, score);
+  };
+
+  const filterScoreHistory = (history, range, now = Date.now()) => {
+    const ms = SCORE_RANGE_MS[range];
+    const sorted = [...history].sort((a, b) => a.t - b.t);
+    if (!ms) return sorted;
+    const cut = now - ms;
+    const filtered = sorted.filter((h) => h.t >= cut);
+    if (filtered.length >= 2) return filtered;
+    const anchor = sorted.filter((h) => h.t <= cut).pop();
+    return anchor ? [anchor, ...filtered] : filtered.length ? filtered : sorted.slice(-2);
+  };
+
+  const formatScoreChartLabel = (ts, range) => {
+    const d = new Date(ts);
+    if (range === "day") {
+      return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    }
+    if (range === "week") {
+      return d.toLocaleDateString(undefined, { weekday: "short", hour: "numeric" });
+    }
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+
+  /** Default Spark filter prefs (age, distance, height, rating range). */
+  const DEFAULT_SPARK_PREFS = {
+    minScore: 1.0, maxScore: 5.0,
+    minAge: 18, maxAge: 99,
+    maxDistanceMi: 25,
+    minHeightM: 1.40, maxHeightM: 2.20,
+    genderPref: "all",
+  };
+
+  const portfolioAuthorIds = (state, userId) => {
+    const ids = new Set([userId]);
+    if (userId === ME_ID) {
+      ids.add(ME_ID);
+      if (state.user.id) ids.add(state.user.id);
+    }
+    return ids;
+  };
+
+  const DRAG_STAR_PX = 22;
+  const MIN_RATING_DRAG_PX = 18;
+
+  /** Slide finger left (lower) / right (higher) to pick 1–5 stars. */
+  const starsFromHorizontalDrag = (startX, clientX, baseStars = 3) => {
+    const change = Math.round((clientX - startX) / DRAG_STAR_PX);
+    return Math.max(1, Math.min(5, baseStars + change));
+  };
+
+  const starsFromClientX = (clientX, wrapEl) => {
+    if (!wrapEl) return 3;
+    const rect = wrapEl.getBoundingClientRect();
+    const pad = rect.width * 0.06;
+    const x = clientX - rect.left - pad;
+    const w = Math.max(1, (rect.width - pad * 2) / 5);
+    return Math.max(1, Math.min(5, Math.ceil(x / w) || 1));
+  };
+
+  const ageFromBirthYear = (y) => (y ? new Date().getFullYear() - y : null);
+
+  const sparkPrefsFromState = (state) => ({
+    minScore: state.sparkMinScore ?? DEFAULT_SPARK_PREFS.minScore,
+    maxScore: state.sparkMaxScore ?? DEFAULT_SPARK_PREFS.maxScore,
+    minAge: state.sparkMinAge ?? DEFAULT_SPARK_PREFS.minAge,
+    maxAge: state.sparkMaxAge ?? DEFAULT_SPARK_PREFS.maxAge,
+    maxDistanceMi: state.sparkMaxDistanceMi ?? DEFAULT_SPARK_PREFS.maxDistanceMi,
+    minHeightM: state.sparkMinHeightM ?? DEFAULT_SPARK_PREFS.minHeightM,
+    maxHeightM: state.sparkMaxHeightM ?? DEFAULT_SPARK_PREFS.maxHeightM,
+    genderPref: state.sparkGenderPref ?? DEFAULT_SPARK_PREFS.genderPref,
+  });
+
+  const passesSparkFilters = (state, c, prefs = null) => {
+    const p = prefs || sparkPrefsFromState(state);
+    const score = c.score ?? 0;
+    if (score < p.minScore || score > p.maxScore) return false;
+    const height = c.heightM ?? c.height_m;
+    if (height == null || height < p.minHeightM || height > p.maxHeightM) return false;
+    const age = c.age ?? ageFromBirthYear(c.birthYear ?? c.birth_year);
+    if (age == null || age < p.minAge || age > p.maxAge) return false;
+    const dist = state.contactMiles?.[c.id] ?? c.miles;
+    if (dist != null && dist > p.maxDistanceMi) return false;
+    const gp = p.genderPref || "all";
+    if (gp !== "all") {
+      const g = String(c.gender || c.genderPresentation || "").toLowerCase();
+      const maleSet = new Set(["male", "masculine", "m", "man"]);
+      const femSet = new Set(["female", "feminine", "f", "woman"]);
+      const wantMale = gp === "male" || gp === "masculine";
+      const wantFem = gp === "female" || gp === "feminine";
+      if (g) {
+        if (wantMale && !maleSet.has(g)) return false;
+        if (wantFem && !femSet.has(g)) return false;
+      }
+    }
+    return true;
+  };
+
+  const SPARK_SWIPES_KEY = "echelon-spark-swipes";
+  const loadSparkSwipes = () => {
+    try {
+      const raw = localStorage.getItem(SPARK_SWIPES_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  };
+  const saveSparkSwipes = (map) => {
+    try { localStorage.setItem(SPARK_SWIPES_KEY, JSON.stringify(map)); } catch { /* ignore */ }
+  };
+
+  const buildLocalSparkDeck = (state) => {
+    if (!state.user.heightM) return [];
+    const swiped = loadSparkSwipes();
+    const friendSet = new Set(state.friends);
+    const pool = (state.contacts?.length ? state.contacts : Object.values(contactRegistry))
+      .filter((c) => c && c.id && c.id !== ME_ID && !friendSet.has(c.id) && !swiped[c.id])
+      .filter((c) => passesSparkFilters(state, c));
+    return pool.sort(() => Math.random() - 0.5).slice(0, 24).map((c) => ({
+      ...c,
+      avatarUrl: mediaUrl(c.avatarUrl) || c.avatarUrl,
+      photos: c.avatarUrl ? [{ url: mediaUrl(c.avatarUrl) || c.avatarUrl, type: "image", caption: "", scene: [c.color || "#FFE0EC", "#fff"] }] : [],
+      age: ageFromBirthYear(c.birthYear),
+    }));
+  };
+  
+  const raterInfluence = (raterScore) => 0.5 + (raterScore / 5); // 0.7 .. 1.5
+  const recencyWeight = (ts) => Math.exp(-((Date.now() - ts) / 86400000) / 7);
+  const eventWeight = (e) => recencyWeight(e.ts) * raterInfluence(e.raterScore);
+  
+  // Apply a single incoming rating as a small, influence-scaled nudge toward it.
+  function nudge(currentScore, stars, raterScore) {
+    const k = 0.06; // inertia coefficient, small on purpose
+    const delta = (stars - currentScore) * k * raterInfluence(raterScore);
+    return round2(clampScore(currentScore + delta));
+  }
+  
+  function playRatingAlertSound(n) {
+    if (!sfx.enabled || !n) return;
+    const stars = n.stars ?? 3;
+    const delta = typeof n.delta === "number" ? n.delta : 0;
+    if (n.kind === "penalty" || stars <= 2) sfx.penalty();
+    else if (delta > 0 || stars >= 4) sfx.up();
+    else if (delta < 0) sfx.down();
+    else sfx.rate();
+  }
+
+  // Vague, hyper-positive emotional copy the app shows when your score moves.
+  function feedbackCopy(delta, stars) {
+    if (delta > 0.03)  return ["✨ You're glowing today", "The community feels your warmth. Keep radiating."];
+    if (delta > 0)     return ["💫 A little lift", "Tiny gains compound. Stay lovely."];
+    if (delta === 0)   return ["🤍 Steady", "Consistency is its own kind of charisma."];
+    if (delta > -0.04) return ["🙂 A gentle dip", "Growth can feel uncomfortable. Soften and try again."];
+    if (stars <= 2)    return ["😟 That interaction stung", "Consider a warmer tone next time. We believe in you."];
+    return ["📉 Trending cooler", "Your authenticity may be showing. A brighter smile helps."];
+  }
+  
+  // Reach/visibility as a function of the company you keep.
+  function computeReach(friendIds) {
+    if (!friendIds.length) return 71;
+    const scores = friendIds.map((id) => byId[id]?.score).filter((s) => typeof s === "number");
+    if (!scores.length) return 71;
+    const avg = scores.reduce((a, s) => a + s, 0) / scores.length;
+    return Math.max(6, Math.min(99, Math.round(71 + (avg - 4.0) * 23)));
+  }
+  
+  /* ============================================================================
+     3. STORE: global state + reducer + Context (the live, shared score)
+  ============================================================================ */
+  
+  const initialState = () => ({
+    onboarded: false,
+    liveData: false,
+    sessionReady: false,
+    contacts: [],
+    gatherings: [],
+    lang: "en",
+    screen: "feed",
+    lastMain: "feed",
+    feedIgPane: "home",
+    feedFilter: "foryou",
+    liveSession: null,
+    dmNotes: [],
+    userStatuses: loadChatStatuses(),
+    profileHighlights: [],
+    igExtras: loadIgExtras(),
+    appToast: null,
+    shareSuccess: null, // { message, composeMode }
+    exploreTab: "posts",
+    lens: false,
+    live: true,
+    sound: true,
+    proximityAlerts: true,
+    ratingNotifs: true,
+    strangerRatings: true,
+    publicTier: true,
+    publicScore: true,
+    reduceMotion: false,
+    proximityAutoScan: false,
+    rsvps: [],
+    proximityScan: false,
+    contactMiles: {},
+    geoError: null,
+    geoPos: null,
+    nearbyUsers: [],
+    proximityCooldowns: {},
+    lensTarget: null,
+    user: {
+      name: "You", handle: "@you", emoji: "😊", color: "#FFE0EC", avatarUrl: null,
+      score: 3.0, locked: false, boost: null, instagram: null, authMethod: null, email: null,
+      birthYear: null, heightM: null, id: null,
+    },
+    history: [],
+    events: [], // received ratings, newest first (for breakdown + decay display)
+    friends: [],
+    friendRequestsIncoming: [],
+    friendRequestsOutgoing: [],
+    notifs: [],
+    feedPosts: [],
+    stories: [],
+    storyViewed: {},
+    ratedPosts: [],
+    sparkDeck: [],
+    sparkMatches: [],
+    sparkLikesReceived: 0,
+    sparkMinScore: DEFAULT_SPARK_PREFS.minScore,
+    sparkMaxScore: DEFAULT_SPARK_PREFS.maxScore,
+    sparkMinAge: DEFAULT_SPARK_PREFS.minAge,
+    sparkMaxAge: DEFAULT_SPARK_PREFS.maxAge,
+    sparkMaxDistanceMi: DEFAULT_SPARK_PREFS.maxDistanceMi,
+    sparkMinHeightM: DEFAULT_SPARK_PREFS.minHeightM,
+    sparkMaxHeightM: DEFAULT_SPARK_PREFS.maxHeightM,
+    sparkGenderPref: DEFAULT_SPARK_PREFS.genderPref,
+    blocked: [],
+    privateProfile: false,
+    hideMapLocation: false,
+    feedReactions: {},
+    modal: null, // { type, payload }
+    chatInbox: {},
+  });
+  
+  function reducer(state, action) {
+    switch (action.type) {
+      case "SESSION_READY":
+        return { ...state, sessionReady: true };
+      case "HYDRATE": {
+        const p = action.payload;
+        hydrateUsers(p);
+        registerUsers((p.notifications || []).map((n) => n.peer).filter(Boolean));
+        contactRegistry = Object.fromEntries((p.contacts || []).map((c) => [c.id, { ...c, avatarUrl: mediaUrl(c.avatarUrl) || c.avatarUrl }]));
+        const u = p.user;
+        const s = p.settings || {};
+        const next = {
+          ...state,
+          liveData: p.liveData !== undefined ? !!p.liveData : true,
+          sessionReady: true,
+          onboarded: !!u.onboarded,
+          contacts: p.contacts || [],
+          gatherings: p.gatherings || [],
+          feedPosts: mergeFeedPosts(p.feed, state.feedPosts, u.id || ME_ID, state.igExtras?.hiddenPosts),
+          stories: p.stories || [],
+          friends: p.friends || [],
+          friendRequestsIncoming: p.friendRequests?.incoming || [],
+          friendRequestsOutgoing: p.friendRequests?.outgoing || [],
+          rsvps: p.rsvps || [],
+          history: p.history?.length ? p.history : state.history,
+          notifs: p.notifications?.length ? p.notifications : state.notifs,
+          user: {
+            ...state.user,
+            id: u.id ?? state.user.id,
+            name: u.name,
+            handle: u.handle,
+            emoji: u.emoji,
+            color: u.color,
+            avatarUrl: mediaUrl(u.avatarUrl) || u.avatarUrl,
+            score: u.score,
+            locked: u.locked,
+            authMethod: u.authMethod ?? state.user.authMethod,
+            email: u.email ?? state.user.email,
+            instagram: u.instagram ?? state.user.instagram,
+            birthYear: u.birthYear ?? state.user.birthYear,
+            heightM: u.heightM ?? state.user.heightM,
+          },
+          lang: s.lang || state.lang,
+          lens: s.lens ?? state.lens,
+          live: s.live ?? state.live,
+          sound: s.sound ?? state.sound,
+          proximityAlerts: s.proximityAlerts ?? state.proximityAlerts,
+          ratingNotifs: s.ratingNotifs ?? state.ratingNotifs,
+          strangerRatings: s.strangerRatings ?? state.strangerRatings,
+          publicTier: s.publicTier ?? state.publicTier,
+          publicScore: s.publicScore ?? state.publicScore,
+          reduceMotion: s.reduceMotion ?? state.reduceMotion,
+          proximityAutoScan: s.proximityAutoScan ?? state.proximityAutoScan,
+          sparkMinScore: s.sparkMinScore ?? p.spark?.preferences?.minScore ?? DEFAULT_SPARK_PREFS.minScore,
+          sparkMaxScore: s.sparkMaxScore ?? p.spark?.preferences?.maxScore ?? DEFAULT_SPARK_PREFS.maxScore,
+          sparkMinAge: s.sparkMinAge ?? p.spark?.preferences?.minAge ?? DEFAULT_SPARK_PREFS.minAge,
+          sparkMaxAge: s.sparkMaxAge ?? p.spark?.preferences?.maxAge ?? DEFAULT_SPARK_PREFS.maxAge,
+          sparkMaxDistanceMi: s.sparkMaxDistanceMi ?? p.spark?.preferences?.maxDistanceMi ?? DEFAULT_SPARK_PREFS.maxDistanceMi,
+          sparkMinHeightM: s.sparkMinHeightM ?? p.spark?.preferences?.minHeightM ?? DEFAULT_SPARK_PREFS.minHeightM,
+          sparkMaxHeightM: s.sparkMaxHeightM ?? p.spark?.preferences?.maxHeightM ?? DEFAULT_SPARK_PREFS.maxHeightM,
+          contactMiles: Object.fromEntries((p.contacts || []).map((c) => [c.id, c.miles])),
+          chatInbox: p.chats?.length ? inboxFromApi(p.chats) : (p.chatInbox || state.chatInbox),
+          sparkDeck: p.sparkDeck ?? state.sparkDeck,
+          sparkMatches: p.spark?.matches || [],
+          sparkLikesReceived: p.spark?.likesReceived ?? 0,
+          blocked: p.blocked || [],
+          privateProfile: s.privateProfile ?? state.privateProfile,
+          hideMapLocation: s.hideMapLocation ?? state.hideMapLocation,
+        };
+        sfx.enabled = next.sound !== false;
+        return next;
+      }
+      case "SYNC_USER": {
+        const u = action.user;
+        return {
+          ...state,
+          user: {
+            ...state.user,
+            score: u.score,
+            name: u.name,
+            handle: u.handle,
+            emoji: u.emoji,
+            color: u.color,
+            locked: u.locked,
+            avatarUrl: mediaUrl(u.avatarUrl) ?? state.user.avatarUrl,
+            instagram: u.instagram ?? state.user.instagram,
+          },
+          history: [...state.history, { t: Date.now(), s: u.score }].slice(-48),
+        };
+      }
+      case "APPLY_INBOUND": {
+        const { stars, raterScore, rater, tag, delta, ts, id } = action.payload;
+        if (state.events.some((e) => e.id === id)) return state;
+        const ev = { id, rater, raterScore, stars, tag, ts, delta };
+        const [title, body] = feedbackCopy(delta, stars);
+        const locked = state.user.score + delta < 2.6 ? true : state.user.score + delta >= 2.8 ? false : state.user.locked;
+        const notif = {
+          id: "n" + id, kind: stars <= 2 ? "penalty" : "rating", rater, stars, delta, tag, title, body, ts,
+          appeal: stars <= 2 ? "none" : null,
+        };
+        return {
+          ...state,
+          user: { ...state.user, score: round2(clampScore(state.user.score + delta)), locked },
+          events: [ev, ...state.events].slice(0, 60),
+          history: [...state.history, { t: ts, s: round2(clampScore(state.user.score + delta)) }].slice(-48),
+          notifs: [notif, ...state.notifs.filter((x) => x.id !== notif.id)].slice(0, 60),
+        };
+      }
+      case "ONBOARDED":   return { ...state, onboarded: true };
+      case "SET_LANG": {
+        const lang = action.lang;
+        saveLang(lang, action.chosen !== false);
+        return { ...state, lang };
+      }
+      case "SCREEN": {
+        const tabs = ["feed", "spark", "lens", "explore", "parties", "messages", "friends", "profile", "alerts"];
+        const screen = action.screen === "people" ? "friends" : action.screen === "rate" ? "lens" : action.screen;
+        const skipLast = screen === "alerts" || screen === "settings";
+        return { ...state, screen, modal: null, lastMain: skipLast ? state.lastMain : (tabs.includes(screen) ? screen : state.lastMain) };
+      }
+      case "SET_FEED_PANE":
+        return { ...state, feedIgPane: action.pane || "home" };
+      case "SET_FEED_FILTER":
+        return { ...state, feedFilter: action.filter || "foryou" };
+      case "START_PROXIMITY":
+        return {
+          ...state,
+          proximityScan: true,
+          contactMiles: {},
+          geoError: state.geoError,
+        };
+      case "STOP_PROXIMITY":
+        return { ...state, proximityScan: false };
+      case "SET_GEO_ERROR":
+        return { ...state, geoError: action.message || null };
+      case "SET_GEO_POS":
+        return { ...state, geoPos: action.pos };
+      case "SYNC_NEARBY": {
+        const nearby = action.nearby || [];
+        const reg = { ...contactRegistry };
+        const miles = {};
+        nearby.forEach((u) => {
+          reg[u.id] = { ...reg[u.id], ...u, miles: u.miles };
+          miles[u.id] = u.miles;
+        });
+        contactRegistry = reg;
+        return {
+          ...state,
+          nearbyUsers: nearby,
+          contactMiles: miles,
+          geoError: action.geoError !== undefined ? action.geoError : null,
+        };
+      }
+      case "SET_LENS_TARGET":
+        return { ...state, lensTarget: action.id };
+      case "TOGGLE_LENS": return { ...state, lens: !state.lens };
+      case "TOGGLE_HIDE_MAP_LOCATION": {
+        const next = !state.hideMapLocation;
+        if (state.liveData) {
+          api.patchSettings({ hideMapLocation: next }).catch(() => {});
+          api.patchMe({ hideMapLocation: next }).catch(() => {});
+        }
+        return { ...state, hideMapLocation: next };
+      }
+      case "SET_LENS":    return { ...state, lens: action.value };
+      case "TOGGLE_LIVE": return { ...state, live: !state.live };
+      case "OPEN_MODAL":  return { ...state, modal: { type: action.modal, payload: action.payload } };
+      case "CLOSE_MODAL": return { ...state, modal: null };
+      case "SET_CHAT_INBOX":
+        return { ...state, chatInbox: { ...state.chatInbox, ...(action.inbox || {}) } };
+      case "PATCH_CHAT_INBOX": {
+        const prev = state.chatInbox[action.id] || {};
+        const merged = { ...prev, ...action.patch };
+        if (action.incUnread) merged.unread = (prev.unread || 0) + 1;
+        const chatInbox = { ...state.chatInbox, [action.id]: merged };
+        return { ...state, chatInbox };
+      }
+      case "MARK_CHAT_READ": {
+        const prev = state.chatInbox[action.id] || {};
+        const chatInbox = { ...state.chatInbox, [action.id]: { ...prev, unread: 0 } };
+        return { ...state, chatInbox };
+      }
+      case "DELETE_CHAT": {
+        const chatInbox = { ...state.chatInbox };
+        delete chatInbox[action.id];
+        return { ...state, chatInbox };
+      }
+  
+      case "RECEIVE_RATING": {
+        const { stars, raterScore, rater, tag } = action;
+        const prev = state.user.score;
+        const next = nudge(prev, stars, raterScore);
+        const delta = round2(next - prev);
+        const ev = { id: "e" + Date.now() + Math.random(), rater, raterScore, stars, tag, ts: Date.now(), delta };
+        const [title, body] = feedbackCopy(delta, stars);
+        const locked = next < 2.6 ? true : next >= 2.8 ? false : state.user.locked;
+        const notif = {
+          id: "n" + ev.id,
+          kind: stars <= 2 ? "penalty" : "rating",
+          rater, stars, delta, tag, title, body, ts: Date.now(),
+          appeal: stars <= 2 ? "none" : null,
+        };
+        return {
+          ...state,
+          user: { ...state.user, score: next, locked },
+          events: [ev, ...state.events].slice(0, 60),
+          history: [...state.history, { t: Date.now(), s: next }].slice(-48),
+          notifs: [notif, ...state.notifs].slice(0, 60),
+        };
+      }
+  
+      case "RECEIVE_BOOST": {
+        const notif = {
+          id: "n" + Date.now(), kind: "boost",
+          title: "💛 You've been endorsed", rater: action.rater,
+          body: `An Elite voice amplified you by +${action.amount.toFixed(2)} for ${action.mins} min.`,
+          ts: Date.now(), delta: action.amount,
+        };
+        return {
+          ...state,
+          user: { ...state.user, boost: { amount: action.amount, until: Date.now() + action.mins * 60000 } },
+          notifs: [notif, ...state.notifs].slice(0, 60),
+        };
+      }
+  
+      case "SEND_FRIEND_REQUEST": {
+        if (state.friends.includes(action.id)) return state;
+        if ((state.blocked || []).includes(action.id)) return state;
+        const outIds = state.friendRequestsOutgoing.map((r) => r.user?.id);
+        if (outIds.includes(action.id)) return state;
+        const peer = contactsFor(state).find((c) => c.id === action.id) || getAuthor(state, action.id);
+        if (!peer || peer.id === ME_ID) return state;
+        registerUsers([peer]);
+        const req = { requestId: "fr_local_" + action.id, user: peer, ts: Date.now() };
+        return { ...state, friendRequestsOutgoing: [req, ...state.friendRequestsOutgoing] };
+      }
+      case "FRIEND_REQUEST_SENT":
+        return {
+          ...state,
+          friendRequestsOutgoing: state.friendRequestsOutgoing.map((r) =>
+            r.user?.id === action.userId ? { ...r, requestId: action.requestId } : r
+          ),
+        };
+      case "ACCEPT_FRIEND_REQUEST": {
+        const friendId = action.friendId;
+        const row = state.friendRequestsIncoming.find((r) => r.requestId === action.requestId);
+        const peer = action.peer || row?.user || (friendId ? contactRegistry[friendId] : null);
+        const nextIn = state.friendRequestsIncoming.filter((r) => r.requestId !== action.requestId);
+        const nextOut = state.friendRequestsOutgoing.filter((r) => r.requestId !== action.requestId);
+        const friends = friendId && !state.friends.includes(friendId)
+          ? [...state.friends, friendId]
+          : state.friends;
+        const followNotif = peer ? {
+          id: `nf_${Date.now()}`,
+          kind: "follow_started",
+          peer,
+          title: "",
+          ts: Date.now(),
+        } : null;
+        return {
+          ...state,
+          friends,
+          friendRequestsIncoming: nextIn,
+          friendRequestsOutgoing: nextOut,
+          notifs: followNotif ? [followNotif, ...state.notifs].slice(0, 60) : state.notifs,
+        };
+      }
+      case "DECLINE_FRIEND_REQUEST":
+        return {
+          ...state,
+          friendRequestsIncoming: state.friendRequestsIncoming.filter((r) => r.requestId !== action.requestId),
+        };
+      case "CANCEL_FRIEND_REQUEST":
+        if (state.liveData) { /* no API yet */ }
+        return {
+          ...state,
+          friendRequestsOutgoing: state.friendRequestsOutgoing.filter((r) => (r.user?.id || r.userId) !== action.id),
+        };
+      case "REMOVE_FRIEND_RESULT": {
+        const penalty = action.penalty ?? -0.08;
+        const nextScore = round2(clampScore(state.user.score + penalty));
+        const contacts = (state.contacts || []).map((c) =>
+          c.id === action.id ? { ...c, score: round2(clampScore((action.theirScore ?? c.score + penalty))) } : c
+        );
+        if (contacts.length) contactRegistry = Object.fromEntries(contacts.map((c) => [c.id, c]));
+        return {
+          ...state,
+          friends: state.friends.filter((f) => f !== action.id),
+          friendRequestsIncoming: state.friendRequestsIncoming.filter((r) => r.user?.id !== action.id),
+          friendRequestsOutgoing: state.friendRequestsOutgoing.filter((r) => r.user?.id !== action.id),
+          user: { ...state.user, score: action.yourScore ?? nextScore },
+          contacts,
+          history: [...state.history, { t: Date.now(), s: action.yourScore ?? nextScore }].slice(-48),
+          modal: null,
+        };
+      }
+      case "APPEAL":
+        return {
+          ...state,
+          notifs: state.notifs.map((n) => n.id === action.id ? { ...n, appeal: "reviewing" } : n),
+        };
+      case "RESOLVE_APPEAL":
+        return {
+          ...state,
+          notifs: state.notifs.map((n) => n.id === action.id ? { ...n, appeal: action.outcome } : n),
+          user: action.outcome === "upheld"
+            ? { ...state.user, score: round2(clampScore(state.user.score + 0.05)) }
+            : state.user,
+        };
+  
+      case "SYNC_FRIEND_REQUESTS": {
+        registerUsers([
+          ...(action.incoming || []).map((r) => r.user),
+          ...(action.outgoing || []).map((r) => r.user),
+        ].filter(Boolean));
+        const serverOutIds = new Set((action.outgoing || []).map((r) => r.user?.id).filter(Boolean));
+        const optimisticOut = state.friendRequestsOutgoing.filter(
+          (r) => r.requestId?.startsWith("fr_local_") && r.user?.id && !serverOutIds.has(r.user.id),
+        );
+        const mergedOut = [...optimisticOut, ...(action.outgoing || [])];
+        const seenOut = new Set();
+        const friendRequestsOutgoing = mergedOut.filter((r) => {
+          const uid = r.user?.id;
+          if (!uid || seenOut.has(uid)) return false;
+          seenOut.add(uid);
+          return true;
+        });
+        return {
+          ...state,
+          friendRequestsIncoming: action.incoming || [],
+          friendRequestsOutgoing,
+        };
+      }
+
+      case "SYNC_NOTIFS":
+        registerUsers((action.notifs || []).map((n) => n.peer).filter(Boolean));
+        return { ...state, notifs: action.notifs || state.notifs };
+
+      case "REMOVE_NOTIF":
+        return { ...state, notifs: state.notifs.filter((n) => n.id !== action.id) };
+
+      case "APPEND_NOTIFS": {
+        const incoming = action.notifs || [];
+        if (!incoming.length) return state;
+        registerUsers(incoming.map((n) => n.peer).filter(Boolean));
+        const isDupRating = (n) => state.notifs.some((x) =>
+          (x.kind === "rating" || x.kind === "penalty")
+          && (n.kind === "rating" || n.kind === "penalty")
+          && x.rater === n.rater
+          && Math.abs((x.ts || 0) - (n.ts || 0)) < 3000
+        );
+        const fresh = incoming.filter((n) => !isDupRating(n));
+        if (!fresh.length) return state;
+        const merged = [...fresh, ...state.notifs]
+          .filter((n, i, a) => a.findIndex((x) => x.id === n.id) === i)
+          .slice(0, 60);
+        return { ...state, notifs: merged };
+      }
+
+      case "SET_AVATAR":
+        return { ...state, user: { ...state.user, avatarUrl: action.url } };
+
+      case "LOGOUT":
+        return {
+          ...initialState(),
+          lang: state.lang,
+          sessionReady: true,
+          liveData: false,
+        };
+
+      case "INSTAGRAM_CONNECTED":
+        return {
+          ...state,
+          user: {
+            ...state.user,
+            instagram: action.instagram,
+            score: action.score ?? state.user.score,
+          },
+          feedPosts: action.feed?.length ? action.feed : state.feedPosts,
+          stories: action.stories?.length ? action.stories : state.stories,
+          history: action.score != null
+            ? [...state.history, { t: Date.now(), s: action.score }].slice(-48)
+            : state.history,
+        };
+
+      case "INSTAGRAM_SYNC":
+        return {
+          ...state,
+          feedPosts: action.feed?.length ? mergeFeedPosts(action.feed, state.feedPosts, ME_ID, state.igExtras?.hiddenPosts) : state.feedPosts,
+          stories: action.stories?.length ? mergeStories(state.stories, action.stories) : state.stories,
+        };
+
+      case "PUBLISH_POST": {
+        const post = makePost({
+          author: ME_ID,
+          caption: action.caption,
+          mediaUrl: action.mediaUrl,
+          mediaType: action.mediaType,
+          source: "echelon",
+        });
+        if (state.liveData) {
+          api.createPost({
+            caption: action.caption,
+            mediaUrl: action.mediaUrl,
+            mediaType: action.mediaType,
+            emoji: post.emoji,
+            scene: post.scene,
+          }).catch(() => {});
+        }
+        return { ...state, feedPosts: [post, ...state.feedPosts], modal: null };
+      }
+
+      case "ADD_FEED_POST":
+        return {
+          ...state,
+          feedPosts: action.post ? [action.post, ...state.feedPosts] : state.feedPosts,
+          modal: action.keepModal ? state.modal : null,
+        };
+
+      case "UPDATE_FEED_POST":
+        return {
+          ...state,
+          feedPosts: state.feedPosts.map((p) =>
+            p.id === action.postId ? { ...p, ...action.patch, id: action.patch?.id || p.id } : p
+          ),
+        };
+
+      case "PUBLISH_STORY": {
+        const item = {
+          id: "si_" + Date.now(),
+          mediaUrl: action.mediaUrl,
+          mediaType: action.mediaType,
+          caption: action.caption || "",
+          captionStyle: action.captionStyle || { color: "#ffffff", size: "md", align: "center" },
+          ts: Date.now(),
+        };
+        const mine = state.stories.find((s) => s.author === ME_ID);
+        const stories = mine
+          ? state.stories.map((s) => s.author === ME_ID
+            ? { ...s, items: [...s.items, item], ts: Date.now(), expiresAt: Date.now() + 86400000 }
+            : s)
+          : [{
+            id: "ss_me_" + Date.now(),
+            author: ME_ID,
+            items: [item],
+            ts: Date.now(),
+            expiresAt: Date.now() + 86400000,
+          }, ...state.stories];
+        return { ...state, stories, modal: null };
+      }
+
+      case "STORY_PUBLISHED": {
+        const story = action.story;
+        const without = state.stories.filter((s) => s.author !== story.author);
+        return {
+          ...state,
+          stories: [story, ...without],
+          modal: null,
+        };
+      }
+
+      case "START_LIVE": {
+        const liveStory = {
+          id: `live_${Date.now()}`,
+          author: ME_ID,
+          isLive: true,
+          liveViewers: 1,
+          items: [{
+            id: `li_${Date.now()}`,
+            mediaType: "live",
+            caption: "",
+            ts: Date.now(),
+          }],
+          ts: Date.now(),
+          expiresAt: Date.now() + 86400000,
+        };
+        const withoutLive = state.stories.filter((s) => !(s.author === ME_ID && s.isLive));
+        return {
+          ...state,
+          liveSession: { id: liveStory.id, startedAt: Date.now() },
+          stories: [liveStory, ...withoutLive],
+          modal: action.keepModal ? state.modal : null,
+        };
+      }
+
+      case "END_LIVE":
+        return {
+          ...state,
+          liveSession: null,
+          stories: state.stories.filter((s) => !(s.isLive && s.author === ME_ID)),
+        };
+
+      case "SET_DM_NOTE":
+      case "SET_CHAT_STATUS": {
+        const text = (action.text || "").trim();
+        const userStatuses = { ...state.userStatuses };
+        if (text) userStatuses[ME_ID] = { text, ts: Date.now() };
+        else delete userStatuses[ME_ID];
+        saveChatStatus(ME_ID, text);
+        if (state.liveData && text) api.patchMe({ chatStatus: text }).catch(() => {});
+        return {
+          ...state,
+          userStatuses,
+          dmNotes: text ? [{ id: ME_ID, text, ts: Date.now(), music: action.music || null }] : [],
+        };
+      }
+
+      case "SYNC_IG_EXTRAS":
+        return { ...state, igExtras: action.extras || loadIgExtras() };
+
+      case "PATCH_PROFILE_IG": {
+        const extras = patchIgExtras({
+          profile: { ...state.igExtras?.profile, ...action.profile },
+        });
+        const user = { ...state.user, bio: extras.profile.bio, website: extras.profile.website, category: extras.profile.category };
+        return { ...state, igExtras: extras, user };
+      }
+
+      case "SAVE_POST_COLLECTION": {
+        const extras = saveToCollection(action.collectionId, action.postId);
+        return { ...state, igExtras: extras };
+      }
+
+      case "REMOVE_POST_COLLECTION": {
+        const extras = removeFromAllCollections(action.postId);
+        return { ...state, igExtras: extras };
+      }
+
+      case "ADD_HIGHLIGHT": {
+        const extras = addHighlight(state.igExtras || loadIgExtras(), action.highlight);
+        return { ...state, igExtras: extras };
+      }
+
+      case "ADD_ALBUM_ITEMS": {
+        const extras = addAlbumItems(state.igExtras || loadIgExtras(), action.albumId, action.items || []);
+        return { ...state, igExtras: extras };
+      }
+
+      case "REMOVE_ALBUM_ITEM": {
+        const extras = removeAlbumItem(
+          state.igExtras || loadIgExtras(),
+          action.albumId,
+          action.itemType,
+          action.itemId,
+        );
+        return { ...state, igExtras: extras };
+      }
+
+      case "HIDE_POST": {
+        const extras = hidePost(action.postId);
+        return { ...state, igExtras: extras };
+      }
+
+      case "DELETE_FEED_POST": {
+        hidePost(action.postId);
+        const extras = removeFromAllCollections(action.postId);
+        return {
+          ...state,
+          feedPosts: state.feedPosts.filter((p) => p.id !== action.postId),
+          igExtras: extras,
+          modal: null,
+        };
+      }
+
+      case "SET_APP_TOAST":
+        return { ...state, appToast: action.message || null };
+
+      case "SET_SHARE_SUCCESS":
+        return { ...state, shareSuccess: action.message ? { message: action.message, composeMode: action.composeMode || "post" } : null };
+
+      case "PUSH_NOTIF":
+        return { ...state, notifs: [action.notif, ...state.notifs].slice(0, 60) };
+
+      case "RECORD_MENTION": {
+        const extras = recordMediaMention(state.igExtras || loadIgExtras(), action.mention);
+        return { ...state, igExtras: extras };
+      }
+
+      case "REMOVE_MENTION": {
+        const extras = removeMediaMention(state.igExtras || loadIgExtras(), action.mentionId, action.userId);
+        return { ...state, igExtras: extras };
+      }
+
+      case "MUTE_USER": {
+        const list = state.igExtras?.muted || [];
+        const muted = list.includes(action.userId)
+          ? list.filter((id) => id !== action.userId)
+          : [...new Set([...list, action.userId])];
+        const extras = patchIgExtras({ muted });
+        return { ...state, igExtras: extras };
+      }
+
+      case "RESTRICT_USER": {
+        const restricted = [...new Set([...(state.igExtras?.restricted || []), action.userId])];
+        const extras = patchIgExtras({ restricted });
+        return { ...state, igExtras: extras };
+      }
+
+      case "SET_CLOSE_FRIENDS": {
+        const extras = patchIgExtras({ closeFriends: action.ids || [] });
+        return { ...state, igExtras: extras };
+      }
+
+      case "SET_ALGORITHM_TOPICS": {
+        const extras = patchIgExtras({ algorithmTopics: (action.topics || []).slice(0, 3) });
+        return { ...state, igExtras: extras };
+      }
+
+      case "SET_ALGORITHM_PREFS": {
+        const extras = patchIgExtras({ algorithmPrefs: { ...defaultAlgorithmPrefs(), ...(action.prefs || {}) } });
+        return { ...state, igExtras: extras };
+      }
+
+      case "SET_HIDDEN_WORDS": {
+        const extras = patchIgExtras({ blockedWords: action.words || [] });
+        return { ...state, igExtras: extras };
+      }
+
+      case "PIN_CHAT": {
+        const pinned = action.pinned
+          ? [...new Set([...(state.igExtras?.pinnedChats || []), action.chatId])]
+          : (state.igExtras?.pinnedChats || []).filter((id) => id !== action.chatId);
+        const extras = patchIgExtras({ pinnedChats: pinned });
+        return { ...state, igExtras: extras };
+      }
+
+      case "ADD_BROADCAST_CHANNEL": {
+        const ch = defaultBroadcastChannel(action.name);
+        const extras = patchIgExtras({
+          broadcastChannels: [...(state.igExtras?.broadcastChannels || []), ch],
+        });
+        return { ...state, igExtras: extras };
+      }
+
+      case "POST_BROADCAST": {
+        const channels = (state.igExtras?.broadcastChannels || []).map((c) =>
+          c.id === action.channelId
+            ? { ...c, posts: [...(c.posts || []), { id: `bp_${Date.now()}`, text: action.text, ts: Date.now() }] }
+            : c
+        );
+        const extras = patchIgExtras({ broadcastChannels: channels });
+        return { ...state, igExtras: extras };
+      }
+
+      case "ADD_GROUP_CHAT": {
+        const gc = defaultGroupChat(action.name, action.memberIds || []);
+        const extras = patchIgExtras({ groupChats: [...(state.igExtras?.groupChats || []), gc] });
+        return { ...state, igExtras: extras };
+      }
+
+      case "SET_TWO_FACTOR":
+        return { ...state, igExtras: patchIgExtras({ twoFactorEnabled: !!action.enabled }) };
+
+      case "SET_EXPLORE_TAB":
+        return { ...state, exploreTab: action.tab || "posts" };
+
+      case "ADD_CAROUSEL_POST":
+        return {
+          ...state,
+          feedPosts: action.post ? [action.post, ...state.feedPosts] : state.feedPosts,
+        };
+
+      case "MARK_POST_RATED": {
+        const ids = new Set([...(state.ratedPosts || []), action.postId].filter(Boolean));
+        return { ...state, ratedPosts: [...ids] };
+      }
+
+      case "PATCH_FEED_POST_LIKES":
+        return {
+          ...state,
+          feedPosts: state.feedPosts.map((p) =>
+            p.id === action.postId ? { ...p, likes: action.likes } : p
+          ),
+        };
+
+      case "SET_SPARK_DECK":
+        return {
+          ...state,
+          sparkDeck: action.deck || [],
+          sparkMinScore: action.preferences?.minScore ?? state.sparkMinScore,
+          sparkMaxScore: action.preferences?.maxScore ?? state.sparkMaxScore,
+          sparkMinAge: action.preferences?.minAge ?? state.sparkMinAge,
+          sparkMaxAge: action.preferences?.maxAge ?? state.sparkMaxAge,
+          sparkMaxDistanceMi: action.preferences?.maxDistanceMi ?? state.sparkMaxDistanceMi,
+          sparkMinHeightM: action.preferences?.minHeightM ?? state.sparkMinHeightM,
+          sparkMaxHeightM: action.preferences?.maxHeightM ?? state.sparkMaxHeightM,
+        };
+
+      case "SET_SPARK_PREFS":
+        return {
+          ...state,
+          sparkMinScore: action.prefs.minScore ?? state.sparkMinScore,
+          sparkMaxScore: action.prefs.maxScore ?? state.sparkMaxScore,
+          sparkMinAge: action.prefs.minAge ?? state.sparkMinAge,
+          sparkMaxAge: action.prefs.maxAge ?? state.sparkMaxAge,
+          sparkMaxDistanceMi: action.prefs.maxDistanceMi ?? state.sparkMaxDistanceMi,
+          sparkMinHeightM: action.prefs.minHeightM ?? state.sparkMinHeightM,
+          sparkMaxHeightM: action.prefs.maxHeightM ?? state.sparkMaxHeightM,
+          sparkGenderPref: action.prefs.genderPref ?? state.sparkGenderPref,
+        };
+
+      case "SET_USER_HEIGHT":
+        return { ...state, user: { ...state.user, heightM: action.heightM } };
+
+      case "SPARK_SWIPE_LOCAL": {
+        const sw = loadSparkSwipes();
+        sw[action.targetId] = action.action;
+        saveSparkSwipes(sw);
+        const deck = state.sparkDeck.filter((c) => c.id !== action.targetId);
+        let matches = state.sparkMatches;
+        if (action.matched && action.peer) {
+          const entry = { matchId: action.matchId || ("sm_local_" + action.targetId), ts: Date.now(), user: action.peer };
+          matches = [entry, ...matches.filter((m) => m.user?.id !== action.targetId)];
+        }
+        return { ...state, sparkDeck: deck, sparkMatches: matches };
+      }
+
+      case "SPARK_MATCH":
+        return {
+          ...state,
+          sparkDeck: state.sparkDeck.filter((c) => c.id !== action.peer?.id),
+          sparkMatches: action.match
+            ? [{ matchId: action.match.matchId, ts: action.match.ts || Date.now(), user: action.peer }, ...state.sparkMatches.filter((m) => m.user?.id !== action.peer?.id)]
+            : state.sparkMatches,
+        };
+
+      case "SYNC_SPARK":
+        return {
+          ...state,
+          sparkMatches: action.matches ?? state.sparkMatches,
+          sparkLikesReceived: action.likesReceived ?? state.sparkLikesReceived,
+        };
+
+      case "MARK_STORY_VIEWED":
+        return { ...state, storyViewed: { ...state.storyViewed, [action.id]: true } };
+
+      case "TOGGLE_SOUND": {
+        sfx.enabled = !state.sound;
+        return { ...state, sound: !state.sound };
+      }
+      case "TOGGLE_PROXIMITY_ALERTS": return { ...state, proximityAlerts: !state.proximityAlerts };
+      case "TOGGLE_RATING_NOTIFS": return { ...state, ratingNotifs: !state.ratingNotifs };
+      case "TOGGLE_STRANGER_RATINGS": return { ...state, strangerRatings: !state.strangerRatings };
+      case "TOGGLE_PUBLIC_TIER": return { ...state, publicTier: !state.publicTier };
+      case "TOGGLE_PUBLIC_SCORE": return { ...state, publicScore: !state.publicScore };
+      case "TOGGLE_PRIVATE_PROFILE": {
+        const next = !state.privateProfile;
+        if (state.liveData) api.patchSettings({ privateProfile: next }).catch(() => {});
+        return { ...state, privateProfile: next };
+      }
+      case "BLOCK_USER": {
+        const id = action.id;
+        const chatInbox = { ...state.chatInbox };
+        delete chatInbox[id];
+        return {
+          ...state,
+          blocked: [...new Set([...(state.blocked || []), id])],
+          friends: state.friends.filter((f) => f !== id),
+          friendRequestsIncoming: state.friendRequestsIncoming.filter((r) => r.user?.id !== id),
+          friendRequestsOutgoing: state.friendRequestsOutgoing.filter((r) => r.user?.id !== id),
+          chatInbox,
+        };
+      }
+      case "UNBLOCK_USER":
+        return { ...state, blocked: (state.blocked || []).filter((id) => id !== action.id) };
+      case "SET_FEED_REACTION":
+        return { ...state, feedReactions: { ...state.feedReactions, [action.postId]: action.emoji } };
+      case "DISCONNECT_INSTAGRAM":
+        return { ...state, user: { ...state.user, instagram: null, score: action.score ?? state.user.score } };
+      case "DISCONNECT_GOOGLE":
+        return { ...state, user: { ...state.user, authMethod: action.authMethod || "email" } };
+      case "TOGGLE_REDUCE_MOTION": return { ...state, reduceMotion: !state.reduceMotion };
+      case "TOGGLE_PROXIMITY_AUTOSCAN": return { ...state, proximityAutoScan: !state.proximityAutoScan };
+
+      case "TOGGLE_INSTAGRAM_SYNC": {
+        const syncFeed = !state.user.instagram?.syncFeed;
+        if (state.liveData && state.user.instagram?.verified) {
+          api.instagramSetSyncFeed(syncFeed).catch(() => {});
+        }
+        return {
+          ...state,
+          user: {
+            ...state.user,
+            instagram: { ...state.user.instagram, syncFeed },
+          },
+        };
+      }
+
+      case "PROXIMITY_NEARBY": {
+        const c = byId[action.id];
+        if (!c || !state.proximityAlerts) return state;
+        const recent = state.notifs.some((n) => n.kind === "proximity" && n.rater === action.id && Date.now() - n.ts < 90000);
+        if (recent) return state;
+        const notif = {
+          id: "n" + Date.now() + Math.random(),
+          kind: "proximity",
+          rater: action.id,
+          title: "📍 Someone nearby to rate",
+          body: `${c.name} is within 1 mi. Open Rate to evaluate.`,
+          ts: Date.now(),
+        };
+        return { ...state, notifs: [notif, ...state.notifs].slice(0, 60) };
+      }
+
+      case "PROX_RATED":
+        return {
+          ...state,
+          proximityCooldowns: { ...state.proximityCooldowns, [action.id]: action.ts || Date.now() },
+        };
+
+      case "RSVP": {
+        if (state.rsvps.includes(action.id)) return state;
+        if (state.liveData) api.rsvp(action.id).catch(() => {});
+        return { ...state, rsvps: [...state.rsvps, action.id] };
+      }
+
+      case "SYNC_GATHERINGS":
+        return { ...state, gatherings: action.gatherings || [] };
+
+      case "ADD_GATHERING":
+        return {
+          ...state,
+          gatherings: action.event
+            ? [action.event, ...state.gatherings.filter((g) => g.id !== action.event.id)]
+            : state.gatherings,
+        };
+
+      case "UPDATE_GATHERING":
+        return {
+          ...state,
+          gatherings: action.event
+            ? state.gatherings.map((g) => (g.id === action.event.id ? action.event : g))
+            : state.gatherings,
+        };
+
+      case "REMOVE_GATHERING":
+        return {
+          ...state,
+          gatherings: state.gatherings.filter((g) => g.id !== action.id),
+          rsvps: state.rsvps.filter((id) => id !== action.id),
+        };
+
+      default: return state;
+    }
+  }
+  
+  const Store = createContext(null);
+  const TickCtx = createContext(Date.now());
+  const InstallHelpCtx = createContext({ open: (_kind) => {}, close: () => {} });
+  const useStore = () => useContext(Store);
+  const useInstallHelp = () => useContext(InstallHelpCtx);
+  const useT = () => {
+    const { state } = useStore();
+    return useMemo(() => (key, vars) => translate(state.lang || "en", key, vars), [state.lang]);
+  };
+
+  function InstallCoachOverlay({ open, kind, onClose }) {
+    const tr = useT();
+    const [shareBusy, setShareBusy] = useState(false);
+    if (!open || typeof document === "undefined") return null;
+
+    const isExternal = kind === "external";
+    const isIosCoach = kind === "ios-coach" || (kind === "coach" && isIos());
+    const canWebShare = typeof navigator !== "undefined" && !!navigator.share;
+
+    const openBrowser = () => {
+      sfx.tap();
+      openInExternalBrowser();
+    };
+
+    const onShareInstall = async () => {
+      sfx.tap();
+      setShareBusy(true);
+      try {
+        const ok = await triggerWebShareInstall();
+        if (ok) onClose();
+      } finally {
+        setShareBusy(false);
+      }
+    };
+
+    const onNativeInstall = async () => {
+      sfx.tap();
+      const ok = await requestInstall().then((r) => r.action === "accepted");
+      if (ok) onClose();
+    };
+
+    return createPortal(
+      <div className="install-coach-portal" role="dialog" aria-modal="true" aria-labelledby="install-coach-title" onClick={onClose}>
+        <div className={"install-coach" + (isIosCoach ? " install-coach--ios" : "")} onClick={(e) => e.stopPropagation()}>
+          <button type="button" className="install-coach-close" aria-label={tr("legal.close")} onClick={onClose}>
+            <X size={18} />
+          </button>
+
+          {isExternal ? (
+            <>
+              <div className="install-coach-icon"><Smartphone size={28} color="#fff" /></div>
+              <h3 id="install-coach-title" className="install-coach-title">{tr("pwa.openBrowserTitle")}</h3>
+              <p className="install-coach-lead">{tr("pwa.openBrowserLead")}</p>
+              <button type="button" className="btn primary install-coach-cta" onClick={openBrowser}>
+                {isIos() ? tr("pwa.openSafari") : tr("pwa.openChrome")}
+              </button>
+              <p className="install-coach-foot">{tr("pwa.openBrowserFoot")}</p>
+            </>
+          ) : isIosCoach ? (
+            <>
+              <div className="install-coach-card install-coach-card--action">
+                <img src="/app/icons/icon-192.png" alt="" width={56} height={56} className="install-coach-app-icon" />
+                <h3 id="install-coach-title" className="install-coach-title">{tr("pwa.addToHome")}</h3>
+                <p className="install-coach-lead">{tr("pwa.iosCoachLead")}</p>
+                <button
+                  type="button"
+                  className="btn primary install-coach-share-btn"
+                  disabled={shareBusy || !canWebShare}
+                  onClick={onShareInstall}
+                >
+                  {shareBusy ? <Loader size={18} className="spin" /> : <Share size={18} />}
+                  <span>{tr("pwa.tapShareInstall")}</span>
+                </button>
+                <p className="install-coach-foot">{tr("pwa.iosCoachStep")}</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="install-coach-icon"><Smartphone size={28} color="#fff" /></div>
+              <h3 id="install-coach-title" className="install-coach-title">{tr("pwa.addToHome")}</h3>
+              <p className="install-coach-lead">{tr("pwa.androidShort")}</p>
+              <button type="button" className="btn primary install-coach-cta" onClick={onNativeInstall}>
+                {tr("pwa.bannerBtn")}
+              </button>
+              <div className="install-coach-android-chip">
+                <MoreHorizontal size={18} />
+                <span>{tr("pwa.androidStep")}</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  async function runInstallFlow(pwa, openCoach) {
+    if (pwa.installed) return;
+    sfx.tap();
+    const res = await requestInstall();
+    if (res.action === "installed" || res.action === "accepted") return;
+    if (res.action === "external") {
+      openCoach("external");
+      return;
+    }
+    if ((pwa.ios || pwa.kind === "ios-coach") && typeof navigator !== "undefined" && navigator.share) {
+      const shared = await triggerWebShareInstall();
+      if (shared) return;
+    }
+    openCoach(pwa.kind === "ios-coach" ? "ios-coach" : pwa.kind || "android-coach");
+  }
+
+  function InstallBanner() {
+    const { state } = useStore();
+    const tr = useT();
+    const { open: openInstallCoach } = useInstallHelp();
+    const [pwa, setPwa] = useState({ installed: true, native: false, ios: false, kind: "installed", inApp: false });
+    const [dismissed, setDismissed] = useState(() =>
+      typeof localStorage !== "undefined" && localStorage.getItem("echelon-install-dismiss") === "1"
+    );
+
+    useEffect(() => initPwaInstall(setPwa), []);
+
+    useEffect(() => {
+      if (pwa.installed || dismissed || !pwa.native) return;
+      const t = setTimeout(() => { requestInstall().catch(() => {}); }, 3500);
+      return () => clearTimeout(t);
+    }, [pwa.installed, pwa.native, dismissed]);
+
+    if (isScreenshotDemoMode() || !state.onboarded || pwa.installed || dismissed) return null;
+
+    const bannerSub = pwa.inApp
+      ? tr("pwa.bannerInApp")
+      : pwa.native
+        ? tr("pwa.bannerNative")
+        : pwa.ios
+          ? tr("pwa.bannerIos")
+          : tr("pwa.bannerAndroid");
+
+    return (
+      <div className="install-banner">
+        <img src="/app/icons/icon-192.png" alt="" className="install-banner-icon" width={40} height={40} />
+        <div className="install-banner-text">
+          <b>{tr("pwa.bannerTitle")}</b>
+          <span>{bannerSub}</span>
+        </div>
+        <button type="button" className="install-banner-btn" onClick={() => runInstallFlow(pwa, openInstallCoach)}>
+          {pwa.inApp ? tr("pwa.openSafari") : tr("pwa.bannerBtn")}
+        </button>
+        <button type="button" className="install-banner-x" aria-label={tr("legal.close")} onClick={() => { setDismissed(true); try { localStorage.setItem("echelon-install-dismiss", "1"); } catch { /* ignore */ } }}>
+          <X size={16} />
+        </button>
+      </div>
+    );
+  }
+
+  function AppToast() {
+    const { state, dispatch } = useStore();
+    useEffect(() => {
+      if (!state.appToast) return;
+      const t = setTimeout(() => dispatch({ type: "SET_APP_TOAST", message: null }), 2200);
+      return () => clearTimeout(t);
+    }, [state.appToast, dispatch]);
+    if (!state.appToast) return null;
+    return <div className="app-toast" role="status">{state.appToast}</div>;
+  }
+
+  function ShareSuccessOverlay() {
+    const { state, dispatch } = useStore();
+    useEffect(() => {
+      if (!state.shareSuccess) return;
+      const composeMode = state.shareSuccess.composeMode || "post";
+      const t = setTimeout(() => {
+        dispatch({ type: "SET_SHARE_SUCCESS", message: null });
+        if (composeMode === "story") {
+          dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story", gallery: true } });
+        } else {
+          dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: composeMode, cameraOnly: true } });
+        }
+      }, 2200);
+      return () => clearTimeout(t);
+    }, [state.shareSuccess, dispatch]);
+    if (!state.shareSuccess) return null;
+    return (
+      <div className="share-success-overlay" role="status" aria-live="polite">
+        <div className="share-success-card">
+          <span className="share-success-icon"><Check size={36} strokeWidth={2.5} /></span>
+          <b>{state.shareSuccess.message}</b>
+        </div>
+      </div>
+    );
+  }
+
+  function RatingToast({ toast, onDismiss, onOpen }) {
+    const tr = useT();
+    if (!toast) return null;
+    const r = toast.rater ? byId[toast.rater] : null;
+    const negative = toast.kind === "penalty" || (toast.stars ?? 3) <= 2;
+    return (
+      <div className={"rating-toast" + (negative ? " down" : " up")} role="alert" aria-live="assertive">
+        <button type="button" className="rating-toast-main" onClick={onOpen}>
+          {r ? <Avatar c={r} size={40} showScore={false} ring={false} /> : (
+            <div className="rating-toast-ic"><Star size={18} fill="currentColor" /></div>
+          )}
+          <div className="rating-toast-body">
+            <b>{toast.title || tr("notif.rating.title")}</b>
+            <span>
+              {r ? `${r.name} · ` : ""}
+              {toast.stars ? "★".repeat(toast.stars) : ""}
+              {typeof toast.delta === "number" && (
+                <span className={"rating-toast-delta" + (toast.delta >= 0 ? " pos" : " neg")}>
+                  {toast.delta >= 0 ? "+" : ""}{toast.delta.toFixed(2)}
+                </span>
+              )}
+            </span>
+          </div>
+        </button>
+        <button type="button" className="rating-toast-x" aria-label={tr("legal.close")} onClick={onDismiss}>
+          <X size={16} />
+        </button>
+      </div>
+    );
+  }
+
+  function LanguageTabs({ lang, onChange, className = "" }) {
+    return (
+      <div className={"langtabs" + (className ? " " + className : "")} role="tablist" aria-label="Language">
+        {LANGS.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={lang === id}
+            className={lang === id ? "langtab on" : "langtab"}
+            onClick={() => { sfx.tap(); onChange(id); }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  
+  // Selectors layered on top of raw state (boost expiry, tier, reach).
+  function useDerived(state, now) {
+    return useMemo(() => {
+      const boostLive = state.user.boost && state.user.boost.until > now ? state.user.boost.amount : 0;
+      const effective = round2(clampScore(state.user.score + boostLive));
+      const tier = getTier(effective);
+      const reach = computeReach(state.friends);
+      const todayNet = round2(
+        state.history.length > 1
+          ? state.history.filter((h) => h.t > now - 86400000).reduce((a, h, i, arr) => i === 0 ? 0 : a + (h.s - arr[i - 1].s), 0)
+          : 0
+      );
+      return { boostLive, effective, tier, reach, todayNet };
+    }, [state, now]);
+  }
+  
+  /* ============================================================================
+     4. PRESENTATION PRIMITIVES
+  ============================================================================ */
+  
+  const grad = (arr, deg = 135) => `linear-gradient(${deg}deg, ${arr[0]}, ${arr[1]})`;
+  
+  function Avatar({ c, size = 44, showScore, ring }) {
+    const { state } = useStore();
+    const lens = showScore ?? state.lens;
+    const tier = getTier(c.score);
+    const [imgFailed, setImgFailed] = useState(false);
+    const src = c.avatarUrl && !imgFailed ? mediaUrl(c.avatarUrl) : null;
+    return (
+      <div style={{ position: "relative", width: size, height: size, flex: "0 0 auto" }}>
+        <div
+          className="avatar-ring"
+          style={{
+            width: size, height: size,
+            fontSize: size * 0.5,
+            background: grad([c.color, "#ffffff"]),
+            border: ring ? `2.5px solid ${tier.accent}` : "2px solid #fff",
+          }}
+        >
+          {src
+            ? <img src={src} alt="" className="avatar-img" referrerPolicy="no-referrer" onError={() => setImgFailed(true)} />
+            : <span className="avatar-emoji">{c.emoji}</span>}
+        </div>
+        {lens && showScore !== false && (
+          <div className="lens-badge" style={{ background: grad(tier.ring), color: "#fff" }}>
+            <Star size={8} fill="#fff" stroke="none" /> {c.score.toFixed(1)}
+          </div>
+        )}
+      </div>
+    );
+  }
+  
+  function ScoreRing({ score, size = 132, live }) {
+    const tier = getTier(score);
+    const r = size / 2 - 9;
+    const circ = 2 * Math.PI * r;
+    const frac = (score - 1) / 4;
+    const id = "g" + Math.round(score * 100);
+    return (
+      <div className={live ? "breathe" : ""} style={{ width: size, height: size, position: "relative" }}>
+        <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+          <defs>
+            <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor={tier.ring[0]} />
+              <stop offset="100%" stopColor={tier.ring[1]} />
+            </linearGradient>
+          </defs>
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#f0e9ef" strokeWidth="9" />
+          <circle
+            cx={size / 2} cy={size / 2} r={r} fill="none" stroke={`url(#${id})`} strokeWidth="9"
+            strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={circ * (1 - frac)}
+            style={{ transition: "stroke-dashoffset .9s cubic-bezier(.2,.8,.2,1)" }}
+          />
+        </svg>
+        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", lineHeight: 1 }}>
+          <div style={{ textAlign: "center" }}>
+            <div className={live ? "jitter" : ""} style={{ fontWeight: 700, fontSize: size * 0.3, color: tier.ink }}>
+              {score.toFixed(2)}
+            </div>
+            <div style={{ fontSize: 11, color: tier.accent, fontWeight: 700, letterSpacing: ".08em", marginTop: 2 }}>
+              {tier.label.toUpperCase()} TIER
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  function TierPill({ score, small }) {
+    const t = getTier(score);
+    const Icon = t.icon;
+    return (
+      <span className="tierpill" style={{ background: t.soft, color: t.ink, fontSize: small ? 10 : 12, padding: small ? "2px 8px" : "4px 11px" }}>
+        <Icon size={small ? 11 : 13} /> {t.label}
+      </span>
+    );
+  }
+  
+  function Stars({ value, onPick, size = 30 }) {
+    const [hover, setHover] = useState(0);
+    const gradId = useId().replace(/:/g, "");
+    return (
+      <div className="ech-rate-stars ech-rate-stars--md" style={{ gap: 6 }}>
+        <svg aria-hidden className="ech-star-defs" width="0" height="0">
+          <defs>
+            <linearGradient id={`${gradId}-gold`} x1="16" y1="2" x2="16" y2="30" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#FFFCE8" />
+              <stop offset="28%" stopColor="#FFE566" />
+              <stop offset="58%" stopColor="#FFC933" />
+              <stop offset="100%" stopColor="#E5A018" />
+            </linearGradient>
+            <radialGradient id={`${gradId}-shine`} cx="38%" cy="32%" r="58%">
+              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.95" />
+              <stop offset="55%" stopColor="#FFF8DC" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+        </svg>
+        {[1, 2, 3, 4, 5].map((n) => {
+          const on = n <= (hover || value);
+          return (
+            <button
+              key={n} className={"staricon ech-rate-star" + (on ? " on" : "")}
+              onMouseEnter={() => setHover(n)} onMouseLeave={() => setHover(0)}
+              onClick={() => onPick(n)}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: 2, lineHeight: 0 }}
+            >
+              <EchStarIcon size={size} filled={on} gradId={gradId} />
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const ECH_RATE_STAR_SIZES = { corner: 12, pill: 20, xs: 17, sm: 24, md: 34, lg: 44, xl: 54 };
+  const ECH_STAR_PATH = "M16 3.2l3.4 6.9 7.6 1.1-5.5 5.4 1.3 7.6L16 20.8l-6.8 3.6 1.3-7.6-5.5-5.4 7.6-1.1L16 3.2z";
+  const ECH_STAR_SHINE = "M16 8.4l1.1 2.2 2.4.35-1.7 1.7.4 2.4-2.2-1.2-2.2 1.2.4-2.4-1.7-1.7 2.4-.35L16 8.4z";
+
+  function EchStarIcon({ size = 24, filled = false, gradId = "ech", onDark = false }) {
+    const gid = `${gradId}-gold`;
+    const sid = `${gradId}-shine`;
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 32 32"
+        className={"ech-star-svg" + (filled ? " filled" : "") + (onDark ? " on-dark" : "")}
+        aria-hidden
+      >
+        {filled && (
+          <path
+            d={ECH_STAR_PATH}
+            fill="rgba(0,0,0,0.22)"
+            transform="translate(0 1.2)"
+          />
+        )}
+        <path
+          d={ECH_STAR_PATH}
+          fill={filled ? `url(#${gid})` : onDark ? "rgba(255,255,255,0.14)" : "rgba(183,156,240,0.14)"}
+          stroke={filled ? "#B8860B" : onDark ? "rgba(255,255,255,0.88)" : "#B79CF0"}
+          strokeWidth={filled ? 0.45 : 1.35}
+          strokeLinejoin="round"
+        />
+        {filled && (
+          <path
+            d={ECH_STAR_SHINE}
+            fill={`url(#${sid})`}
+            opacity="0.85"
+          />
+        )}
+      </svg>
+    );
+  }
+
+  function EchRateStars({ value = 0, onPick, disabled, size = "md", showLabels = false, className = "", onDark = false }) {
+    const tr = useT();
+    const [hover, setHover] = useState(0);
+    const [burst, setBurst] = useState(0);
+    const gradId = useId().replace(/:/g, "");
+    const starSize = ECH_RATE_STAR_SIZES[size] || ECH_RATE_STAR_SIZES.md;
+    const display = hover || value || 0;
+
+    const pick = (n) => {
+      if (disabled) return;
+      sfx.star(n);
+      setBurst(n);
+      setTimeout(() => setBurst(0), 520);
+      onPick?.(n);
+    };
+
+    return (
+      <div
+        className={"ech-rate-stars ech-rate-stars--" + size + (disabled ? " disabled" : "") + (className ? " " + className : "")}
+        role="group"
+        aria-label={tr("rate.tapStars")}
+      >
+        <svg aria-hidden className="ech-star-defs" width="0" height="0">
+          <defs>
+            <linearGradient id={`${gradId}-gold`} x1="16" y1="2" x2="16" y2="30" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#FFFCE8" />
+              <stop offset="28%" stopColor="#FFE566" />
+              <stop offset="58%" stopColor="#FFC933" />
+              <stop offset="100%" stopColor="#E5A018" />
+            </linearGradient>
+            <radialGradient id={`${gradId}-shine`} cx="38%" cy="32%" r="58%">
+              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.95" />
+              <stop offset="55%" stopColor="#FFF8DC" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+        </svg>
+        {[1, 2, 3, 4, 5].map((n) => {
+          const on = n <= display;
+          return (
+            <button
+              key={n}
+              type="button"
+              className={"ech-rate-star" + (on ? " on" : "") + (burst === n ? " burst" : "")}
+              disabled={disabled}
+              aria-label={tr("rate.starN", { n, label: tr("rate.label" + n) })}
+              onPointerEnter={() => !disabled && setHover(n)}
+              onPointerLeave={() => setHover(0)}
+              onPointerUp={() => setHover(0)}
+              onPointerCancel={() => setHover(0)}
+              onClick={() => pick(n)}
+            >
+              <EchStarIcon size={starSize} filled={on} gradId={gradId} onDark={onDark} />
+              {showLabels && <span className="ech-rate-star-label">{tr("rate.label" + n)}</span>}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function MediaAvgRatingBadge({ avgRating, className = "" }) {
+    const avg = Number(avgRating);
+    if (!Number.isFinite(avg) || avg <= 0) return null;
+    const stars = Math.max(1, Math.min(5, Math.round(avg)));
+    return (
+      <div
+        className={"ech-media-avg-rating" + (className ? ` ${className}` : "")}
+        aria-label={`${avg.toFixed(1)} average rating`}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <EchRateStars size="pill" value={stars} disabled onDark />
+        <span className="ech-media-avg-rating-num">{avg.toFixed(1)}</span>
+      </div>
+    );
+  }
+
+  function EchRateOverlay({ canRate, alreadyRated, myStars, onPick, lockedReason, size = "pill", className = "", onDark = true }) {
+    if (!alreadyRated && !canRate && !lockedReason) return null;
+    const overlaySize = size || "pill";
+    const sheetLocked = className.includes("ech-rate-overlay--sheet");
+    const lockedShort = !sheetLocked && lockedReason && lockedReason.length > 52
+      ? lockedReason.slice(0, 49) + "…"
+      : lockedReason;
+
+    return (
+      <div
+        className={"ech-rate-overlay" + (alreadyRated ? " rated" : "") + (lockedReason ? " locked" : "") + (className ? " " + className : "")}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        role="group"
+        aria-label={alreadyRated && myStars ? `${myStars} stars` : lockedReason || "Rate"}
+        title={lockedReason || undefined}
+      >
+        {alreadyRated && myStars ? (
+          <EchRateStars size={overlaySize} value={myStars} disabled onDark={onDark} />
+        ) : canRate ? (
+          <EchRateStars size={overlaySize} value={0} onPick={onPick} onDark={onDark} />
+        ) : lockedReason ? (
+          <span className="ech-rate-overlay-locked">
+            <Lock size={10} strokeWidth={2.5} />
+            {lockedShort}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  function ScoreHistorySection({ history, score, userId }) {
+    const tr = useT();
+    const [now] = useTick();
+    const [range, setRange] = useState("all");
+    const [menuOpen, setMenuOpen] = useState(false);
+    const menuRef = useRef(null);
+    const tier = getTier(score);
+    const fullHistory = useMemo(() => resolveScoreHistory(history, userId, score), [history, userId, score]);
+    const filtered = useMemo(() => filterScoreHistory(fullHistory, range, now), [fullHistory, range, now]);
+    const chartData = useMemo(() => filtered.map((h) => ({
+      t: h.t,
+      s: h.s,
+      label: formatScoreChartLabel(h.t, range),
+    })), [filtered, range]);
+    const delta = chartData.length >= 2 ? round2(chartData[chartData.length - 1].s - chartData[0].s) : 0;
+
+    const ranges = [
+      ["all", tr("profile.rangeAll")],
+      ["day", tr("profile.rangeDay")],
+      ["week", tr("profile.rangeWeek")],
+      ["month", tr("profile.rangeMonth")],
+      ["year", tr("profile.rangeYear")],
+    ];
+    const rangeLabel = ranges.find(([id]) => id === range)?.[1] || tr("profile.rangeAll");
+
+    useEffect(() => {
+      if (!menuOpen) return;
+      const close = (e) => {
+        if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
+      };
+      window.addEventListener("pointerdown", close);
+      return () => window.removeEventListener("pointerdown", close);
+    }, [menuOpen]);
+
+    return (
+      <section className="ech-score-chart-section">
+        <div className="ech-score-chart-head">
+          <div>
+            <h3>{tr("profile.scoreTrend")}</h3>
+            <span className={"ech-score-chart-delta" + (delta >= 0 ? " up" : " down")}>
+              {delta >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+              {delta >= 0 ? "+" : ""}{delta.toFixed(2)}
+            </span>
+          </div>
+          <div className="ech-score-range-wrap" ref={menuRef}>
+            <button
+              type="button"
+              className="ech-score-range-btn"
+              aria-expanded={menuOpen}
+              onClick={() => { sfx.tap(); setMenuOpen((o) => !o); }}
+            >
+              {rangeLabel}
+              <ChevronDown size={14} className={menuOpen ? " open" : ""} />
+            </button>
+            {menuOpen && (
+              <div className="ech-score-range-menu" role="menu">
+                {ranges.map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    role="menuitem"
+                    className={"ech-score-range-item" + (range === id ? " on" : "")}
+                    onClick={() => { sfx.tap(); setRange(id); setMenuOpen(false); }}
+                  >
+                    {label}
+                    {range === id && <Check size={14} color="#8C6BD8" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="ech-score-chart-card card">
+          {chartData.length < 2 ? (
+            <p className="ech-score-chart-empty muted">{tr("profile.scoreTrendEmpty")}</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={156}>
+              <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
+                <defs>
+                  <linearGradient id={"scoreFill-" + (userId || "me")} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={tier.accent} stopOpacity={0.35} />
+                    <stop offset="100%" stopColor={tier.soft} stopOpacity={0.05} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#9B8FA8" }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={28} />
+                <YAxis domain={[1, 5]} tick={{ fontSize: 9, fill: "#9B8FA8" }} axisLine={false} tickLine={false} width={28} ticks={[1, 2, 3, 4, 5]} />
+                <Tooltip
+                  contentStyle={{ borderRadius: 12, border: "1px solid rgba(183,156,240,.2)", fontSize: 12, fontWeight: 700 }}
+                  formatter={(v) => [Number(v).toFixed(2), tr("profile.score")]}
+                  labelFormatter={(l) => l}
+                />
+                <ReferenceLine y={score} stroke={tier.accent} strokeDasharray="4 4" strokeOpacity={0.45} />
+                <Area type="monotone" dataKey="s" stroke={tier.accent} strokeWidth={2.5} fill={"url(#scoreFill-" + (userId || "me") + ")"} dot={false} activeDot={{ r: 4, fill: tier.accent, stroke: "#fff", strokeWidth: 2 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </section>
+    );
+  }
+  
+  function Mascot({ size = 60, mood = "happy" }) {
+    return (
+      <div className="wobble" style={{ width: size, height: size, borderRadius: "50%", background: grad(["#FFE9A8", "#FFC6DA"]), display: "grid", placeItems: "center", fontSize: size * 0.55, boxShadow: "0 10px 24px rgba(255,160,190,.4)" }}>
+        {mood === "happy" ? "😄" : mood === "worry" ? "🥺" : "🙂"}
+      </div>
+    );
+  }
+
+  function AppLogo({ size = 72, className = "" }) {
+    return (
+      <div className={`onb-logo-wrap${className ? ` ${className}` : ""}`} style={{ width: size, height: size }}>
+        <div className="onb-logo-glow" aria-hidden />
+        <img src="/app/icons/icon-192.png" alt="" width={size} height={size} className="onb-logo-img" />
+      </div>
+    );
+  }
+  
+  const Delta = ({ d }) => (
+    <span className={d >= 0 ? "delta up" : "delta down"}>
+      {d >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />} {d >= 0 ? "+" : ""}{d.toFixed(2)}
+    </span>
+  );
+  
+  const rel = (ts) => {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 45) return "now";
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h";
+    return Math.floor(s / 86400) + "d";
+  };
+  
+  /* ============================================================================
+     5. ONBOARDING
+  ============================================================================ */
+  
+  function Onboarding() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [step, setStep] = useState(0);
+    const [signing, setSigning] = useState(false);
+    const [signingMethod, setSigningMethod] = useState(null);
+    const [scan, setScan] = useState(0);
+    const [scanPhase, setScanPhase] = useState("idle");
+    const [scanRetry, setScanRetry] = useState(0);
+    const [authError, setAuthError] = useState("");
+    const [scanError, setScanError] = useState("");
+    const [scanNote, setScanNote] = useState("");
+    const [authView, setAuthView] = useState("pick");
+    const [authCfg, setAuthCfg] = useState(null);
+    const [gmailReady, setGmailReady] = useState(false);
+    const [pwa, setPwa] = useState({ installed: false, native: false, ios: false, mobile: false, kind: "android-coach", inApp: false });
+    const { open: openInstallCoach } = useInstallHelp();
+    const [scoreReveal, setScoreReveal] = useState(null);
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [name, setName] = useState("");
+    const [handle, setHandle] = useState("");
+    const maxBirthYear = new Date().getFullYear() - 13;
+    const birthYears = useMemo(() => {
+      const years = [];
+      for (let y = maxBirthYear; y >= 1940; y--) years.push(y);
+      return years;
+    }, [maxBirthYear]);
+    const [birthYear, setBirthYear] = useState(maxBirthYear - 25);
+    const [identifier, setIdentifier] = useState("");
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+
+    const finishAuth = async (token, user) => {
+      setToken(token);
+      const localTest = token === "echelon-local-test" || user?.id === UI_TEST_USER_ID;
+      dispatch({
+        type: "HYDRATE",
+        payload: localTest ? buildLocalTestSession(user) : {
+          user,
+          contacts: [],
+          gatherings: [],
+          feed: [],
+          friends: [],
+          rsvps: [],
+          history: [],
+          notifications: [],
+          settings: {},
+        },
+      });
+      if (user.onboarded) {
+        try {
+          const data = await api.bootstrap();
+          dispatch({ type: "HYDRATE", payload: data });
+        } catch {
+          if (localTest || isTestCredentials(user?.handle?.replace(/^@/, "") || user?.email, "test")) {
+            dispatch({ type: "HYDRATE", payload: { ...buildLocalTestSession(user), liveData: false } });
+          }
+        }
+        dispatch({ type: "ONBOARDED" });
+        return;
+      }
+      setStep(1);
+    };
+
+    useEffect(() => {
+      return initPwaInstall(setPwa);
+    }, []);
+
+    useEffect(() => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("install") === "1" && !pwa.installed) {
+        openInstallCoach(pwa.inApp ? "external" : pwa.kind || "ios-coach");
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+    }, [pwa.installed, pwa.inApp, pwa.kind, openInstallCoach]);
+
+    const handleInstall = () => runInstallFlow(pwa, openInstallCoach);
+
+    useEffect(() => {
+      if (getToken() && !state.onboarded && step === 0) setStep(1);
+    }, [state.onboarded, step]);
+
+    useEffect(() => {
+      (async () => {
+        try {
+          const cfg = await fetchAuthConfig();
+          setAuthCfg(cfg);
+          if (cfg.googleClientId) {
+            await initGoogleAuth(cfg.googleClientId);
+            setGmailReady(true);
+          }
+          if (cfg.appleClientId) {
+            await initAppleAuth({ clientId: cfg.appleClientId, redirectUri: cfg.appleRedirectUri });
+          }
+        } catch {
+          /* password login still works */
+        }
+      })();
+    }, []);
+
+    useEffect(() => {
+      if (step !== 1) {
+        setScanPhase("idle");
+        return;
+      }
+
+      let cancelled = false;
+      let progressIv = null;
+
+      const stopCamera = () => {
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      };
+
+      const waitForFrame = (video, timeoutMs = 10000) => new Promise((resolve, reject) => {
+        const started = Date.now();
+        const tick = () => {
+          if (cancelled) { reject(new Error("cancelled")); return; }
+          if (video?.videoWidth > 0 && video.readyState >= 2) { resolve(); return; }
+          if (Date.now() - started > timeoutMs) { reject(new Error("camera timeout")); return; }
+          requestAnimationFrame(tick);
+        };
+        tick();
+      });
+
+      const captureFrame = (video) => {
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        const minSide = Math.min(w, h);
+        const target = Math.max(480, minSide);
+        const scale = target / minSide;
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(w * scale);
+        canvas.height = Math.round(h * scale);
+        const ctx = canvas.getContext("2d");
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL("image/jpeg", 0.92);
+      };
+
+      setScanError("");
+      setScanNote("");
+      setScan(0);
+      setScanPhase("live");
+
+      (async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 640 } },
+            audio: false,
+          });
+          if (cancelled) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          streamRef.current = stream;
+          const video = videoRef.current;
+          if (!video) throw new Error("no video element");
+          video.srcObject = stream;
+          video.muted = true;
+          await video.play();
+          await waitForFrame(video);
+
+          progressIv = setInterval(() => {
+            setScan((p) => (p >= 100 ? 100 : p + 3));
+          }, 80);
+
+          await new Promise((r) => setTimeout(r, 3200));
+          if (cancelled) return;
+
+          clearInterval(progressIv);
+          progressIv = null;
+          setScan(100);
+          setScanPhase("analyzing");
+
+          const image = captureFrame(video);
+          stopCamera();
+
+          const result = await api.onboard(image);
+          if (cancelled) return;
+
+          dispatch({
+            type: "SYNC_USER",
+            user: { ...result.user, score: result.score ?? result.user.score },
+          });
+          const data = await api.bootstrap();
+          dispatch({ type: "HYDRATE", payload: data });
+          setScanPhase("done");
+          setScoreReveal({
+            score: result.score ?? result.user.score,
+            note: result.note || "",
+          });
+          sfx.celebrate();
+        } catch (err) {
+          if (cancelled) return;
+          stopCamera();
+          if (progressIv) clearInterval(progressIv);
+          const denied = err?.name === "NotAllowedError" || err?.name === "NotFoundError";
+          const msg = err?.message && !denied && !err.message.includes("Request failed")
+            ? err.message
+            : tr(denied ? "onb.camError" : "onb.scanError");
+          setScanError(msg);
+          setScan(0);
+          setScanPhase("error");
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+        if (progressIv) clearInterval(progressIv);
+        stopCamera();
+      };
+    }, [step, scanRetry, dispatch, tr]);
+
+    const retryScan = () => {
+      sfx.tap();
+      setScanError("");
+      setScanNote("");
+      setScoreReveal(null);
+      setScan(0);
+      setScanPhase("idle");
+      setScanRetry((n) => n + 1);
+    };
+
+    const enterAfterScore = () => {
+      sfx.tap();
+      setScoreReveal(null);
+      dispatch({ type: "ONBOARDED" });
+    };
+
+    const backFromCreation = () => {
+      sfx.tap();
+      setScanPhase("idle");
+      setScanError("");
+      setScanNote("");
+      setScoreReveal(null);
+      setScan(0);
+      if (step === 1) {
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      setStep(0);
+      if (authView === "register" || authView === "login") {
+        setAuthView("pick");
+        setAuthError("");
+        return;
+      }
+      if (getToken()) {
+        api.logout().catch(() => {});
+        setToken(null);
+      }
+      setAuthView("pick");
+      setAuthError("");
+    };
+
+    const doGmail = async () => {
+      if (!gmailReady) {
+        setAuthError(tr("onb.gmailNotConfigured"));
+        return;
+      }
+      sfx.tap();
+      setAuthError("");
+      setSigningMethod("gmail");
+      setSigning(true);
+      try {
+        const credential = await signInWithGmail();
+        const { token, user } = await api.authGoogle(credential);
+        await finishAuth(token, user);
+      } catch (e) {
+        setAuthError(e?.message?.includes("cancel") ? "" : (e?.message || tr("onb.googleError")));
+      } finally {
+        setSigning(false);
+        setSigningMethod(null);
+      }
+    };
+
+    const doApple = async () => {
+      sfx.tap();
+      setAuthError("");
+      setSigningMethod("apple");
+      setSigning(true);
+      try {
+        const apple = await signInWithApple();
+        const { token, user } = await api.authApple({
+          idToken: apple.idToken,
+          name: apple.name,
+          email: apple.email,
+        });
+        await finishAuth(token, user);
+      } catch {
+        setAuthError(tr("onb.appleError"));
+      } finally {
+        setSigning(false);
+        setSigningMethod(null);
+      }
+    };
+
+    const doRegister = async () => {
+      sfx.tap();
+      setAuthError("");
+      setSigningMethod("account");
+      setSigning(true);
+      try {
+        const { token, user } = await api.authRegister({
+          email: email.trim(),
+          password,
+          name: name.trim() || undefined,
+          handle: normalizeHandle(handle) || undefined,
+          birthYear: birthYear || undefined,
+        });
+        await finishAuth(token, user);
+      } catch (e) {
+        setAuthError(e.message || tr("onb.registerError"));
+      } finally {
+        setSigning(false);
+        setSigningMethod(null);
+      }
+    };
+
+    const doLogin = async () => {
+      sfx.tap();
+      setAuthError("");
+      setSigningMethod("account");
+      setSigning(true);
+      try {
+        if (isTestCredentials(identifier, password)) {
+          try {
+            const { token, user } = await api.authLogin({ identifier: identifier.trim(), password });
+            await finishAuth(token, user);
+            return;
+          } catch {
+            await finishAuth("echelon-local-test", buildLocalTestSession({ id: UI_TEST_USER_ID }).user);
+            return;
+          }
+        }
+        const { token, user } = await api.authLogin({
+          identifier: identifier.trim(),
+          password,
+        });
+        await finishAuth(token, user);
+      } catch (e) {
+        if (isTestCredentials(identifier, password)) {
+          try {
+            await finishAuth("echelon-local-test", buildLocalTestSession({ id: UI_TEST_USER_ID }).user);
+            return;
+          } catch { /* fall through */ }
+        }
+        setAuthError(e.message || tr("onb.loginError"));
+      } finally {
+        setSigning(false);
+        setSigningMethod(null);
+      }
+    };
+
+    const cancelSigning = () => {
+      sfx.tap();
+      setSigning(false);
+      setSigningMethod(null);
+      setAuthError("");
+    };
+
+    const signingTitle = signingMethod === "gmail"
+      ? tr("onb.signingGmail")
+      : signingMethod === "apple"
+        ? tr("onb.signing")
+        : tr("onb.signingAccount");
+    const signingSub = signingMethod === "gmail"
+      ? tr("onb.signingGmailSub")
+      : signingMethod === "apple"
+        ? tr("onb.signingSub")
+        : tr("onb.signingAccountSub");
+
+    const authPick = (
+      <>
+        {!pwa.installed && (
+          <button type="button" className="a2hs-btn" onClick={handleInstall}>
+            <Smartphone size={22} strokeWidth={2.2} />
+            <span className="a2hs-label">{tr("pwa.addToHome")}</span>
+            <span className="a2hs-hint">
+              {pwa.inApp ? tr("pwa.openBrowserLead") : pwa.native ? tr("pwa.oneTap") : tr("pwa.addToHomeSub")}
+            </span>
+          </button>
+        )}
+        <button className="gmailbtn" type="button" onClick={doGmail} disabled={signing}>
+          <GmailGlyph size={18} /> {tr("onb.gmail")}
+        </button>
+        {authCfg?.methods?.includes("apple") && (
+          <button className="applebtn" type="button" onClick={doApple} disabled={signing}>
+            <AppleGlyph size={16} /> {tr("onb.apple")}
+          </button>
+        )}
+        <div className="onb-or"><span>{tr("onb.or")}</span></div>
+        <button type="button" className="btn ghost auth-alt" onClick={() => { setAuthView("login"); setAuthError(""); }}>
+          {tr("onb.login")}
+        </button>
+        <button type="button" className="btn primary auth-alt" onClick={() => { setAuthView("register"); setAuthError(""); }}>
+          {tr("onb.register")}
+        </button>
+        {authError && <p className="onb-error">{authError}</p>}
+      </>
+    );
+
+    const authLogin = (
+      <>
+        <button type="button" className="onb-back" onClick={backFromCreation}>{tr("onb.back")}</button>
+        <label className="onb-label">{tr("onb.identifier")}</label>
+        <input className="onb-input" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@email.com or @username" autoComplete="username" />
+        <label className="onb-label">{tr("onb.password")}</label>
+        <input className="onb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+        <button type="button" className="btn primary" onClick={doLogin} disabled={!identifier.trim() || !password}>{tr("onb.signIn")}</button>
+        {authError && <p className="onb-error">{authError}</p>}
+      </>
+    );
+
+    const authRegister = (
+      <>
+        <button type="button" className="onb-back" onClick={backFromCreation}>{tr("onb.back")}</button>
+        <label className="onb-label">{tr("onb.name")}</label>
+        <input className="onb-input" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" name="name" />
+        <label className="onb-label">{tr("onb.email")}</label>
+        <input className="onb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" name="email" inputMode="email" />
+        <label className="onb-label">{tr("onb.handle")}</label>
+        <div className="onb-handle-wrap">
+          <span className="onb-handle-at" aria-hidden>@</span>
+          <input
+            className="onb-input onb-input-handle"
+            value={handle}
+            onChange={(e) => setHandle(e.target.value.replace(/^@+/, "").replace(/\s/g, ""))}
+            autoComplete="username"
+            name="username"
+            placeholder="yourname"
+            spellCheck={false}
+          />
+        </div>
+        <label className="onb-label">{tr("onb.birthYear")}</label>
+        <div className="onb-birth-wheel">
+          <ScrollWheel items={birthYears} value={birthYear} onChange={setBirthYear} format={(y) => String(y)} />
+        </div>
+        <label className="onb-label">{tr("onb.password")}</label>
+        <input className="onb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" name="new-password" />
+        <button type="button" className="btn primary" onClick={doRegister} disabled={!email.trim() || !password}>{tr("onb.createAccount")}</button>
+        {authError && <p className="onb-error">{authError}</p>}
+      </>
+    );
+  
+    return (
+      <div className="onb" style={{ background: grad(["#FFF4F8", "#EEF4FF"], 160) }}>
+        <FloatingSparkles />
+        <div className="onb-lang">
+          <LanguageTabs
+            lang={state.lang}
+            onChange={(id) => dispatch({ type: "SET_LANG", lang: id, chosen: true })}
+            className="langtabs-compact"
+          />
+        </div>
+
+        <div className="onb-inner">
+          <div className="onb-stage">
+            {step === 0 && !signing && (
+              <div className="onb-card pop">
+                <div className="onb-hero">
+                  <AppLogo size={76} />
+                  <div className="wordmark onb-wordmark">echelon</div>
+                  <p className="onb-tag">{tr("onb.tag")}</p>
+                  <div className="onb-pills" aria-hidden>
+                    <span className="onb-pill">{tr("onb.pill1")}</span>
+                    <span className="onb-pill">{tr("onb.pill2")}</span>
+                    <span className="onb-pill">{tr("onb.pill3")}</span>
+                  </div>
+                </div>
+                <p className="onb-lead muted">
+                  {tr("onb.lead")}
+                </p>
+                <div className={`onb-actions${authView !== "pick" ? " onb-form" : ""}`}>
+                  {authView === "pick" && authPick}
+                  {authView === "login" && authLogin}
+                  {authView === "register" && authRegister}
+                  <p className="onb-foot onb-consent muted">
+                    {tr("onb.consentLegal")}{" "}
+                    <button type="button" className="legal-link" onClick={() => dispatch({ type: "OPEN_MODAL", modal: "legal", payload: { doc: "terms" } })}>{tr("legal.terms")}</button>
+                    {" · "}
+                    <button type="button" className="legal-link" onClick={() => dispatch({ type: "OPEN_MODAL", modal: "legal", payload: { doc: "privacy" } })}>{tr("legal.privacy")}</button>
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {step === 0 && signing && (
+              <div className="onb-card pop">
+                <div className="onb-hero">
+                  {signingMethod === "gmail" ? (
+                    <div className="onb-signing-gmail">
+                      <GmailGlyph size={36} />
+                      <Loader size={28} className="spin onb-signing-spin" color="#4285F4" />
+                    </div>
+                  ) : (
+                    <div className="faceid">
+                      <Loader size={40} className="spin" color="#fff" />
+                      <div className="faceid-ring" />
+                    </div>
+                  )}
+                  <p className="onb-h" style={{ marginTop: 20, fontSize: 18 }}>{signingTitle}</p>
+                  <p className="muted onb-lead" style={{ marginTop: 8 }}>{signingSub}</p>
+                  <button type="button" className="btn soft onb-signing-back" onClick={cancelSigning}>
+                    {tr("onb.back")}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {step === 1 && (
+              <div className="onb-card pop">
+                <button type="button" className="onb-back" onClick={backFromCreation}>{tr("onb.back")}</button>
+                <p className="onb-h">{tr("onb.smile")}</p>
+                <p className="muted onb-lead">{tr("onb.smileSub")}</p>
+                <div className="onb-face-scan">
+                  <video ref={videoRef} className="onb-face-video" playsInline muted />
+                  <div className="scanline" style={{ top: `${scan}%` }} />
+                  <div className="onb-face-ring" />
+                </div>
+                <p className="onb-scan-status muted">
+                  {scanError ? (
+                    <>
+                      <span className="onb-error">{scanError}</span>
+                      <button type="button" className="btn primary onb-scan-retry" onClick={retryScan}>
+                        {tr("onb.scanRetry")}
+                      </button>
+                    </>
+                  ) : scanPhase === "analyzing" ? (
+                    <><Loader size={13} className="spin" /> {tr("onb.analyzingSub")}</>
+                  ) : scanNote ? (
+                    <span>{scanNote}</span>
+                  ) : (
+                    <><Loader size={13} className="spin" /> {tr("onb.analyzing")} {scan}%</>
+                  )}
+                </p>
+              </div>
+            )}
+
+          </div>
+
+          <div className="onb-footer">
+            <div className="onb-dots-wrap">
+              <Dots n={2} i={step} />
+            </div>
+          </div>
+        </div>
+
+        {scoreReveal && (
+          <div className="backdrop score-reveal-backdrop">
+            <div className="score-reveal-card pop">
+              <p className="score-reveal-kicker">{tr("onb.scoreCongrats")}</p>
+              <h2 className="score-reveal-title">{tr("onb.scoreTitle")}</h2>
+              <div className="onb-score-wrap">
+                <ScoreRing score={scoreReveal.score} size={148} live />
+              </div>
+              <p className="score-reveal-tier">
+                {getTier(scoreReveal.score).label} {tr("onb.tier")}
+              </p>
+              {scoreReveal.note && (
+                <p className="muted score-reveal-note">{scoreReveal.note}</p>
+              )}
+              {!pwa.installed && pwa.mobile && (
+                <button type="button" className="score-reveal-install" onClick={() => runInstallFlow(pwa, openInstallCoach)}>
+                  <Smartphone size={18} />
+                  <span>{pwa.native ? tr("pwa.oneTapInstall") : tr("pwa.addToHome")}</span>
+                </button>
+              )}
+              <button type="button" className="btn primary onb-enter" onClick={enterAfterScore}>
+                {!pwa.installed && pwa.mobile ? tr("onb.continueBrowser") : tr("onb.enter")}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  
+  const Dots = ({ n, i }) => (
+    <div className="onb-dots">
+      {Array.from({ length: n }).map((_, k) => (
+        <span key={k} className={k === i ? "onb-dot on" : "onb-dot"} />
+      ))}
+    </div>
+  );
+  
+  /* ============================================================================
+     6. SCREENS
+  ============================================================================ */
+  
+  // ---- FEED ----------------------------------------------------------------- //
+
+  const clampPct = (n) => Math.max(4, Math.min(96, n));
+  const overlayId = () => "ov_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+  async function reverseGeocodeLabel(lat, lng) {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) return "";
+      const data = await res.json();
+      const a = data.address || {};
+      return a.city || a.town || a.village || a.suburb || a.neighbourhood || a.county || (data.display_name || "").split(",")[0] || "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function searchCities(query) {
+    if (!query || query.trim().length < 2) return [];
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query.trim())}&format=json&addressdetails=1&limit=12`,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) return [];
+      const rows = await res.json();
+      const seen = new Set();
+      const out = [];
+      for (const row of rows) {
+        const a = row.address || {};
+        const city = a.city || a.town || a.village || a.municipality || a.county || row.display_name?.split(",")[0];
+        if (!city) continue;
+        const countryCode = (a.country_code || "").toUpperCase();
+        const key = `${city.toLowerCase()}|${countryCode}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const label = countryCode ? `${city}, ${countryCode}` : city;
+        out.push({ key, city, countryCode, label });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  function formatCityLabel(city, countryCode) {
+    if (!city) return "";
+    const cc = (countryCode || "").toUpperCase();
+    return cc ? `${city}, ${cc}` : city;
+  }
+
+  async function geocodePlace(query) {
+    if (!query || !query.trim()) return null;
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query.trim())}&format=json&limit=1`,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) return null;
+      const rows = await res.json();
+      if (!rows?.[0]) return null;
+      return { lat: parseFloat(rows[0].lat), lng: parseFloat(rows[0].lon) };
+    } catch {
+      return null;
+    }
+  }
+
+  async function searchAddresses(query, city = "") {
+    if (!query || query.trim().length < 3) return [];
+    try {
+      const q = city ? `${query.trim()}, ${city}` : query.trim();
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=8`,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) return [];
+      const rows = await res.json();
+      const seen = new Set();
+      const out = [];
+      for (const row of rows) {
+        const key = String(row.place_id || row.osm_id || row.display_name);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const a = row.address || {};
+        const short = [a.road || a.pedestrian || a.footway, a.house_number].filter(Boolean).join(" ")
+          || a.suburb || a.neighbourhood || row.display_name?.split(",")[0];
+        if (!short) continue;
+        out.push({
+          key,
+          label: row.display_name,
+          address: short,
+          lat: parseFloat(row.lat),
+          lng: parseFloat(row.lng),
+        });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  const PARTY_CURRENCIES = ["EUR", "USD", "GBP", "BRL", "CHF", "CAD", "AUD", "MXN"];
+
+  const PARTY_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const PARTY_DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const PARTY_MINUTES = [0, 15, 30, 45];
+  const PARTY_HOURS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  const PARTY_AMPM = ["AM", "PM"];
+
+  function partyWhenLabel(monthIdx, day, hour12, minute, ap) {
+    const yr = new Date().getFullYear();
+    let h24 = hour12 % 12;
+    if (ap === "PM") h24 += 12;
+    const dt = new Date(yr, monthIdx, day, h24, minute);
+    return `${PARTY_DOW[dt.getDay()]} · ${hour12}:${String(minute).padStart(2, "0")} ${ap}`;
+  }
+
+  function partyStartsAtMs(monthIdx, day, hour12, minute, ap) {
+    const yr = new Date().getFullYear();
+    let h24 = hour12 % 12;
+    if (ap === "PM") h24 += 12;
+    let dt = new Date(yr, monthIdx, day, h24, minute);
+    if (dt.getTime() < Date.now() - 3600000) {
+      dt = new Date(yr + 1, monthIdx, day, h24, minute);
+    }
+    return dt.getTime();
+  }
+
+  function partyWheelsFromMs(ms) {
+    const dt = new Date(ms);
+    let hour12 = dt.getHours() % 12;
+    if (hour12 === 0) hour12 = 12;
+    return {
+      monthIdx: dt.getMonth(),
+      day: dt.getDate(),
+      hour12,
+      minute: dt.getMinutes(),
+      ampm: dt.getHours() >= 12 ? "PM" : "AM",
+    };
+  }
+
+  const STORY_PHOTO_MS = 4000;
+  const STORY_VIDEO_CHUNK_SEC = 30;
+  const STORY_VIDEO_MAX_SEC = 180;
+
+  function getVideoDuration(src) {
+    return new Promise((resolve) => {
+      if (!src) { resolve(0); return; }
+      const v = document.createElement("video");
+      v.preload = "metadata";
+      v.onloadedmetadata = () => {
+        const d = v.duration;
+        resolve(Number.isFinite(d) ? d : 0);
+      };
+      v.onerror = () => resolve(0);
+      v.src = src;
+    });
+  }
+
+  function storyItemDurationMs(item) {
+    if (!item) return STORY_PHOTO_MS;
+    if (item.mediaType !== "video") return STORY_PHOTO_MS;
+    const cs = item.captionStyle || {};
+    const start = cs.clipStart ?? 0;
+    const end = cs.clipEnd ?? cs.videoDuration ?? STORY_VIDEO_CHUNK_SEC;
+    return Math.max(1000, Math.round((end - start) * 1000));
+  }
+
+  function formatPortfolioScore(avg) {
+    if (avg == null || !Number.isFinite(avg)) return null;
+    return Math.max(1, Math.min(5, avg)).toFixed(1);
+  }
+
+  function ScrollWheel({ items, value, onChange, format = (x) => x }) {
+    const ref = useRef(null);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el) return;
+      const idx = items.indexOf(value);
+      if (idx >= 0) el.scrollTop = Math.max(0, idx * 40 - 40);
+    }, [value, items]);
+    return (
+      <div className="dt-wheel" ref={ref}>
+        {items.map((item) => (
+          <button
+            key={String(item)}
+            type="button"
+            className={"dt-wheel-item" + (item === value ? " on" : "")}
+            onClick={() => { sfx.tap(); onChange(item); }}
+          >
+            {format(item)}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function normalizeHandle(h) {
+    return String(h || "").replace(/^@/, "").toLowerCase();
+  }
+
+  function isIgBoilerCaption(caption) {
+    if (!caption) return true;
+    return /synced from instagram|imported from instagram|open for community rating/i.test(caption);
+  }
+
+  function displayPostCaption(post) {
+    if (!post?.caption || isIgBoilerCaption(post.caption)) return "";
+    return post.caption;
+  }
+
+  function overlaysFromPost(post) {
+    const style = post.captionStyle || {};
+    if (Array.isArray(style.overlays) && style.overlays.length) return style.overlays;
+    if (post.caption && !post.captionStyle?.overlays) {
+      if (post.source === "instagram" && isIgBoilerCaption(post.caption)) return [];
+      return [{
+        id: "legacy",
+        type: "text",
+        text: post.caption,
+        x: style.x ?? 50,
+        y: style.y ?? 82,
+        color: style.color || "#ffffff",
+        align: style.align || "center",
+      }];
+    }
+    return [];
+  }
+
+  function MentionText({ text, tags, dispatch, className }) {
+    if (!text) return null;
+    const byHandle = new Map((tags || []).map((t) => [normalizeHandle(t.handle), t]));
+    const parts = text.split(/(@[a-zA-Z0-9_.]+)/g);
+    return (
+      <span className={className}>
+        {parts.map((part, i) => {
+          if (!part.startsWith("@")) return <span key={i}>{part}</span>;
+          const handle = normalizeHandle(part);
+          const tag = byHandle.get(handle);
+          if (tag?.userId) {
+            return (
+              <button
+                key={i}
+                type="button"
+                className="mention-link"
+                onClick={(e) => { e.stopPropagation(); sfx.tap(); openUserProfile(dispatch, tag.userId); }}
+              >
+                @{handle}
+              </button>
+            );
+          }
+          return <span key={i} className="mention-link">{part}</span>;
+        })}
+      </span>
+    );
+  }
+
+  function MediaOverlaysView({
+    overlays,
+    captionStyle,
+    legacyCaption,
+    dispatch,
+    editable = false,
+    selectedId,
+    editingId,
+    onSelect,
+    onEdit,
+    onChange,
+    onRemove,
+    canvasRef,
+  }) {
+    const items = overlays?.length ? overlays : overlaysFromPost({ caption: legacyCaption, captionStyle });
+    if (!items.length) return null;
+    const lastTapRef = useRef({});
+    const pointersRef = useRef(new Map());
+    const pinchRef = useRef(null);
+    const dragRef = useRef(null);
+
+    const pointerDist = () => {
+      const pts = [...pointersRef.current.values()];
+      if (pts.length < 2) return 0;
+      return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    };
+
+    const overlayEditField = (ov) => {
+      if (ov.type === "hashtag") return "tag";
+      if (ov.type === "poll" || ov.type === "quiz") return "question";
+      if (ov.type === "question") return "prompt";
+      if (ov.type === "countdown" || ov.type === "link") return "label";
+      return "text";
+    };
+
+    const overlayEditValue = (ov) => ov[overlayEditField(ov)] || "";
+
+    const canInlineEdit = (ov) => {
+      if (!editable) return false;
+      return ["text", "location", "hashtag", "poll", "question", "quiz", "countdown", "link"].includes(ov.type);
+    };
+
+    const startOverlayInteraction = (id, ov, e) => {
+      if (!editable || !onChange) return;
+      e.stopPropagation();
+      onSelect?.(id);
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try { e.currentTarget?.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+
+      const now = Date.now();
+      const last = lastTapRef.current[id] || 0;
+      if (pointersRef.current.size === 1 && now - last < 340 && canInlineEdit(ov)) {
+        onEdit?.(id);
+        lastTapRef.current[id] = 0;
+        return;
+      }
+      if (pointersRef.current.size === 1) lastTapRef.current[id] = now;
+
+      if (pointersRef.current.size >= 2) {
+        dragRef.current = null;
+        pinchRef.current = { id, startDist: pointerDist(), startScale: ov.scale ?? 1 };
+      } else if (editingId !== id && canvasRef?.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        dragRef.current = {
+          id,
+          startX: e.clientX,
+          startY: e.clientY,
+          origX: ov.x ?? 50,
+          origY: ov.y ?? 50,
+          rect,
+        };
+      }
+
+      const move = (ev) => {
+        if (pointersRef.current.has(ev.pointerId)) {
+          pointersRef.current.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+        }
+        if (pointersRef.current.size >= 2 && pinchRef.current?.id === id) {
+          ev.preventDefault();
+          const d = pointerDist();
+          if (d > 12 && pinchRef.current.startDist > 12) {
+            const next = Math.max(0.35, Math.min(3.5, pinchRef.current.startScale * (d / pinchRef.current.startDist)));
+            onChange(id, { scale: next });
+          }
+          return;
+        }
+        const drag = dragRef.current;
+        if (drag?.id === id && pointersRef.current.size === 1) {
+          ev.preventDefault();
+          const dx = ((ev.clientX - drag.startX) / drag.rect.width) * 100;
+          const dy = ((ev.clientY - drag.startY) / drag.rect.height) * 100;
+          onChange(id, { x: clampPct(drag.origX + dx), y: clampPct(drag.origY + dy) });
+        }
+      };
+      const up = (ev) => {
+        pointersRef.current.delete(ev.pointerId);
+        if (pointersRef.current.size < 2) pinchRef.current = null;
+        if (pointersRef.current.size === 0) {
+          dragRef.current = null;
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+        }
+      };
+      window.addEventListener("pointermove", move, { passive: false });
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    };
+
+    return (
+      <>
+        {items.map((ov) => {
+          const isTag = ov.type === "tag";
+          const isLoc = ov.type === "location";
+          const isText = ov.type === "text";
+          const isSticker = ov.type === "sticker";
+          const isPoll = ov.type === "poll";
+          const isQuestion = ov.type === "question";
+          const isQuiz = ov.type === "quiz";
+          const isCountdown = ov.type === "countdown";
+          const isLink = ov.type === "link";
+          const isHashtag = ov.type === "hashtag";
+          const selected = editable && selectedId === ov.id;
+          const editing = editable && editingId === ov.id;
+          const scale = ov.scale ?? 1;
+          const style = {
+            left: `${ov.x ?? 50}%`,
+            top: `${ov.y ?? 50}%`,
+            color: ov.color || captionStyle?.color || "#fff",
+            textAlign: ov.align || captionStyle?.align || "center",
+            transform: `translate(-50%, -50%) scale(${scale})`,
+          };
+          const body = isTag ? (
+            <span className="media-overlay-tag">@{normalizeHandle(ov.handle || ov.name)}</span>
+          ) : isLoc ? (
+            <span className="media-overlay-loc"><MapPin size={13} /> {ov.text}</span>
+          ) : isSticker ? (
+            <img src={ov.imageUrl} alt="" className="media-overlay-sticker" draggable={false} />
+          ) : isPoll ? (
+            <div className="media-overlay-poll">
+              <b>{ov.question}</b>
+              <button type="button" onClick={(e) => { e.stopPropagation(); }}>{ov.optionA}</button>
+              <button type="button" onClick={(e) => { e.stopPropagation(); }}>{ov.optionB}</button>
+            </div>
+          ) : isQuestion ? (
+            <div className="media-overlay-question"><b>{ov.prompt}</b><small>{tr("stickers.askMe")}</small></div>
+          ) : isQuiz ? (
+            <div className="media-overlay-quiz"><b>{ov.question}</b>{(ov.options || []).map((o) => <span key={o}>{o}</span>)}</div>
+          ) : isCountdown ? (
+            <div className="media-overlay-countdown"><b>{ov.label}</b><span>{Math.max(0, Math.ceil((ov.targetTs - Date.now()) / 86400000))}d</span></div>
+          ) : isLink ? (
+            <a className="media-overlay-link" href={ov.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{ov.label}</a>
+          ) : isHashtag ? (
+            <span className="media-overlay-hashtag">{ov.tag}</span>
+          ) : (
+            <span className="media-overlay-text">{ov.text || ""}</span>
+          );
+          const inlineEdit = editing || (selected && isText && !(ov.text || "").trim());
+          if (editable) {
+            return (
+              <div
+                key={ov.id}
+                className={"media-overlay media-overlay--edit" + (selected ? " selected" : "") + (inlineEdit ? " editing" : "")}
+                style={style}
+                onPointerDown={(e) => startOverlayInteraction(ov.id, ov, e)}
+                onWheel={(e) => {
+                  if (!selected || !onChange) return;
+                  if (!e.ctrlKey && !e.metaKey) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const next = Math.max(0.35, Math.min(3.5, scale + (e.deltaY > 0 ? -0.08 : 0.08)));
+                  onChange(ov.id, { scale: next });
+                }}
+              >
+                {inlineEdit ? (
+                  <input
+                    className="media-overlay-inline-edit"
+                    style={{ color: ov.color || captionStyle?.color || "#fff", textAlign: ov.align || captionStyle?.align || "center" }}
+                    value={overlayEditValue(ov)}
+                    placeholder="Type here"
+                    onChange={(e) => onChange?.(ov.id, { [overlayEditField(ov)]: e.target.value })}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                    autoFocus
+                  />
+                ) : body}
+                {selected && onRemove && (
+                  <button type="button" className="overlay-delete-btn" aria-label="Remove" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onRemove(ov.id); }}>
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+            );
+          }
+          if (isTag && ov.userId && dispatch) {
+            return (
+              <button
+                key={ov.id}
+                type="button"
+                className="media-overlay media-overlay--tag"
+                style={style}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); sfx.tap(); openUserProfile(dispatch, ov.userId); }}
+              >
+                {body}
+              </button>
+            );
+          }
+          return (
+            <div key={ov.id} className="media-overlay" style={style}>
+              {body}
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+
+  const postViewCount = (post) => {
+    if (post?.views != null) return post.views;
+    const stats = getPostAnalytics(post?.id);
+    return stats.impressions || 0;
+  };
+
+  const discoverPostKind = (post) => {
+    if (isReelPost(post)) return "reel";
+    const count = post.mediaItems?.length || (post.mediaUrl ? 1 : 0);
+    if (count > 1) return "album";
+    if (post.mediaType === "video") return "video";
+    return "image";
+  };
+
+  const postKindIcon = (post) => {
+    const kind = discoverPostKind(post);
+    if (kind === "reel") return SquarePlay;
+    if (kind === "album") return LayoutGrid;
+    if (kind === "video") return Video;
+    return ImageIcon;
+  };
+
+  function FeedVideo({ src, className, style, feedMode, muted = true }) {
+    const ref = useRef(null);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el || !feedMode || typeof IntersectionObserver === "undefined") {
+        if (el && feedMode) el.play().catch(() => {});
+        return;
+      }
+      const io = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) el.play().catch(() => {});
+        else { el.pause(); el.currentTime = 0; }
+      }, { threshold: 0.35, rootMargin: "40px 0px" });
+      io.observe(el);
+      return () => io.disconnect();
+    }, [src, feedMode]);
+    useEffect(() => {
+      if (ref.current) ref.current.muted = muted;
+    }, [muted]);
+    return (
+      <video
+        ref={ref}
+        src={src}
+        className={className}
+        style={style}
+        playsInline
+        loop
+        muted={muted}
+        preload="metadata"
+        autoPlay={feedMode && typeof IntersectionObserver === "undefined"}
+        controls={!feedMode}
+      />
+    );
+  }
+
+  function PostMusicBar({ post }) {
+    const trackUrl = post.musicUrl || post.captionStyle?.musicUrl;
+    const title = post.musicTitle || post.captionStyle?.musicTitle;
+    const audioRef = useRef(null);
+    const [playing, setPlaying] = useState(false);
+    if (!trackUrl || !title) return null;
+    const toggle = () => {
+      const a = audioRef.current;
+      if (!a) return;
+      if (playing) { a.pause(); setPlaying(false); }
+      else { a.play().catch(() => {}); setPlaying(true); }
+    };
+    return (
+      <button type="button" className="post-music-bar" onClick={(e) => { e.stopPropagation(); toggle(); }}>
+        <Music2 size={12} />
+        <span>{title}</span>
+        <audio ref={audioRef} src={trackUrl} loop onEnded={() => setPlaying(false)} />
+      </button>
+    );
+  }
+
+  function PostMedia({ post, locked, cinematic = false, feedMode = false, viewerMode = false, tr, dispatch }) {
+    const capStyle = post.captionStyle || {};
+    const mediaFilter = capStyle.filterCss || "";
+    const filterOverlay = capStyle.filterOverlay;
+    const musicUrl = post.musicUrl || capStyle.musicUrl;
+    const mediaItems = post.mediaItems?.length
+      ? post.mediaItems
+      : (post.mediaUrl ? [{ mediaUrl: post.mediaUrl, mediaType: post.mediaType || "image" }] : []);
+    const [carouselIdx, setCarouselIdx] = useState(0);
+    const [audioMuted, setAudioMuted] = useState(true);
+    const audioRef = useRef(null);
+    const item = mediaItems[carouselIdx] || mediaItems[0];
+    const src = item ? mediaUrl(item.mediaUrl) : null;
+    const showAudioToggle = feedMode && !locked && (musicUrl || item?.mediaType === "video");
+
+    const toggleAudio = (e) => {
+      e.stopPropagation();
+      sfx.tap();
+      setAudioMuted((m) => {
+        const next = !m;
+        const a = audioRef.current;
+        if (a) {
+          a.muted = next;
+          if (!next) a.play().catch(() => {});
+          else a.pause();
+        }
+        return next;
+      });
+    };
+
+    const inner = src ? (
+      item.mediaType === "video"
+        ? <FeedVideo src={src} className="post-media" feedMode={feedMode} muted={audioMuted} />
+        : <img src={src} alt="" className="post-media" style={mediaFilter ? { filter: mediaFilter } : undefined} draggable={false} loading="lazy" decoding="async" />
+    ) : (
+      <span className="feed-post-emoji">{post.emoji || "✨"}</span>
+    );
+    const overlayItems = overlaysFromPost(post);
+    const showLegacyCaption = overlayItems.length === 0 && post.caption && !post.captionStyle?.overlays;
+    return (
+      <div
+        className={cinematic ? "feed-post-media" : "post-img"}
+        style={{ background: post.mediaUrl ? "#0d0d12" : grad(post.scene) }}
+      >
+        {inner}
+        {musicUrl && (
+          <audio ref={audioRef} className="post-music-audio" src={musicUrl} loop muted={audioMuted} playsInline />
+        )}
+        {showAudioToggle && (
+          <button
+            type="button"
+            className={"feed-post-audio-toggle" + (!audioMuted ? " on" : "")}
+            aria-label={audioMuted ? tr("feed.unmute") : tr("feed.mute")}
+            aria-pressed={!audioMuted}
+            onClick={toggleAudio}
+          >
+            {audioMuted ? <VolumeX size={16} strokeWidth={2} /> : <Volume2 size={16} strokeWidth={2} />}
+          </button>
+        )}
+        {filterOverlay && <div className="compose-canvas-filter" style={{ background: filterOverlay }} aria-hidden />}
+        <div className="feed-post-media-shade" aria-hidden />
+        {overlayItems.length > 0 && (
+          <MediaOverlaysView
+            overlays={overlayItems}
+            captionStyle={post.captionStyle}
+            dispatch={dispatch}
+          />
+        )}
+        {mediaItems.length > 1 && (
+          <>
+            <button type="button" className="post-carousel-nav post-carousel-nav--prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); setCarouselIdx((i) => (i - 1 + mediaItems.length) % mediaItems.length); }}><ChevronLeft size={20} /></button>
+            <button type="button" className="post-carousel-nav post-carousel-nav--next" aria-label="Next" onClick={(e) => { e.stopPropagation(); setCarouselIdx((i) => (i + 1) % mediaItems.length); }}><ChevronRight size={20} /></button>
+            <span className="post-carousel-dots">{carouselIdx + 1}/{mediaItems.length}</span>
+          </>
+        )}
+        {post.collabWith && <span className="feed-post-badge feed-post-badge--collab">{tr("feed.collab")}</span>}
+        {post.repostOf && <span className="feed-post-badge feed-post-badge--repost">{tr("feed.repost")}</span>}
+        {post.fromStory && <span className="feed-post-badge feed-post-badge--story" aria-label="Story"><Play size={11} /></span>}
+        {post.source === "instagram" && !viewerMode && (
+          <span className="feed-post-badge feed-post-badge--ig" aria-hidden><Instagram size={11} /></span>
+        )}
+        {post.premium && !locked && <span className="feed-post-badge feed-post-badge--premium" aria-label="Radiance"><Crown size={11} /></span>}
+        {(post.avgRating ?? 0) > 0 && (
+          <MediaAvgRatingBadge avgRating={post.avgRating} className="ech-media-avg-rating--corner" />
+        )}
+        {locked && (
+          <div className="feed-post-lock">
+            <div className="feed-post-lock-inner">
+              <Lock size={22} color="#fff" />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function ProfilePostGrid({ userId, dispatch, reelsOnly, postsOnly, storiesOnly }) {
+    const { state } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const authorIds = useMemo(() => portfolioAuthorIds(state, userId), [state.user.id, userId]);
+    const pinned = new Set(state.igExtras?.pinnedPosts || []);
+    const posts = useMemo(() => {
+      if (storiesOnly) {
+        const story = state.stories.find((s) => authorIds.has(s.author));
+        return (story?.items || []).map((item, i) => ({
+          id: item.id || `story_${i}`,
+          author: story.author,
+          mediaUrl: item.mediaUrl,
+          mediaType: item.mediaType || "image",
+          caption: item.caption,
+          ts: item.ts || story.ts,
+          kind: "story",
+          fromStory: true,
+        }));
+      }
+      let rows = (reelsOnly ? reelPostsOnly(buildFeed(state)) : feedGridPostsOnly(buildFeed(state))).filter((p) => authorIds.has(p.author));
+      const pin = rows.filter((p) => pinned.has(p.id));
+      const rest = rows.filter((p) => !pinned.has(p.id));
+      return [...pin, ...rest].sort((a, b) => {
+        const ap = pinned.has(a.id) ? 1 : 0;
+        const bp = pinned.has(b.id) ? 1 : 0;
+        if (bp !== ap) return bp - ap;
+        return (b.avgRating ?? 0) - (a.avgRating ?? 0) || b.ts - a.ts;
+      });
+    }, [state.feedPosts, state.stories, authorIds, reelsOnly, postsOnly, storiesOnly, pinned]);
+
+    if (!posts.length) {
+      if (userId === ME_ID) {
+        const emptyKey = reelsOnly ? "profile.reelsEmpty" : storiesOnly ? "profile.storiesEmpty" : "profile.portfolioEmpty";
+        const Icon = reelsOnly ? SquarePlay : storiesOnly ? Play : ImageIcon;
+        return (
+          <div className="portfolio-empty ig-portfolio-empty">
+            <Icon size={22} color="#8E8E8E" />
+            <span>{tr(emptyKey)}</span>
+            {reelsOnly && (
+              <button type="button" className="ig-profile-cta" onClick={() => dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "reel", cameraOnly: true } })}>
+                {tr("profile.createReel")}
+              </button>
+            )}
+          </div>
+        );
+      }
+      return null;
+    }
+
+    const gridClass = reelsOnly
+      ? "portfolio-grid portfolio-grid--reels portfolio-grid--ech"
+      : storiesOnly
+        ? "portfolio-grid portfolio-grid--stories portfolio-grid--ech"
+        : "portfolio-grid portfolio-grid--ech";
+
+    return (
+      <div className="portfolio-wrap portfolio-wrap--ech">
+        <div className={gridClass}>
+          {posts.map((p) => {
+            const src = p.mediaUrl ? mediaUrl(p.mediaUrl) : null;
+            const score = formatPortfolioScore(p.avgRating);
+            const when = formatPortfolioDate(p.ts, now);
+            const views = postViewCount(p);
+            const likes = p.likes ?? 0;
+            const showScore = score && Number(score) > 0;
+            const isPin = pinned.has(p.id);
+            const isMe = isPostOwner(state, p) && !p.fromStory;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                className={"portfolio-tile" + (reelsOnly ? " portfolio-tile--reel" : "") + (isPin ? " portfolio-tile--pinned" : "")}
+                onClick={() => openPostViewer(dispatch, p.id)}
+              >
+                <div className="portfolio-media">
+                  {src ? (
+                    p.mediaType === "video" || reelsOnly
+                      ? <video src={src} className="portfolio-thumb" muted playsInline preload="metadata" />
+                      : <img src={src} alt="" className="portfolio-thumb" loading="lazy" draggable={false} />
+                  ) : (
+                    <div className="portfolio-thumb portfolio-thumb--emoji" style={{ background: grad(p.scene || ["#FFE9A8", "#E6DBFF"]) }}>
+                      {p.emoji || "✨"}
+                    </div>
+                  )}
+                  {(p.mediaType === "video" || reelsOnly) && <Play size={16} className="portfolio-play" />}
+                  {reelsOnly && p.durationSec && <em className="portfolio-reel-dur">{Math.floor(p.durationSec / 60)}:{String(p.durationSec % 60).padStart(2, "0")}</em>}
+                  {isPin && <span className="portfolio-pin-badge"><Bookmark size={10} /></span>}
+                  {isMe && (
+                    <button type="button" className="post-tile-delete" aria-label={tr("postOptions.delete")} onClick={(e) => { e.stopPropagation(); quickDeletePost(state, dispatch, p, tr); }}>
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                  {showScore && <MediaAvgRatingBadge avgRating={p.avgRating} className="ech-media-avg-rating--corner" />}
+                  <div className="ech-discover-meta portfolio-meta">
+                    {showScore && (
+                      <span className="ech-discover-meta-score">
+                        <Star size={9} fill="#FFD56B" color="#E8B84A" /> {score}
+                      </span>
+                    )}
+                    {when && <span className="ech-discover-meta-item"><Clock size={9} /> {when}</span>}
+                    <span className="ech-discover-meta-item"><Eye size={9} /> {formatEngagementCount(views)}</span>
+                    {likes > 0 && <span className="ech-discover-meta-item"><Heart size={9} /> {formatEngagementCount(likes)}</span>}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  function StoryBar({ onCreateStory, onOpenStory }) {
+    const { state } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const stories = activeStories(state.stories, now);
+    const mine = stories.find((s) => s.author === ME_ID);
+    const mineLive = mine?.isLive;
+    const latestMine = mine?.items?.length ? mine.items[mine.items.length - 1] : null;
+    const mineThumb = latestMine?.mediaUrl ? mediaUrl(latestMine.mediaUrl) : null;
+    const storyUnseen = (s) => !state.storyViewed[s.id];
+    const liveStories = stories.filter((s) => s.isLive && s.author !== ME_ID && state.friends.includes(s.author));
+    const friendStories = stories
+      .filter((s) => s.author !== ME_ID && !s.isLive && state.friends.includes(s.author))
+      .sort((a, b) => b.ts - a.ts);
+
+    const renderStoryRing = (s, a, isMine = false) => {
+      const seen = !isMine && state.storyViewed[s.id];
+      const live = s.isLive;
+      const item = s.items?.[s.items.length - 1];
+      const thumb = item?.mediaUrl ? mediaUrl(item.mediaUrl) : null;
+      return (
+        <div className={"ech-momentum-card" + (live ? " live" : isMine ? (mine ? (storyUnseen(s) ? " fresh" : " seen") : " add") : (seen ? " seen" : " fresh"))}>
+          {live ? (
+            <Avatar c={a} size={58} ring={false} showScore={false} />
+          ) : thumb ? (
+            item.mediaType === "video"
+              ? <video src={thumb} className="ech-momentum-thumb" muted playsInline preload="metadata" />
+              : <img src={thumb} alt="" className="ech-momentum-thumb" />
+          ) : (
+            <Avatar c={a} size={58} ring={false} showScore={false} />
+          )}
+          {live && (
+            <>
+              <span className="feed-story-live-badge">{tr("feed.live")}</span>
+              <span className="feed-story-dot feed-story-dot--live" />
+            </>
+          )}
+        </div>
+      );
+    };
+
+    return (
+      <div className="ech-momentum-wrap">
+        <div className="ech-momentum-head">
+          <span className="ech-kicker">{tr("feed.momentum")}</span>
+        </div>
+        <div className="ech-momentum-strip">
+          <button type="button" className="ech-momentum-item" onClick={() => { sfx.tap(); mine ? onOpenStory(ME_ID) : onCreateStory(); }}>
+            {mine ? renderStoryRing(mine, getAuthor(state, ME_ID), true) : (
+              <div className="ech-momentum-card add">
+                <div className="ech-momentum-add"><Plus size={20} color="#8C6BD8" /></div>
+              </div>
+            )}
+            <span className="ech-momentum-name">{mineLive ? tr("feed.live") : mine ? tr("feed.yourStory") : tr("feed.addStory")}</span>
+          </button>
+          {liveStories.map((s) => {
+            const a = getAuthor(state, s.author);
+            return (
+              <button key={s.id} type="button" className="ech-momentum-item" onClick={() => { sfx.tap(); onOpenStory(s.author); }}>
+                {renderStoryRing(s, a)}
+                <span className="ech-momentum-name">{a.name.split(" ")[0]}</span>
+              </button>
+            );
+          })}
+          {friendStories.map((s) => {
+            const a = getAuthor(state, s.author);
+            return (
+              <button key={s.id} type="button" className="ech-momentum-item" onClick={() => { sfx.tap(); onOpenStory(s.author); }}>
+                {renderStoryRing(s, a)}
+                <span className="ech-momentum-name">{a.name.split(" ")[0]}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const PostCard = React.memo(function PostCard({ post, author, dispatch, now, canSeePremium, canRate, featured, onLike, liked, saved, onShare, onBookmark, onComment, onOpenPost, heartBurst, ratedPosts, feedReactions, onRate, isFollowing, followPending, onFollow }) {
+    const { state } = useStore();
+    const tr = useT();
+    const a = author;
+    const locked = post.premium && !canSeePremium;
+    const isMe = isPostOwner(state, post);
+    const isLiked = liked.has(post.id);
+    const isSaved = saved.has(post.id);
+    const displayLikes = post.likes ?? 0;
+    const alreadyRated = ratedPosts?.has?.(post.id);
+    const myStars = alreadyRated && !isUiTestPost(post) ? getRatedPostScore(post.id) : null;
+    const mediaWrapRef = useRef(null);
+    const lastTapRef = useRef(0);
+    const postReaction = feedReactions?.[post.id];
+    const isLegacyOverlay = !post.captionStyle?.overlays && post.caption;
+    const captionText = displayPostCaption(post);
+    const showCaptionBelow = captionText && !isLegacyOverlay;
+    const TypeIcon = postKindIcon(post);
+    const handleLabel = a.handle?.replace(/^@/, "") || a.name.split(" ")[0];
+
+    const handleRate = (stars) => {
+      if (isMe || !canRate) return;
+      sfx.rateCommit(stars);
+      onRate?.(post, stars);
+    };
+
+    const onMediaPointerDown = (e) => {
+      if (locked || e.button !== 0) return;
+      const startT = Date.now();
+      const onWinUp = () => {
+        window.removeEventListener("pointerup", onWinUp);
+        window.removeEventListener("pointercancel", onWinUp);
+        if (Date.now() - startT < 400) {
+          const nowTap = Date.now();
+          if (nowTap - lastTapRef.current < 300) {
+            lastTapRef.current = 0;
+            onLike(post.id);
+          } else {
+            lastTapRef.current = nowTap;
+          }
+        }
+      };
+      window.addEventListener("pointerup", onWinUp);
+      window.addEventListener("pointercancel", onWinUp);
+    };
+
+    return (
+      <article className={"feed-post feed-post--focus" + (featured ? " feed-post--featured" : "")}>
+        <div
+          ref={mediaWrapRef}
+          className="feed-post-media-wrap"
+          style={{ touchAction: "pan-y", WebkitUserSelect: "none", userSelect: "none", WebkitTouchCallout: "none" }}
+          onPointerDown={onMediaPointerDown}
+        >
+          <PostMedia post={post} locked={locked} cinematic feedMode tr={tr} dispatch={dispatch} />
+          <div className="feed-post-overlay-top">
+            <button
+              type="button"
+              className="feed-post-overlay-author feed-post-overlay-author--top"
+              onClick={() => { sfx.tap(); if (locked) return; openUserProfile(dispatch, a.id); }}
+            >
+              <span className="feed-post-overlay-type" aria-hidden>
+                <TypeIcon size={13} strokeWidth={2} />
+              </span>
+              <span>@{handleLabel}</span>
+              {post.source === "instagram" && <Instagram size={10} color="#fff" aria-hidden />}
+              {(post.avgRating ?? 0) > 0 && (
+                <em className="feed-post-overlay-score"><Star size={9} fill="#FFD56B" color="#E8B84A" /> {Number(post.avgRating).toFixed(1)}</em>
+              )}
+            </button>
+            <div className="feed-post-overlay-top-actions">
+              {!isMe && isFollowing && (
+                <span className="feed-post-overlay-sent feed-post-overlay-sent--following" aria-label={tr("friends.following")}><UserCheck size={14} /></span>
+              )}
+              {!isMe && !isFollowing && followPending && (
+                <span className="feed-post-overlay-sent feed-post-overlay-sent--pending" aria-label={tr("friends.requestSent")}><Clock size={14} /></span>
+              )}
+              {!isMe && !isFollowing && !followPending && (
+                <button type="button" className="feed-post-overlay-btn" aria-label={tr("friends.add")} onClick={() => onFollow?.(a.id)}>
+                  <UserPlus size={16} />
+                </button>
+              )}
+              {isMe && (
+                <button type="button" className="feed-post-overlay-btn feed-post-overlay-btn--danger" aria-label={tr("postOptions.delete")} onClick={() => quickDeletePost(state, dispatch, post, tr)}>
+                  <Trash2 size={16} />
+                </button>
+              )}
+              <button type="button" className="feed-post-overlay-btn" aria-label="More" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "postoptions", payload: { postId: post.id } }); }}>
+                <MoreHorizontal size={18} />
+              </button>
+            </div>
+          </div>
+          {postReaction && (
+            <span className="feed-post-react-badge">{postReaction}</span>
+          )}
+          {heartBurst === post.id && (
+            <div className="feed-heart-burst" aria-hidden>
+              <Heart size={72} color="#fff" fill="#FF8FB1" />
+            </div>
+          )}
+          {!locked && !isMe && ((canRate && (!alreadyRated || isUiTestPost(post))) || (alreadyRated && !isUiTestPost(post) && myStars)) && (
+            <EchRateOverlay
+              canRate={canRate && (!alreadyRated || isUiTestPost(post))}
+              alreadyRated={alreadyRated && !isUiTestPost(post)}
+              myStars={myStars}
+              onPick={handleRate}
+              size="pill"
+            />
+          )}
+        </div>
+
+        <div className="feed-post-bar">
+          <div className="feed-post-actions feed-post-actions--icon">
+            <button
+              type="button"
+              className={"feed-action" + (isLiked ? " on" : "")}
+              aria-pressed={isLiked}
+              aria-label={tr("explore.viewerLikes")}
+              onClick={() => onLike(post.id)}
+            >
+              <Heart size={20} strokeWidth={isLiked ? 2.2 : 1.75} color={isLiked ? "#FF3B7A" : "#5A4A60"} fill={isLiked ? "#FF3B7A" : "none"} />
+              {displayLikes > 0 && <span>{formatEngagementCount(displayLikes)}</span>}
+            </button>
+            <button type="button" className="feed-action" aria-label={tr("feed.comments")} onClick={() => onComment(post)}>
+              <MessageCircle size={20} strokeWidth={1.75} color="#5A4A60" />
+            </button>
+            <button type="button" className="feed-action" aria-label={tr("feed.shareViaDm")} onClick={() => onShare(post)}>
+              <Send size={20} strokeWidth={1.75} color="#5A4A60" />
+            </button>
+            <button
+              type="button"
+              className={"feed-action feed-action--save" + (isSaved ? " on" : "")}
+              aria-pressed={isSaved}
+              aria-label={isSaved ? tr("feed.unsaved") : tr("feed.saved")}
+              onClick={() => onBookmark(post.id)}
+            >
+              <Bookmark size={20} strokeWidth={isSaved ? 2.2 : 1.75} color="#5A4A60" fill={isSaved ? "#5A4A60" : "none"} />
+            </button>
+          </div>
+
+          {!locked && showCaptionBelow && (
+            <p className="feed-post-caption feed-post-caption--compact">
+              <button type="button" className="mention-link mention-link--author" onClick={() => openUserProfile(dispatch, a.id)}>
+                {a.handle?.replace(/^@/, "") || a.name.split(" ")[0]}
+              </button>{" "}
+              <MentionText text={captionText} tags={post.tags} dispatch={dispatch} />
+            </p>
+          )}
+        </div>
+      </article>
+    );
+  });
+
+  function ReelSlide({ post, state, dispatch, now, canSeePremium, onLike, liked, onShare, onComment, ratedPosts, onRate }) {
+    const tr = useT();
+    const a = getAuthor(state, post.author);
+    const locked = post.premium && !canSeePremium;
+    const isMe = post.author === ME_ID;
+    const isLiked = liked.has(post.id);
+    const displayLikes = post.likes;
+    const canRate = canRatePost(state, post, a, canSeePremium, ratedPosts);
+    const alreadyRated = ratedPosts?.has?.(post.id);
+    const myStars = alreadyRated && !isUiTestPost(post) ? getRatedPostScore(post.id) : null;
+
+    const handleRate = (stars) => {
+      if (isMe || !canRate) return;
+      onRate?.(post, stars);
+    };
+
+    return (
+      <article className="reel-slide">
+        <div className="reel-slide-media">
+          <PostMedia post={post} locked={locked} cinematic tr={tr} dispatch={dispatch} />
+          {!locked && !isMe && ((canRate && (!alreadyRated || isUiTestPost(post))) || (alreadyRated && !isUiTestPost(post) && myStars)) && (
+            <EchRateOverlay
+              canRate={canRate && (!alreadyRated || isUiTestPost(post))}
+              alreadyRated={alreadyRated && !isUiTestPost(post)}
+              myStars={myStars}
+              onPick={handleRate}
+              size="md"
+            />
+          )}
+        </div>
+        <div className="reel-slide-shade" aria-hidden />
+        <div className="reel-slide-overlay">
+          <div className="reel-slide-side">
+            {isMe && (
+              <button type="button" className="reel-side-btn reel-side-btn--danger" aria-label={tr("postOptions.delete")} onClick={() => quickDeletePost(state, dispatch, post, tr)}>
+                <Trash2 size={24} color="#fff" />
+              </button>
+            )}
+            <button type="button" className={"reel-side-btn" + (isLiked ? " on" : "")} aria-pressed={isLiked} onClick={() => onLike(post.id)}>
+              <Heart size={26} color="#fff" fill={isLiked ? "#FF3B7A" : "none"} />
+              <span>{displayLikes.toLocaleString()}</span>
+            </button>
+            <button type="button" className="reel-side-btn" aria-label={tr("feed.comments")} onClick={() => onComment(post)}>
+              <MessageCircle size={26} color="#fff" />
+            </button>
+            <button type="button" className="reel-side-btn" aria-label={tr("feed.shareViaDm")} onClick={() => onShare(post)}>
+              <Send size={24} color="#fff" />
+            </button>
+          </div>
+          <div className="reel-slide-meta">
+            <div className="reel-slide-author">
+              <Avatar c={a} size={36} showScore={false} />
+              <b>{a.name}</b>
+              <TierPill score={a.score} small />
+            </div>
+            {post.caption && <p className="reel-slide-caption">{post.caption}</p>}
+            <span className="reel-slide-time">{formatPostAge(post.ts, now)}</span>
+          </div>
+        </div>
+      </article>
+    );
+  }
+
+  function DocsChromeButton({ className = "" }) {
+    const { dispatch } = useStore();
+    const tr = useT();
+    return (
+      <button
+        type="button"
+        className={"ech-feed-iconbtn ech-docs-btn" + (className ? " " + className : "")}
+        onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "guide" }); }}
+        title={tr("docs.title")}
+        aria-label={tr("docs.title")}
+      >
+        <BookOpen size={20} strokeWidth={1.75} color="currentColor" />
+      </button>
+    );
+  }
+
+  function IgTopChrome({ compact }) {
+    const { state, dispatch } = useStore();
+    const [now] = useTick();
+    const { effective, tier } = useDerived(state, now);
+    return (
+      <div className={"ech-score-chrome" + (compact ? " ech-score-chrome--compact" : "")}>
+        <DocsChromeButton />
+        <span className="ech-score-chip" style={{ background: tier.soft, color: tier.ink }}>
+          <Star size={11} fill={tier.accent} stroke="none" /> {effective.toFixed(2)}
+        </span>
+        <button
+          type="button"
+          className={"ech-lens-toggle" + (state.lens ? " on" : "")}
+          onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_LENS" }); }}
+          aria-pressed={state.lens}
+          title={state.lens ? "Lens on" : "Lens off"}
+        >
+          {state.lens ? <Eye size={15} /> : <EyeOff size={15} />}
+        </button>
+      </div>
+    );
+  }
+
+  function FeedScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { tier, effective } = useDerived(state, now);
+    const canSeePremium = effective >= 4.0;
+    const ixBoot = useMemo(() => loadFeedIx(), []);
+    const [liked, setLiked] = useState(() => new Set(ixBoot.liked));
+    const [saved, setSaved] = useState(() => new Set(ixBoot.saved));
+    const [ratedPosts, setRatedPosts] = useState(() => new Set([...(state.ratedPosts || []), ...ixBoot.ratedPosts]));
+    const [heartBurst, setHeartBurst] = useState(null);
+    const [feedToast, setFeedToast] = useState(null);
+
+    useEffect(() => {
+      setRatedPosts((prev) => {
+        const next = new Set([...prev, ...(state.ratedPosts || [])]);
+        return next.size === prev.size ? prev : next;
+      });
+    }, [state.ratedPosts]);
+
+    const openStory = (authorId) => {
+      const queue = buildStoryQueue(state.stories, state, authorId, Date.now());
+      dispatch({ type: "OPEN_MODAL", modal: "story", payload: { authorId, queue } });
+    };
+
+    const onLike = (postId) => {
+      sfx.tap();
+      const wasLiked = liked.has(postId);
+      const post = state.feedPosts.find((p) => p.id === postId);
+      setLiked((prev) => {
+        const next = new Set(prev);
+        if (wasLiked) next.delete(postId);
+        else {
+          next.add(postId);
+          setHeartBurst(postId);
+          setTimeout(() => setHeartBurst((id) => (id === postId ? null : id)), 700);
+        }
+        saveFeedIx({ liked: [...next] });
+        return next;
+      });
+      const optimisticLikes = Math.max(0, (post?.likes ?? 0) + (wasLiked ? -1 : 1));
+      dispatch({ type: "PATCH_FEED_POST_LIKES", postId, likes: optimisticLikes });
+      if (state.liveData) {
+        const call = wasLiked ? api.unlikePost(postId) : api.likePost(postId);
+        call.then((r) => {
+          if (r?.likes != null) dispatch({ type: "PATCH_FEED_POST_LIKES", postId, likes: r.likes });
+        }).catch(() => {
+          dispatch({ type: "PATCH_FEED_POST_LIKES", postId, likes: post?.likes ?? 0 });
+          setLiked((prev) => {
+            const next = new Set(prev);
+            if (wasLiked) next.add(postId);
+            else next.delete(postId);
+            saveFeedIx({ liked: [...next] });
+            return next;
+          });
+        });
+      }
+    };
+
+    const onBookmark = (postId) => {
+      sfx.tap();
+      setSaved((prev) => {
+        const next = new Set(prev);
+        if (next.has(postId)) next.delete(postId);
+        else next.add(postId);
+        saveFeedIx({ saved: [...next] });
+        setFeedToast(tr(next.has(postId) ? "feed.saved" : "feed.unsaved"));
+        setTimeout(() => setFeedToast(null), 1800);
+        return next;
+      });
+      dispatch({ type: "OPEN_MODAL", modal: "collections", payload: { postId } });
+      recordPostAnalytics(postId, "saves");
+    };
+
+    const onShare = (post) => {
+      sfx.tap();
+      dispatch({ type: "OPEN_MODAL", modal: "sharepost", payload: { post } });
+    };
+
+    const onComment = (post) => {
+      sfx.tap();
+      dispatch({ type: "OPEN_MODAL", modal: "postcomments", payload: { postId: post.id } });
+    };
+
+    const onOpenPost = useCallback((post) => {
+      if (!post?.id) return;
+      openPostViewer(dispatch, post.id);
+    }, [dispatch]);
+
+    const onRatePost = useCallback((post, stars) => {
+      const author = getAuthor(state, post.author);
+      const testPost = isUiTestPost(post);
+      if (!testPost && ratedPosts.has(post.id)) return;
+      if (!canRatePost(state, post, author, canSeePremium, ratedPosts)) return;
+      if (!testPost) {
+        setRatedPosts((prev) => {
+          const next = new Set(prev);
+          next.add(post.id);
+          saveFeedIx({ ratedPosts: [...next] });
+          return next;
+        });
+        saveRatedPostScore(post.id, stars);
+        dispatch({ type: "MARK_POST_RATED", postId: post.id });
+      }
+      setFeedToast(tr("rate.sent"));
+      setTimeout(() => setFeedToast(null), 2200);
+      if (state.liveData) {
+        api.rate(author.id, stars, null, "feed", post.id).catch(() => {});
+      }
+    }, [ratedPosts, state, canSeePremium, dispatch, tr]);
+
+    const lockedCompose = state.user.locked;
+    const igPane = state.feedIgPane || "home";
+    const feedFilter = state.feedFilter || "foryou";
+    const feedPosts = feedFilter === "following"
+        ? followingFeedPosts(state)
+        : feedFilter === "favorites"
+          ? favoritesFeedPosts(state, saved)
+          : forYouFeedPosts(state, now);
+
+    return (
+      <Scroll className="feed-scroll feed-scroll--ech">
+        {feedToast && (
+          <div className="feed-toast" role="status">{feedToast}</div>
+        )}
+
+        <header className="ech-feed-head">
+          <div className="ech-feed-head-row">
+            <div className="ech-feed-brand">
+              <span className="wordmark sm ech-feed-wordmark">echelon</span>
+            </div>
+            <div className="ech-feed-head-actions">
+              <button type="button" className="ech-feed-iconbtn" aria-label={tr("alerts.pulse")} onClick={() => dispatch({ type: "SCREEN", screen: "alerts" })}>
+                <Bell size={20} strokeWidth={1.75} />
+                {state.notifs.length > 0 && <em className="ech-feed-notif-dot" />}
+              </button>
+              <IgTopChrome compact />
+            </div>
+          </div>
+          <div className="ech-feed-segments" role="tablist" aria-label={tr("tabs.feed")}>
+            <button
+              type="button"
+              className="ech-feed-segment ech-feed-compose"
+              aria-label={tr("feed.newPost")}
+              disabled={lockedCompose}
+              onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "post", cameraOnly: true } }); }}
+            >
+              <Plus size={15} strokeWidth={2.2} />
+              <span>{tr("feed.postShort")}</span>
+            </button>
+            {[
+              ["foryou", Sparkles, tr("feed.forYou")],
+              ["following", Users, tr("feed.filterFollowing")],
+              ["favorites", Bookmark, tr("feed.filterFavorites")],
+            ].map(([id, Icon, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={feedFilter === id}
+                className={"ech-feed-segment" + (feedFilter === id ? " on" : "")}
+                onClick={() => { dispatch({ type: "SET_FEED_FILTER", filter: id }); sfx.tap(); }}
+              >
+                <Icon size={15} strokeWidth={feedFilter === id ? 2.2 : 1.75} />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <StoryBar onCreateStory={() => dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story", gallery: true } })} onOpenStory={openStory} />
+
+        {feedPosts.length === 0 ? (
+          <div className="feed-empty feed-empty--ig">
+            <p>{tr("feed.empty")}</p>
+          </div>
+        ) : (
+          <div className="feed-list">
+            {feedPosts.map((p, i) => {
+              const author = getAuthor(state, p.author);
+              return (
+              <PostCard
+                key={p.id}
+                post={p}
+                author={author}
+                dispatch={dispatch}
+                now={now}
+                canSeePremium={canSeePremium}
+                canRate={canRatePost(state, p, author, canSeePremium, ratedPosts)}
+                featured={false}
+                onLike={onLike}
+                liked={liked}
+                saved={saved}
+                ratedPosts={ratedPosts}
+                onShare={onShare}
+                onBookmark={onBookmark}
+                onComment={onComment}
+                onOpenPost={onOpenPost}
+                onRate={onRatePost}
+                heartBurst={heartBurst}
+                feedReactions={state.feedReactions}
+                isFollowing={state.friends.includes(author.id)}
+                followPending={state.friendRequestsOutgoing.some((r) => (r.user?.id || r.userId) === author.id)}
+                onFollow={(id) => sendFriendRequest(dispatch, state, id)}
+              />
+            );})}
+          </div>
+        )}
+
+      </Scroll>
+    );
+  }
+
+  function AppIgTabBar() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const igPane = state.feedIgPane || "home";
+    const tabs = [
+      { id: "home", icon: Home, label: tr("nav.home"), action: () => { dispatch({ type: "SCREEN", screen: "feed" }); dispatch({ type: "SET_FEED_PANE", pane: "home" }); } },
+      { id: "spark", icon: Flame, label: tr("tabs.spark"), spark: true, action: () => dispatch({ type: "SCREEN", screen: "spark" }) },
+      { id: "map", icon: MapIcon, label: tr("nav.map"), action: () => { resetViewfinderMapView(); dispatch({ type: "SCREEN", screen: "lens" }); } },
+      { id: "explore", icon: Compass, label: tr("nav.discover"), action: () => dispatch({ type: "SCREEN", screen: "explore" }) },
+      { id: "messages", icon: Send, label: tr("tabs.messages"), action: () => dispatch({ type: "SCREEN", screen: "messages" }) },
+      { id: "profile", icon: User, label: tr("nav.profile"), action: () => dispatch({ type: "SCREEN", screen: "profile" }), avatar: true },
+    ];
+    const igScreens = new Set(["feed", "spark", "lens", "explore", "messages", "profile", "alerts", "friends", "settings"]);
+    if (!igScreens.has(state.screen)) return null;
+    return (
+      <nav className="ech-dock" aria-label={tr("tabs.feed")}>
+        <div className="ech-dock-inner">
+          {tabs.map(({ id, icon: Icon, label, action, avatar, spark }) => {
+            const on = (id === "home" && state.screen === "feed" && igPane === "home")
+              || (id === "spark" && state.screen === "spark")
+              || (id === "map" && state.screen === "lens")
+              || (id === "explore" && state.screen === "explore")
+              || (id === "messages" && state.screen === "messages")
+              || (id === "profile" && (state.screen === "profile" || state.screen === "friends"));
+            return (
+              <button key={id} type="button" className={"ech-dock-item" + (on ? " on" : "") + (spark && on ? " ech-dock-item--spark" : "")} aria-label={label} aria-current={on ? "page" : undefined} onClick={() => { sfx.tap(); action(); }}>
+                {avatar ? (
+                  <span className={"ech-dock-avatar" + (on ? " on" : "")}>
+                    <Avatar c={state.user} size={24} showScore={false} ring={false} />
+                  </span>
+                ) : (
+                  <Icon size={22} strokeWidth={on ? 2.35 : 1.65} />
+                )}
+                <span className={"ech-dock-label" + (on ? " on" : "")}>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+    );
+  }
+  
+  const FRIEND_REMOVE_PENALTY = -0.08;
+
+  function sendFriendRequest(dispatch, state, id) {
+    if (state.friends.includes(id)) return;
+    if ((state.blocked || []).includes(id)) return;
+    dispatch({ type: "SEND_FRIEND_REQUEST", id });
+    if (!state.liveData) return;
+    api.sendFriendRequest(id).then((res) => {
+      if (res.friendId) {
+        dispatch({ type: "ACCEPT_FRIEND_REQUEST", requestId: res.requestId || "", friendId: res.friendId, peer: getAuthor(state, res.friendId) });
+      } else if (res.requestId) {
+        dispatch({ type: "FRIEND_REQUEST_SENT", userId: id, requestId: res.requestId });
+      }
+    }).catch(() => dispatch({ type: "CANCEL_FRIEND_REQUEST", id }));
+  }
+
+  function acceptFriendRequestAction(dispatch, state, requestId) {
+    const row = state.friendRequestsIncoming.find((r) => r.requestId === requestId);
+    const friendId = row?.user?.id;
+    const peer = row?.user || (friendId ? getAuthor(state, friendId) : null);
+    dispatch({ type: "ACCEPT_FRIEND_REQUEST", requestId, friendId, peer });
+    if (state.liveData) {
+      api.acceptFriendRequest(requestId).then((res) => {
+        if (res.friendId && res.friendId !== friendId) {
+          dispatch({ type: "ACCEPT_FRIEND_REQUEST", requestId, friendId: res.friendId, peer });
+        }
+      }).catch(() => {});
+    }
+  }
+
+  function openUserProfile(dispatch, id) {
+    if (!id) return;
+    sfx.tap();
+    if (id === ME_ID) {
+      dispatch({ type: "CLOSE_MODAL" });
+      dispatch({ type: "SCREEN", screen: "profile" });
+      return;
+    }
+    dispatch({ type: "OPEN_MODAL", modal: "userprofile", payload: { id } });
+  }
+
+  function notifPeer(n) {
+    return n.peer || (n.rater ? byId[n.rater] : null);
+  }
+
+  function NotifPeerLink({ peer, dispatch }) {
+    if (!peer?.id || !peer.name) return null;
+    return (
+      <button type="button" className="notif-user-link" onClick={() => openUserProfile(dispatch, peer.id)}>
+        {peer.name}
+      </button>
+    );
+  }
+
+  function NotifBody({ n, dispatch }) {
+    const peer = notifPeer(n);
+    const name = peer?.name;
+    const body = n.body || "";
+    if (peer?.id && name && body.includes(name)) {
+      const i = body.indexOf(name);
+      return (
+        <p className="notif-body">
+          {body.slice(0, i)}
+          <NotifPeerLink peer={peer} dispatch={dispatch} />
+          {body.slice(i + name.length)}
+        </p>
+      );
+    }
+    return <p className="notif-body">{body}</p>;
+  }
+
+  // ---- SPARK (rank-gated Tinder) -------------------------------------------- //
+  function SparkCard({ person, style, dragX, exiting, exitDir, stackScale }) {
+    const tr = useT();
+    const tier = getTier(person.score);
+    const photo = person.photos?.[0];
+    const bg = photo?.scene?.length ? grad(photo.scene) : grad(tier.grad);
+    const baseScale = stackScale ?? 1;
+    const transform = exiting
+      ? `translateX(${exitDir * 120}%) rotate(${exitDir * 18}deg) scale(${baseScale})`
+      : `translateX(${dragX}px) rotate(${dragX * 0.04}deg) scale(${baseScale})`;
+    return (
+      <div className={"spark-card" + (exiting ? " spark-card-exit" : "")} style={{ ...style, transform }}>
+        {photo?.url ? (
+          <img src={photo.url} alt="" className="spark-card-img" referrerPolicy="no-referrer" />
+        ) : (
+          <div className="spark-card-fallback" style={{ background: bg }}>
+            <span className="spark-card-emoji">{person.emoji}</span>
+          </div>
+        )}
+        <div className="spark-card-shade" />
+        {dragX > 40 && <div className="spark-stamp spark-stamp-like">SPARK</div>}
+        {dragX < -40 && <div className="spark-stamp spark-stamp-pass">PASS</div>}
+        <div className="spark-card-info">
+          <div className="spark-card-name-row">
+            <b>{person.name}</b>
+            <span className="spark-card-score">{person.score.toFixed(2)}</span>
+          </div>
+          <span className="spark-card-handle">{person.handle}</span>
+          <TierPill score={person.score} small />
+          {(person.age || person.miles != null) && (
+            <span className="spark-card-meta">
+              {person.age ? `${person.age}y` : ""}{person.age && person.miles != null ? " · " : ""}{person.miles != null ? `${person.miles} mi` : ""}
+            </span>
+          )}
+          {photo?.caption && <p className="spark-card-caption">{photo.caption.slice(0, 100)}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  function SparkMatchModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const peer = payload?.peer;
+    if (!peer) return null;
+    const isFriend = state.friends.includes(peer.id);
+    return (
+      <div className="backdrop spark-match-backdrop" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="spark-match-card" onClick={(e) => e.stopPropagation()}>
+          <div className="spark-match-burst" aria-hidden />
+          <Flame size={36} color="#FF7EB3" />
+          <h2>{tr("spark.matchTitle")}</h2>
+          <p className="muted">{tr("spark.matchBody", { name: peer.name })}</p>
+          <div className="spark-match-avatars">
+            <Avatar c={{ ...peer, score: peer.score }} size={72} ring showScore={false} />
+          </div>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => {
+              sfx.success();
+              dispatch({ type: "CLOSE_MODAL" });
+              dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: peer.id } });
+            }}
+          >
+            <MessageCircle size={16} /> {tr("spark.sayHi")}
+          </button>
+          {!isFriend && (
+            <button
+              type="button"
+              className="btn soft"
+              onClick={() => {
+                sfx.tap();
+                sendFriendRequest(dispatch, state, peer.id);
+              }}
+            >
+              <UserPlus size={16} /> {tr("friends.add")}
+            </button>
+          )}
+          <button type="button" className="btn soft" onClick={() => { sfx.tap(); dispatch({ type: "CLOSE_MODAL" }); }}>
+            {tr("spark.keepSwiping")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function SparkScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [mode, setMode] = useState("discover");
+    const [busy, setBusy] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [dragX, setDragX] = useState(0);
+    const [dragging, setDragging] = useState(false);
+    const [exiting, setExiting] = useState(null);
+    const [filtersOpen, setFiltersOpen] = useState(false);
+    const [heightInput, setHeightInput] = useState("");
+    const [heightBusy, setHeightBusy] = useState(false);
+    const dragStart = useRef(null);
+
+    const needsHeight = !state.user.heightM;
+    const deck = state.sparkDeck || [];
+    const current = deck[0];
+    const prefs = sparkPrefsFromState(state);
+
+    const loadDeck = async (force = false) => {
+      if (!force && !state.user.heightM) return;
+      setLoading(true);
+      try {
+        if (state.liveData) {
+          const data = await api.sparkDeck();
+          const users = (data.deck || []).map((u) => ({ ...u, avatarUrl: mediaUrl(u.avatarUrl) || u.avatarUrl }));
+          registerUsers(users);
+          dispatch({ type: "SET_SPARK_DECK", deck: users, preferences: data.preferences });
+        } else {
+          dispatch({ type: "SET_SPARK_DECK", deck: buildLocalSparkDeck(state) });
+        }
+      } catch {
+        dispatch({ type: "SET_SPARK_DECK", deck: buildLocalSparkDeck(state) });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    useEffect(() => {
+      if (state.screen !== "spark") return;
+      if (state.user.heightM && !deck.length && !loading) loadDeck();
+    }, [state.screen, state.user.heightM]);
+
+    useEffect(() => {
+      if (needsHeight && !heightInput) setHeightInput("1.75");
+    }, [needsHeight]);
+
+    const saveHeight = async () => {
+      const h = parseFloat(heightInput.replace(",", "."));
+      if (!h || h < 1 || h > 2.5) {
+        sfx.penalty();
+        return;
+      }
+      setHeightBusy(true);
+      try {
+        if (state.liveData) {
+          const updated = await api.patchMe({ heightM: h });
+          dispatch({ type: "SET_USER_HEIGHT", heightM: updated.heightM ?? h });
+        } else {
+          dispatch({ type: "SET_USER_HEIGHT", heightM: h });
+        }
+        sfx.success();
+        await loadDeck(true);
+      } catch {
+        sfx.penalty();
+      } finally {
+        setHeightBusy(false);
+      }
+    };
+
+    const prefDebounceRef = useRef(null);
+    const updatePref = (key, val, { immediate = false } = {}) => {
+      const patch = { [key]: val };
+      const next = { ...prefs, ...patch };
+      dispatch({ type: "SET_SPARK_PREFS", prefs: next });
+      if (state.liveData) {
+        if (prefDebounceRef.current) clearTimeout(prefDebounceRef.current);
+        const push = () => {
+          api.patchSparkPreferences({
+            minScore: next.minScore, maxScore: next.maxScore,
+            minAge: next.minAge, maxAge: next.maxAge,
+            maxDistanceMi: next.maxDistanceMi,
+            minHeightM: next.minHeightM, maxHeightM: next.maxHeightM,
+            genderPref: next.genderPref,
+          }).then(() => loadDeck()).catch(() => {});
+        };
+        if (immediate || key === "genderPref") push();
+        else prefDebounceRef.current = setTimeout(push, 420);
+      } else {
+        const merged = {
+          ...state,
+          sparkMinScore: next.minScore,
+          sparkMaxScore: next.maxScore,
+          sparkMinAge: next.minAge,
+          sparkMaxAge: next.maxAge,
+          sparkMaxDistanceMi: next.maxDistanceMi,
+          sparkMinHeightM: next.minHeightM,
+          sparkMaxHeightM: next.maxHeightM,
+          sparkGenderPref: next.genderPref,
+        };
+        dispatch({ type: "SET_SPARK_DECK", deck: buildLocalSparkDeck(merged) });
+      }
+    };
+
+    const refreshMatches = () => {
+      if (!state.liveData) return;
+      api.sparkMatches().then((data) => {
+        dispatch({ type: "SYNC_SPARK", matches: data.matches || [] });
+      }).catch(() => {});
+    };
+
+    useEffect(() => {
+      if (state.screen === "spark" && mode === "matches") refreshMatches();
+    }, [state.screen, mode]);
+
+    const commitSwipe = async (action) => {
+      if (!current || busy || needsHeight) return;
+      setBusy(true);
+      const target = current;
+      const dir = action === "pass" ? -1 : 1;
+      setExiting({ id: target.id, dir });
+      setDragX(0);
+      setDragging(false);
+
+      const finish = (matched, peer, matchId) => {
+        setTimeout(() => {
+          dispatch({ type: "SPARK_SWIPE_LOCAL", targetId: target.id, action, matched, peer, matchId });
+          setExiting(null);
+          setBusy(false);
+          if (matched && peer) {
+            sfx.success();
+            dispatch({ type: "OPEN_MODAL", modal: "sparkmatch", payload: { peer } });
+          } else if (action === "like" || action === "super") {
+            sfx.up();
+          } else {
+            sfx.tap();
+          }
+        }, 280);
+      };
+
+      try {
+        if (state.liveData) {
+          const res = await api.sparkSwipe(target.id, action);
+          finish(res.matched, res.peer, res.matchId);
+          if (res.matched) refreshMatches();
+        } else {
+          const sw = loadSparkSwipes();
+          sw[target.id] = action;
+          saveSparkSwipes(sw);
+          let matched = false;
+          let peer = null;
+          if (action === "like" || action === "super") {
+            const rev = sw._likesReceived?.[target.id];
+            if (rev) { matched = true; peer = target; }
+          }
+          finish(matched, peer, null);
+        }
+      } catch {
+        setExiting(null);
+        setBusy(false);
+        sfx.penalty();
+      }
+    };
+
+    const onPointerDown = (e) => {
+      if (busy || !current || needsHeight) return;
+      dragStart.current = { x: e.clientX, y: e.clientY };
+      setDragging(true);
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    };
+
+    const onPointerMove = (e) => {
+      if (!dragging || !dragStart.current) return;
+      setDragX(e.clientX - dragStart.current.x);
+    };
+
+    const onPointerUp = () => {
+      if (!dragging) return;
+      setDragging(false);
+      if (dragX > 90) commitSwipe("like");
+      else if (dragX < -90) commitSwipe("pass");
+      else setDragX(0);
+      dragStart.current = null;
+    };
+
+    const matches = state.sparkMatches || [];
+
+    return (
+      <div className="spark-screen ech-spark-screen">
+        <header className="ech-spark-head-wrap">
+          <div className="ech-screen-head ech-screen-head--row">
+            <div className="ech-screen-head-main">
+              <Flame size={18} color="#FF7EB3" strokeWidth={2} />
+              <div className="ech-screen-head-titles">
+                <h1>{tr("spark.title")}</h1>
+                <p>{mode === "matches" ? tr("spark.matches") : tr("spark.discover")}</p>
+              </div>
+            </div>
+            <div className="ech-spark-head-actions">
+              <IgTopChrome compact />
+            </div>
+          </div>
+          <div className="ech-feed-segments ech-spark-segments" role="tablist">
+            <button type="button" role="tab" aria-selected={mode === "discover"} className={"ech-feed-segment" + (mode === "discover" ? " on" : "")} onClick={() => { sfx.tap(); setMode("discover"); }}>
+              <Compass size={15} strokeWidth={mode === "discover" ? 2.2 : 1.75} />
+              <span>{tr("spark.discover")}</span>
+            </button>
+            <button type="button" role="tab" aria-selected={mode === "matches"} className={"ech-feed-segment" + (mode === "matches" ? " on" : "")} onClick={() => { sfx.tap(); setMode("matches"); }}>
+              <Heart size={15} strokeWidth={mode === "matches" ? 2.2 : 1.75} />
+              <span>{tr("spark.matches")}{matches.length > 0 ? ` · ${matches.length}` : ""}</span>
+            </button>
+          </div>
+        </header>
+
+        <div className="spark-filter-bar">
+          <div className="spark-gender-chips">
+            {[
+              ["all", tr("spark.genderAll")],
+              ["male", tr("spark.genderMasc")],
+              ["female", tr("spark.genderFem")],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={"spark-gender-chip" + (prefs.genderPref === id || (id === "male" && prefs.genderPref === "masculine") || (id === "female" && prefs.genderPref === "feminine") ? " on" : "")}
+                onClick={() => { sfx.tap(); updatePref("genderPref", id, { immediate: true }); }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className={"spark-filter-toggle" + (filtersOpen ? " on" : "")}
+            onClick={() => { sfx.tap(); setFiltersOpen((v) => !v); }}
+            aria-label={tr("spark.filtersTitle")}
+            aria-expanded={filtersOpen}
+          >
+            <SlidersHorizontal size={15} />
+            <span>{tr("spark.filtersTitle")}</span>
+          </button>
+        </div>
+
+        {filtersOpen && (
+          <div
+            className="spark-filters-scroll"
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+            onWheel={(e) => e.stopPropagation()}
+          >
+            <div className="spark-filters spark-filters--fun card">
+              <p className="spark-filters-title">{tr("spark.filtersTitle")}</p>
+              <div className="spark-filter-block">
+                <span className="spark-filter-label">{tr("spark.filterRating")}</span>
+                <div className="spark-min-stars">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      className={"spark-min-star" + (n <= Math.round(prefs.minScore) ? " on" : "")}
+                      aria-label={`${n} stars`}
+                      onClick={() => { sfx.tap(); updatePref("minScore", n, { immediate: true }); }}
+                    >
+                      <Star size={28} fill={n <= Math.round(prefs.minScore) ? "#FFD56B" : "none"} color={n <= Math.round(prefs.minScore) ? "#E8B84A" : "#D8D8D8"} strokeWidth={1.5} />
+                    </button>
+                  ))}
+                </div>
+                <b className="spark-range-val">{tr("spark.minScoreLabel", { score: Math.round(prefs.minScore) })}</b>
+              </div>
+              <div className="spark-filter-block">
+                <span className="spark-filter-label">{tr("spark.filterAge")}</span>
+                <input type="range" min="18" max="99" value={prefs.maxAge} onChange={(e) => updatePref("maxAge", +e.target.value)} />
+                <b className="spark-range-val">{tr("spark.maxAgeLabel", { age: prefs.maxAge })}</b>
+              </div>
+              <div className="spark-filter-block">
+                <span className="spark-filter-label">{tr("spark.filterDistance")}</span>
+                <div className="spark-preset-row">
+                  {[
+                    [1, tr("spark.distLt1")],
+                    [10, tr("spark.distUp10")],
+                    [100, tr("spark.distAny")],
+                  ].map(([mi, label]) => (
+                    <button
+                      key={mi}
+                      type="button"
+                      className={"spark-preset-chip" + (prefs.maxDistanceMi === mi ? " on" : "")}
+                      onClick={() => { sfx.tap(); updatePref("maxDistanceMi", mi, { immediate: true }); }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="spark-filter-block">
+                <span className="spark-filter-label">{tr("spark.filterHeight")}</span>
+                <div className="spark-height-chips">
+                  {(prefs.genderPref === "female" || prefs.genderPref === "feminine" ? SPARK_HEIGHT_PRESETS_WOMEN : SPARK_HEIGHT_PRESETS_MEN).map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className={"spark-height-chip" + (prefs.minHeightM === preset.min && prefs.maxHeightM === preset.max ? " on" : "")}
+                      onClick={() => {
+                        sfx.tap();
+                        const patch = { minHeightM: preset.min, maxHeightM: preset.max };
+                        const next = { ...prefs, ...patch };
+                        dispatch({ type: "SET_SPARK_PREFS", prefs: next });
+                        if (state.liveData) {
+                          api.patchSparkPreferences({
+                            minScore: next.minScore, maxScore: next.maxScore,
+                            minAge: next.minAge, maxAge: next.maxAge,
+                            maxDistanceMi: next.maxDistanceMi,
+                            minHeightM: next.minHeightM, maxHeightM: next.maxHeightM,
+                            genderPref: next.genderPref,
+                          }).then(() => loadDeck()).catch(() => {});
+                        } else {
+                          const merged = { ...state, sparkMinHeightM: preset.min, sparkMaxHeightM: preset.max };
+                          dispatch({ type: "SET_SPARK_DECK", deck: buildLocalSparkDeck(merged) });
+                        }
+                      }}
+                    >
+                      {tr(`spark.heightShort.${preset.id}`)}
+                    </button>
+                  ))}
+                </div>
+                {prefs.genderPref === "all" && (
+                  <p className="spark-filter-hint muted">{tr("spark.heightGenderHint")}</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {state.sparkLikesReceived > 0 && (
+          <div className="spark-likes-banner">
+            <Heart size={14} fill="#FF7EB3" stroke="none" />
+            <span>{state.sparkLikesReceived} {tr("spark.likesYou")}</span>
+          </div>
+        )}
+
+        {needsHeight ? (
+          <div className="spark-height-gate card">
+            <Ruler size={28} color="#B79CF0" />
+            <h3>{tr("spark.heightTitle")}</h3>
+            <div className="spark-height-input">
+              <input
+                type="number"
+                min="1"
+                max="2.5"
+                step="0.01"
+                placeholder="1.75"
+                value={heightInput}
+                onChange={(e) => setHeightInput(e.target.value)}
+              />
+              <span>m</span>
+            </div>
+            <button type="button" className="btn primary" disabled={heightBusy || !heightInput} onClick={saveHeight}>
+              {heightBusy ? tr("spark.heightSaving") : tr("spark.heightSave")}
+            </button>
+          </div>
+        ) : mode === "matches" ? (
+          <div className="scroll spark-matches-scroll">
+            {matches.length === 0 ? (
+              <div className="spark-empty">
+                <Heart size={40} color="#E8DFF5" />
+                <p>{tr("spark.noMatches")}</p>
+              </div>
+            ) : (
+              matches.map((m) => {
+                const u = m.user;
+                if (!u) return null;
+                const isFriend = state.friends.includes(u.id);
+                return (
+                  <div key={m.matchId} className="ech-glass-card spark-match-row" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", marginBottom: 10 }}>
+                    <button
+                      type="button"
+                      className="spark-match-row-main"
+                      onClick={() => { sfx.tap(); openUserProfile(dispatch, u.id); }}
+                    >
+                      <Avatar c={u} size={52} ring showScore={false} />
+                      <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                        <b>{u.name}</b>
+                        <span className="muted" style={{ display: "block", fontSize: 12 }}>{u.handle} · {u.score?.toFixed?.(2)}</span>
+                      </div>
+                    </button>
+                    <div className="spark-match-row-actions">
+                      <button type="button" className="icbtn" title={tr("chat.message")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: u.id } }); }}>
+                        <MessageCircle size={16} />
+                      </button>
+                      {!isFriend && (() => {
+                        const sent = state.friendRequestsOutgoing.some((r) => (r.user?.id || r.userId) === u.id);
+                        return (
+                          <button type="button" className={"icbtn" + (sent ? " on" : "")} disabled={sent} title={sent ? tr("friends.requestSent") : tr("friends.add")} onClick={() => { if (sent) return; sfx.tap(); sendFriendRequest(dispatch, state, u.id); }}>
+                            {sent ? <Clock size={16} /> : <UserPlus size={16} />}
+                          </button>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            <div className="scroll-pad" />
+          </div>
+        ) : (
+          <div className="spark-deck-wrap">
+            {loading && !deck.length ? (
+              <div className="spark-empty">
+                <Loader size={32} className="spin" color="#C9A0DC" />
+                <p>{tr("spark.loading")}</p>
+              </div>
+            ) : !current ? (
+              <div className="spark-empty">
+                <Flame size={44} color="#FFD6E4" />
+                <p>{tr("spark.emptyDeck")}</p>
+                <button type="button" className="btn soft" onClick={() => { sfx.tap(); loadDeck(); }}>
+                  {tr("spark.refresh")}
+                </button>
+              </div>
+            ) : (
+              <>
+                <div
+                  className="spark-stack"
+                  onPointerDown={onPointerDown}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={onPointerUp}
+                  onPointerCancel={onPointerUp}
+                >
+                  {deck.slice(1, 3).reverse().map((p, i) => (
+                    <SparkCard key={p.id} person={p} style={{ zIndex: i }} dragX={0} stackScale={0.94 - i * 0.04} />
+                  ))}
+                  <SparkCard
+                    person={current}
+                    style={{ zIndex: 3 }}
+                    dragX={exiting ? 0 : dragX}
+                    exiting={!!exiting}
+                    exitDir={exiting?.dir ?? 1}
+                  />
+                </div>
+                <div className="spark-actions">
+                  <button type="button" className="spark-act pass" aria-label={tr("spark.pass")} disabled={busy} onClick={() => commitSwipe("pass")}>
+                    <X size={26} />
+                  </button>
+                  <button type="button" className="spark-act super" aria-label={tr("spark.super")} disabled={busy} onClick={() => commitSwipe("super")}>
+                    <Zap size={22} />
+                  </button>
+                  <button type="button" className="spark-act like" aria-label={tr("spark.like")} disabled={busy} onClick={() => commitSwipe("like")}>
+                    <Heart size={28} fill="#fff" stroke="none" />
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ---- FRIENDS -------------------------------------------------------------- //
+  function FriendsScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { reach } = useDerived(state, now);
+    const [q, setQ] = useState("");
+    const [globalQ, setGlobalQ] = useState("");
+    const [globalResults, setGlobalResults] = useState([]);
+    const [globalBusy, setGlobalBusy] = useState(false);
+
+    useEffect(() => {
+      if (!state.liveData || globalQ.trim().length < 2) {
+        setGlobalResults([]);
+        return;
+      }
+      setGlobalBusy(true);
+      const t = setTimeout(() => {
+        api.searchUsers(globalQ.trim()).then((res) => {
+          const users = (res.users || []).map((u) => ({ ...u, avatarUrl: mediaUrl(u.avatarUrl) || u.avatarUrl }));
+          registerUsers(users);
+          setGlobalResults(users);
+        }).catch(() => setGlobalResults([])).finally(() => setGlobalBusy(false));
+      }, 320);
+      return () => clearTimeout(t);
+    }, [globalQ, state.liveData]);
+
+    const outgoingIds = new Set(state.friendRequestsOutgoing.map((r) => r.user?.id));
+    const incomingByUser = Object.fromEntries(
+      state.friendRequestsIncoming.map((r) => [r.user?.id, r])
+    );
+
+    const friendUsers = state.friends.map((id) => contactRegistry[id]).filter(Boolean);
+    const list = (friendUsers.length ? friendUsers : contactsFor(state))
+      .filter((c) => c.name.toLowerCase().includes(q.toLowerCase()) || (c.handle || "").toLowerCase().includes(q.toLowerCase()));
+
+    useEffect(() => {
+      if (!state.liveData) return;
+      const sync = () => {
+        api.friendRequests().then((data) => {
+          dispatch({ type: "SYNC_FRIEND_REQUESTS", incoming: data.incoming || [], outgoing: data.outgoing || [] });
+        }).catch(() => {});
+      };
+      sync();
+      const iv = setInterval(sync, 12000);
+      return () => clearInterval(iv);
+    }, [state.liveData]);
+
+    const incoming = state.friendRequestsIncoming;
+
+    return (
+      <div className="ech-friends-screen">
+        <ScreenTitle title={tr("friends.title")} icon={Users} subtitle={tr("friends.subtitle")} />
+        <Scroll className="ech-friends-scroll">
+        {incoming.length > 0 && (
+          <div className="friend-requests-banner ech-glass-card">
+            <div className="friend-requests-banner-head">
+              <Users size={16} />
+              <b>{tr("friends.incoming")}</b>
+              <span className="friend-requests-count">{incoming.length}</span>
+            </div>
+            {incoming.map((r) => {
+              const c = r.user;
+              if (!c) return null;
+              return (
+                <div key={r.requestId} className="friend-request-row">
+                  <Avatar c={c} size={48} ring showScore />
+                  <button type="button" className="friend-request-meta" onClick={() => openUserProfile(dispatch, c.id)}>
+                    <b style={{ fontSize: 14 }}>{c.name}</b>
+                    <span className="muted" style={{ display: "block", fontSize: 12 }}>{c.handle} · {tr("friends.wantsConnect")}</span>
+                  </button>
+                  <button className="icbtn on" title={tr("friends.accept")} onClick={() => { sfx.tap(); acceptFriendRequestAction(dispatch, state, r.requestId); }}>
+                    <Check size={16} />
+                  </button>
+                  <button className="icbtn" title={tr("friends.decline")} onClick={() => {
+                    sfx.tap();
+                    if (state.liveData) api.declineFriendRequest(r.requestId).catch(() => {});
+                    dispatch({ type: "DECLINE_FRIEND_REQUEST", requestId: r.requestId });
+                  }}>
+                    <X size={16} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {incoming.length === 0 && state.liveData && (
+          <p className="ech-page-hint">{tr("friends.noRequests")}</p>
+        )}
+
+        <div className="ech-stat-hero ech-glass-card">
+          <div className="stat-hero-top">
+            <div>
+              <span className="stat-hero-label">{tr("friends.reach")}</span>
+              <div className={"stat-hero-value" + (reach >= 70 ? " good" : reach >= 45 ? " mid" : " low")}>
+                {reach}%
+              </div>
+            </div>
+            <p className="stat-hero-copy">{tr("friends.reachSub")}</p>
+          </div>
+        </div>
+
+        {state.liveData && (
+          <>
+            <p className="ech-kicker ech-kicker--section"><Search size={11} /> {tr("friends.globalSearch")}</p>
+            <div className="ech-discover-search ech-friends-search">
+              <Search size={16} color="#8C6BD8" />
+              <input value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr("friends.globalPlaceholder")} />
+              {globalBusy && <Loader size={16} className="spin" color="#8C6BD8" />}
+            </div>
+            {globalQ.trim().length >= 2 && globalResults.length === 0 && !globalBusy && (
+              <p className="muted" style={{ fontSize: 12, margin: "0 4px 12px" }}>{tr("friends.globalEmpty")}</p>
+            )}
+          </>
+        )}
+
+        {globalResults.map((c) => {
+          const friend = state.friends.includes(c.id);
+          const pendingOut = outgoingIds.has(c.id);
+          const incoming = incomingByUser[c.id];
+          const isBlocked = (state.blocked || []).includes(c.id);
+          return (
+            <div key={"g_" + c.id} className="card row">
+              <Avatar c={c} size={46} ring showScore />
+              <button type="button" className="friend-row-link" onClick={() => openUserProfile(dispatch, c.id)}>
+                <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <b>{c.name}</b><TierPill score={c.score} small />
+                  </div>
+                  <span className="user-meta">{c.handle} · {c.score.toFixed(1)} ★</span>
+                </div>
+              </button>
+              <div style={{ display: "flex", gap: 7 }}>
+                {incoming ? (
+                  <button className="icbtn on" onClick={() => { sfx.tap(); acceptFriendRequestAction(dispatch, state, incoming.requestId); }}><Check size={16} /></button>
+                ) : friend ? (
+                  <span className="badge-ok"><Check size={12} /> {tr("friends.friends")}</span>
+                ) : pendingOut ? (
+                  <span className="muted" style={{ fontSize: 11, fontWeight: 700 }}>{tr("friends.pending")}</span>
+                ) : isBlocked ? (
+                  <span className="muted" style={{ fontSize: 11, fontWeight: 700 }}>{tr("block.blocked")}</span>
+                ) : (
+                  <button className="icbtn" onClick={() => { sfx.tap(); sendFriendRequest(dispatch, state, c.id); }}><Plus size={16} /></button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        <p className="feed-section-label" style={{ marginTop: 8 }}><Users size={13} /> {tr("friends.circle")}</p>
+        <div className="searchbar">
+          <Search size={16} color="#C9B8C6" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("friends.search")} />
+        </div>
+
+        {list.map((c) => {
+          const friend = state.friends.includes(c.id);
+          const pendingOut = outgoingIds.has(c.id);
+          const incoming = incomingByUser[c.id];
+          return (
+            <div key={c.id} className="card friend-row">
+              <Avatar c={c} size={48} ring showScore={false} />
+              <button type="button" className="friend-row-main friend-row-link" onClick={() => openUserProfile(dispatch, c.id)}>
+                <div className="friend-row-name">
+                  <b>{c.name}</b>
+                  <TierPill score={c.score} small />
+                </div>
+                <span className="friend-row-handle">{c.handle}</span>
+                <span className="friend-row-score"><Star size={11} fill="#FFD56B" color="#E8B84A" /> {c.score.toFixed(1)}</span>
+              </button>
+              <div className="friend-row-actions">
+                <button className="icbtn" title={tr("chat.message")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: c.id } }); }}>
+                  <MessageCircle size={16} />
+                </button>
+                <button className="icbtn" title={tr("call.title")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "call", payload: { id: c.id, mode: "voice" } }); }}>
+                  <Phone size={16} />
+                </button>
+                <button className="icbtn" title={tr("call.video")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "call", payload: { id: c.id, mode: "video" } }); }}>
+                  <Video size={16} />
+                </button>
+                {incoming ? (
+                  <button className="icbtn on" title={tr("friends.accept")} onClick={() => { sfx.tap(); acceptFriendRequestAction(dispatch, state, incoming.requestId); }}>
+                    <Check size={16} />
+                  </button>
+                ) : friend ? (
+                  <button
+                    className="icbtn"
+                    title={tr("friends.remove")}
+                    onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "removefriend", payload: { id: c.id } }); }}
+                  >
+                    <UserMinus size={16} />
+                  </button>
+                ) : pendingOut ? (
+                  <button
+                    className="icbtn on"
+                    title={tr("friends.pending")}
+                    onClick={() => { sfx.tap(); dispatch({ type: "CANCEL_FRIEND_REQUEST", id: c.id }); }}
+                  >
+                    <Clock size={16} />
+                  </button>
+                ) : (
+                  <button
+                    className="icbtn"
+                    title={tr("friends.add")}
+                    onClick={() => {
+                      sfx.tap();
+                      if (c.score < 3.5) return dispatch({ type: "OPEN_MODAL", modal: "friendwarn", payload: { id: c.id } });
+                      sendFriendRequest(dispatch, state, c.id);
+                    }}
+                  >
+                    <Plus size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        </Scroll>
+      </div>
+    );
+  }
+
+  // ---- LENS + RATE (merged tab) ------------------------------------------- //
+  function LensRateTabs({ mode, onChange }) {
+    const tr = useT();
+    return (
+      <div className="ech-feed-segments ech-lens-segments" role="tablist" aria-label={tr("lensRate.title")}>
+        <button type="button" role="tab" aria-selected={mode === "lens"} className={"ech-feed-segment" + (mode === "lens" ? " on" : "")} onClick={() => { sfx.tap(); onChange("lens"); }}>
+          <Eye size={15} strokeWidth={mode === "lens" ? 2.2 : 1.75} />
+          <span>{tr("lensRate.viewfinder")}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={mode === "rate"} className={"ech-feed-segment" + (mode === "rate" ? " on" : "")} onClick={() => { sfx.tap(); onChange("rate"); }}>
+          <Star size={15} strokeWidth={mode === "rate" ? 2.2 : 1.75} />
+          <span>{tr("lensRate.nearby")}</span>
+        </button>
+      </div>
+    );
+  }
+
+  function LensRateScreen() {
+    const tr = useT();
+    const [mode, setMode] = useState("lens");
+    if (mode === "lens") {
+      return (
+        <div className="ech-lens-screen lens-rate-screen">
+          <header className="ech-screen-head ech-screen-head--row">
+            <div className="ech-screen-head-main">
+              <Eye size={18} color="#8C6BD8" strokeWidth={2} />
+              <div className="ech-screen-head-titles">
+                <h1>{tr("tabs.lens")}</h1>
+                <p>{tr("lensRate.viewfinder")}</p>
+              </div>
+            </div>
+            <IgTopChrome compact />
+          </header>
+          <LensRateTabs mode={mode} onChange={setMode} />
+          <LensPanel />
+        </div>
+      );
+    }
+    return (
+      <div className="ech-lens-screen lens-rate-screen">
+        <header className="ech-screen-head ech-screen-head--row">
+          <div className="ech-screen-head-main">
+            <Eye size={18} color="#8C6BD8" strokeWidth={2} />
+            <div className="ech-screen-head-titles">
+              <h1>{tr("tabs.lens")}</h1>
+              <p>{tr("lensRate.nearbySub")}</p>
+            </div>
+          </div>
+          <IgTopChrome compact />
+        </header>
+        <Scroll className="ech-lens-scroll lens-rate-scroll">
+          <LensRateTabs mode={mode} onChange={setMode} />
+          <RatePanel />
+        </Scroll>
+      </div>
+    );
+  }
+
+  // ---- PROXIMITY RATE (1 mi), panel inside merged Lens tab ---------------- //
+  function RatePanel() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const nearby = nearbyContacts(state);
+    const rateable = rateableNearby(state);
+    const notRateable = state.proximityScan
+      ? nearby.filter((c) => !canRateProximity(state, c))
+      : [];
+
+    return (
+      <div className="lens-rate-panel">
+        {!state.proximityScan ? (
+          <button
+            className="btn primary lens-scan-cta"
+            onClick={() => { sfx.tap(); dispatch({ type: "START_PROXIMITY" }); }}
+          >
+            <Radar size={18} /> Scan nearby
+          </button>
+        ) : (
+          <>
+            <div className="card prox-radar">
+              <div className="radar-ring" />
+              <div className="radar-sweep" />
+              <div className="radar-core">
+                <span className="radar-label">{state.liveData ? "Live · 1 mi" : "Scanning · 1 mi"}</span>
+                <span className="radar-count">{rateable.length}</span>
+              </div>
+            </div>
+            <button className="btn soft lens-scan-stop" onClick={() => { sfx.tap(); dispatch({ type: "STOP_PROXIMITY" }); }}>
+              Stop
+            </button>
+          </>
+        )}
+
+        {!state.lens && (
+          <p className="lens-rate-note"><EyeOff size={14} /> Turn on Lens to rate nearby.</p>
+        )}
+
+        {state.lens && state.proximityScan && state.liveData && state.geoError && (
+          <p className="lens-rate-note warn">{state.geoError}</p>
+        )}
+
+        {state.lens && state.proximityScan && !state.geoError && rateable.length === 0 && state.liveData && (
+          <p className="lens-rate-note">No one to rate within 1 mi.</p>
+        )}
+
+        {state.proximityScan && rateable.length > 0 && (
+          <SectionLabel>Tap to rate</SectionLabel>
+        )}
+
+        {state.proximityScan && rateable.map((c) => {
+          const dist = milesOf(state, c);
+          const rateNearby = (stars) => {
+            if (!canRateProximity(state, c) || !hasHigherScoreThan(state, c)) return;
+            sfx.rateCommit(stars);
+            if (state.liveData) {
+              api.rate(c.id, stars, null, "proximity", null).then(() => {
+                dispatch({ type: "PROX_RATED", id: c.id });
+              }).catch(() => {});
+            } else {
+              dispatch({ type: "PROX_RATED", id: c.id });
+            }
+          };
+          return (
+            <div key={c.id} className="ech-prox-rate-card">
+              <div className="ech-prox-rate-head">
+                <Avatar c={c} size={44} ring showScore />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <b>{c.name}</b>
+                    {c.lensOn && <Eye size={12} color="#8C6BD8" />}
+                  </div>
+                  <span className="user-meta">{dist.toFixed(2)} mi · {proxReason(state, c)}</span>
+                </div>
+              </div>
+              <div className="ech-prox-rate-stars">
+                <span className="ech-rate-kicker">{tr("rate.tapStars")}</span>
+                <EchRateStars size="sm" onPick={rateNearby} />
+              </div>
+            </div>
+          );
+        })}
+
+        {notRateable.length > 0 && (
+          <>
+            <SectionLabel>Not rateable</SectionLabel>
+            {notRateable.map((c) => (
+              <div key={c.id} className="card row lens-rate-muted">
+                <Avatar c={c} size={42} ring />
+                <div style={{ flex: 1 }}>
+                  <b>{c.name}</b>
+                  <p className="user-meta">{milesOf(state, c).toFixed(2)} mi · {lensBlockReason(state, c, tr) || proxReason(state, c)}</p>
+                </div>
+                <Lock size={16} color="#C9B8C6" />
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // ---- LENS AR viewfinder, panel inside merged Lens tab ------------------ //
+  function LensPanel() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const [mapFriends, setMapFriends] = useState([]);
+    const [mapQuery, setMapQuery] = useState("");
+    const [selected, setSelected] = useState(null);
+    const [selectedParty, setSelectedParty] = useState(null);
+    const [mapBusy, setMapBusy] = useState(false);
+
+    const visibleMapFriends = useMemo(
+      () => mapFriends.filter(isMapVisibleFriend),
+      [mapFriends],
+    );
+
+    const canRateFriendMap = (f) => {
+      if (!f) return false;
+      if (proxCooldownLeft(state, f.id) > 0) return false;
+      const dist = f.miles ?? milesOf(state, f);
+      if (dist == null || dist > PROX_MILE) return false;
+      if (!state.lens || !f.lensOn) return false;
+      return canRateFeed(state, f);
+    };
+
+    useEffect(() => {
+      if (state.screen !== "lens") return;
+      if (state.liveData) {
+        setMapBusy(true);
+        api.friendsMap()
+          .then((rows) => {
+            registerUsers(rows);
+            setMapFriends(rows);
+          })
+          .catch(() => setMapFriends([]))
+          .finally(() => setMapBusy(false));
+        const iv = setInterval(() => {
+          api.friendsMap().then((rows) => { registerUsers(rows); setMapFriends(rows); }).catch(() => {});
+        }, 20000);
+        return () => clearInterval(iv);
+      }
+      const now = Date.now();
+      const demo = state.friends.map((id, i) => {
+        const f = byId[id];
+        if (!f) return null;
+        return {
+          ...f,
+          lensOn: i % 2 === 0,
+          locationAt: now - i * 2 * 3600000,
+          lat: 38.722 + i * 0.012,
+          lng: -9.139 + i * 0.009,
+          miles: 0.25 + i * 0.18,
+        };
+      }).filter(Boolean);
+      setMapFriends(demo);
+    }, [state.screen, state.friends, state.liveData]);
+
+    useEffect(() => {
+      if (state.screen !== "lens") return;
+      if (state.liveData) {
+        api.gatherings({ kind: "party", maxMiles: 50, sort: "near" }).then((list) => {
+          dispatch({ type: "SYNC_GATHERINGS", gatherings: list || [] });
+        }).catch(() => {});
+      }
+    }, [state.screen, state.liveData, dispatch]);
+
+    const mapParties = useMemo(() => {
+      const expireMs = 72 * 3600000;
+      return (state.gatherings || []).filter((e) => {
+        if (e.kind !== "party" || e.lat == null || e.lng == null) return false;
+        if (e.startsAt && now > e.startsAt + expireMs) return false;
+        return true;
+      });
+    }, [state.gatherings, now]);
+
+    const sel = selected ? visibleMapFriends.find((f) => f.id === selected) || mapFriends.find((f) => f.id === selected) || byId[selected] : null;
+    const cooldown = sel ? proxCooldownLeft(state, sel.id) : 0;
+
+    return (
+      <div className="viewfinder-panel">
+        <div className="viewfinder-toolbar">
+          <div className="searchbar viewfinder-search">
+            <Search size={16} color="#C9B8C6" />
+            <input
+              value={mapQuery}
+              onChange={(e) => setMapQuery(e.target.value)}
+              placeholder={tr("viewfinder.search")}
+            />
+          </div>
+          <button
+            type="button"
+            className={"lens-toggle-chip" + (state.lens ? " on" : "")}
+            onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_LENS" }); }}
+          >
+            {state.lens
+              ? <><EyeOff size={13} /> {tr("viewfinder.lensOn")}</>
+              : <><Eye size={13} /> {tr("viewfinder.lensOffChip")}</>}
+          </button>
+        </div>
+
+        <div className="viewfinder-privacy card">
+          <MapPin size={15} color="#8C6BD8" className="viewfinder-privacy-pin" />
+          <div className="viewfinder-privacy-copy">
+            <p className="viewfinder-privacy-lead">
+              {state.lens ? tr("viewfinder.lensVisibleNote") : tr("viewfinder.lensHiddenNote")}
+            </p>
+            <div className="viewfinder-privacy-settings">
+              <label className="viewfinder-privacy-toggle">
+                <span>{tr("viewfinder.hideMyLocation")}</span>
+                <button
+                  type="button"
+                  className={state.hideMapLocation ? "switch on" : "switch"}
+                  role="switch"
+                  aria-checked={state.hideMapLocation}
+                  onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_HIDE_MAP_LOCATION" }); }}
+                >
+                  <span className="knob" />
+                </button>
+              </label>
+              {state.hideMapLocation && (
+                <small className="viewfinder-privacy-sub">{tr("viewfinder.hideMyLocationSub")}</small>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="viewfinder-map-wrap">
+          {mapBusy && !visibleMapFriends.length ? (
+            <div className="viewfinder-loading"><Loader size={28} className="spin" color="#C9A0DC" /></div>
+          ) : (
+            <ViewFinderMap
+              friends={visibleMapFriends}
+              parties={mapParties}
+              userLat={state.geoPos?.lat}
+              userLng={state.geoPos?.lng}
+              selectedId={selected}
+              selectedPartyId={selectedParty}
+              searchQuery={mapQuery}
+              mediaUrl={mediaUrl}
+              showYou={!state.hideMapLocation}
+              onSelect={(f) => { sfx.tap(); setSelectedParty(null); setSelected(f.id); registerUsers([f]); }}
+              onPartySelect={(p) => {
+                sfx.tap();
+                setSelected(null);
+                setSelectedParty(p.id);
+                dispatch({ type: "OPEN_MODAL", modal: "party", payload: { id: p.id, ev: p } });
+              }}
+            />
+          )}
+        </div>
+
+        {!mapBusy && visibleMapFriends.length === 0 && (
+          <p className="viewfinder-empty muted">{tr("viewfinder.noFriendsOnMap")}</p>
+        )}
+
+        {sel ? (
+          <div className="viewfinder-detail card">
+            <Avatar c={sel} size={52} ring showScore={false} />
+            <div className="viewfinder-detail-main">
+              <b>{sel.name}</b>
+              <span className="user-meta">{sel.handle} · {sel.score?.toFixed?.(1)} ★</span>
+              {sel.miles != null && <span className="user-meta">{sel.miles.toFixed(2)} mi away</span>}
+              {cooldown > 0 && (
+                <span className="viewfinder-cooldown">{tr("viewfinder.cooldown", { time: formatCooldown(cooldown) })}</span>
+              )}
+            </div>
+            <div className="viewfinder-detail-actions">
+              <button type="button" className="icbtn" onClick={() => { sfx.tap(); openUserProfile(dispatch, sel.id); }}>
+                <User size={16} />
+              </button>
+              {canRateFriendMap(sel) ? (
+                <button
+                  type="button"
+                  className="ratebtn"
+                  onClick={() => dispatch({ type: "OPEN_MODAL", modal: "rate", payload: { id: sel.id, prox: true } })}
+                >
+                  <Star size={13} /> {tr("viewfinder.rate")}
+                </button>
+              ) : (
+                <span className="viewfinder-muted">{!state.lens ? tr("viewfinder.lensOff") : (sel.miles > PROX_MILE ? tr("viewfinder.tooFar") : tr("viewfinder.notRateable"))}</span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <p className="viewfinder-hint muted">{tr("viewfinder.hint")}</p>
+        )}
+
+        {state.liveData && state.geoError && (
+          <p className="viewfinder-geo-warn">{state.geoError}</p>
+        )}
+      </div>
+    );
+  }
+
+  // ---- MESSAGES ------------------------------------------------------------- //
+  function MessagesScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [q, setQ] = useState("");
+    const inbox = state.chatInbox || {};
+    const chats = state.friends.map((id) => byId[id]).filter(Boolean);
+    const qn = q.trim().toLowerCase();
+
+    const sorted = useMemo(() => {
+      return [...chats].sort((a, b) => {
+        const ta = inbox[a.id]?.lastTs || 0;
+        const tb = inbox[b.id]?.lastTs || 0;
+        if (tb !== ta) return tb - ta;
+        return a.name.localeCompare(b.name);
+      });
+    }, [chats, inbox]);
+
+    const list = qn
+      ? sorted.filter((c) => c.name.toLowerCase().includes(qn) || (c.handle || "").toLowerCase().includes(qn))
+      : sorted;
+
+    useEffect(() => {
+      if (!state.liveData) return;
+      const refresh = () => {
+        api.chats()
+          .then((rows) => dispatch({ type: "SET_CHAT_INBOX", inbox: inboxFromApi(rows) }))
+          .catch(() => {});
+      };
+      refresh();
+      const iv = setInterval(refresh, 12000);
+      return () => clearInterval(iv);
+    }, [state.liveData, dispatch]);
+
+    const askDeleteChat = (e, id) => {
+      e.stopPropagation();
+      sfx.tap();
+      dispatch({ type: "OPEN_MODAL", modal: "deletechat", payload: { id } });
+    };
+
+    const me = state.user;
+    const [statusText, setStatusText] = useState(getChatStatus(state, ME_ID));
+
+    return (
+      <div className="ech-messages-screen">
+        <ScreenTitle title={tr("tabs.messages")} icon={MessageCircle} subtitle={tr("messages.subtitle")} />
+
+        <div className="ech-status-bar">
+          <Avatar c={me} size={32} showScore={false} ring={false} />
+          <input
+            className="ech-status-input"
+            value={statusText}
+            maxLength={80}
+            placeholder={tr("status.placeholder")}
+            onChange={(e) => setStatusText(e.target.value)}
+            onBlur={() => dispatch({ type: "SET_CHAT_STATUS", text: statusText.trim() })}
+          />
+        </div>
+
+        <div className="ech-discover-search ech-messages-search">
+          <Search size={16} color="#8C6BD8" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("messages.search")} />
+        </div>
+
+        <Scroll className="ech-messages-scroll">
+        {list.length === 0 ? (
+          <div className="ech-empty-card">
+            <MessageCircle size={32} color="#C9B8C6" style={{ marginBottom: 10 }} />
+            <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, margin: 0 }}>
+              {qn ? tr("messages.noMatch") : tr("messages.empty")}
+            </p>
+            {!qn && (
+              <button type="button" className="btn soft" style={{ marginTop: 14 }} onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "friends" }); }}>
+                <Users size={16} /> {tr("messages.findFriends")}
+              </button>
+            )}
+          </div>
+        ) : (
+          list.map((c) => {
+            const meta = inbox[c.id];
+            const unread = meta?.unread || 0;
+            const preview = meta?.lastPreview || tr("messages.tapToChat");
+            return (
+              <div key={c.id} className="msg-row-wrap">
+                <button
+                  type="button"
+                  className={"ech-msg-row" + (unread > 0 ? " ech-msg-row--unread" : "")}
+                  onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: c.id } }); }}
+                >
+                  <button
+                    type="button"
+                    className="msg-row-avatar-btn"
+                    aria-label={tr("profile.viewProfile")}
+                    onClick={(e) => { e.stopPropagation(); openUserProfile(dispatch, c.id); }}
+                  >
+                    <Avatar c={c} size={48} ring showScore />
+                  </button>
+                  <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                    <div className="msg-row-top">
+                      <button
+                        type="button"
+                        className="msg-row-name"
+                        onClick={(e) => { e.stopPropagation(); openUserProfile(dispatch, c.id); }}
+                      >
+                        {c.name}
+                      </button>
+                      {unread > 0 && <span className="msg-new-badge">NEW</span>}
+                    </div>
+                    {getChatStatus(state, c.id) && (
+                      <span className="msg-row-status">{getChatStatus(state, c.id)}</span>
+                    )}
+                    <span className="msg-row-preview">{preview}</span>
+                    {meta?.lastTs ? (
+                      <span className="msg-row-time muted">{formatPostAge(meta.lastTs, Date.now())}</span>
+                    ) : (
+                      <span className="muted" style={{ fontSize: 11 }}>{c.handle}</span>
+                    )}
+                  </div>
+                  <ChevronRight size={18} color="#C9B8C6" />
+                </button>
+                <button type="button" className="msg-row-delete" aria-label={tr("messages.deleteChat")} onClick={(e) => askDeleteChat(e, c.id)}>
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            );
+          })
+        )}
+
+        {chats.length > 0 && (
+          <button type="button" className="ech-cta-soft" onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "friends" }); }}>
+            <Users size={16} /> {tr("messages.moreFriends")}
+          </button>
+        )}
+        </Scroll>
+      </div>
+    );
+  }
+  
+  // ---- PERKS / ACCESS CONTROL ----------------------------------------------- //
+  function PerksScreen() {
+    const { state, dispatch } = useStore();
+    const [now] = useTick();
+    const { effective, tier } = useDerived(state, now);
+  
+    return (
+      <Scroll>
+        <ScreenTitle title="Access" icon={Award} />
+        <div className="card" style={{ background: grad(tier.grad), textAlign: "center" }}>
+          <span className="muted" style={{ fontSize: 12 }}>Current standing</span>
+          <div style={{ fontWeight: 700, fontSize: 34, color: tier.ink }}>{effective.toFixed(2)}</div>
+          <TierPill score={effective} />
+        </div>
+  
+        {FEATURE_GATES.map((f) => {
+          const Icon = f.icon;
+          const open = effective >= f.req;
+          return (
+            <button
+              key={f.id}
+              className="card gate"
+              onClick={() => {
+                open ? sfx.success() : sfx.lock();
+                dispatch({ type: "OPEN_MODAL", modal: open ? "perkok" : "lock", payload: { feature: f } });
+              }}
+              style={{ opacity: open ? 1 : 0.92, filter: open ? "none" : "saturate(.55)" }}
+            >
+              <div className="gate-ic" style={{ background: open ? getTier(f.req).soft : "#EFE9EF" }}>
+                <Icon size={20} color={open ? getTier(f.req).accent : "#B0A4AE"} />
+              </div>
+              <div style={{ flex: 1, textAlign: "left" }}>
+                <b style={{ fontSize: 14 }}>{f.label}</b>
+                <p className="muted" style={{ fontSize: 11.5, lineHeight: 1.45 }}>{f.copy}</p>
+              </div>
+              {open
+                ? <span className="badge-ok"><Check size={12} /> {f.req.toFixed(1)}+</span>
+                : <span className="badge-lock"><Lock size={11} /> {f.req.toFixed(1)}</span>}
+            </button>
+          );
+        })}
+      </Scroll>
+    );
+  }
+  
+  function ProfileEditModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const prof = state.igExtras?.profile || {};
+    const [bio, setBio] = useState(prof.bio || "");
+    const [website, setWebsite] = useState(prof.website || "");
+    const [category, setCategory] = useState(prof.category || "");
+
+    const save = () => {
+      sfx.success();
+      dispatch({ type: "PATCH_PROFILE_IG", profile: { bio: bio.trim(), website: website.trim(), category } });
+      if (state.liveData) api.patchMe({ bio: bio.trim(), website: website.trim(), category }).catch(() => {});
+      dispatch({ type: "CLOSE_MODAL" });
+    };
+
+    return (
+      <Sheet dismissable>
+        <h3 style={{ margin: "0 0 12px", color: "#262626" }}>{tr("profile.editTitle")}</h3>
+        <label className="ig-form-field">
+          <span>{tr("profile.bio")}</span>
+          <textarea value={bio} onChange={(e) => setBio(e.target.value)} maxLength={150} rows={3} placeholder={tr("profile.bioPlaceholder")} />
+        </label>
+        <label className="ig-form-field">
+          <span>{tr("profile.website")}</span>
+          <input value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://" />
+        </label>
+        <label className="ig-form-field">
+          <span>{tr("profile.category")}</span>
+          <select value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">{tr("profile.categoryNone")}</option>
+            {PROFILE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </label>
+        <button type="button" className="btn primary" style={{ width: "100%", marginTop: 12 }} onClick={save}>{tr("profile.save")}</button>
+      </Sheet>
+    );
+  }
+
+  function CollectionsModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const postId = payload?.postId;
+    const collections = state.igExtras?.collections || [];
+
+    return (
+      <Sheet dismissable>
+        <h3 style={{ margin: "0 0 12px", color: "#262626" }}>{tr("collections.title")}</h3>
+        {!postId && <p className="muted" style={{ fontSize: 13, marginBottom: 10 }}>{tr("collections.hint")}</p>}
+        <div className="collections-list">
+          {collections.map((col) => {
+            const saved = col.postIds?.includes(postId);
+            return (
+              <button
+                key={col.id}
+                type="button"
+                className={"collections-row" + (saved ? " on" : "")}
+                onClick={() => {
+                  sfx.tap();
+                  if (saved) dispatch({ type: "REMOVE_POST_COLLECTION", postId });
+                  else dispatch({ type: "SAVE_POST_COLLECTION", collectionId: col.id, postId });
+                  recordPostAnalytics(postId, "saves");
+                }}
+              >
+                <span>{col.icon || "📁"}</span>
+                <span>{col.name}</span>
+                {saved && <Check size={16} />}
+              </button>
+            );
+          })}
+        </div>
+        <button type="button" className="btn soft" style={{ width: "100%", marginTop: 10 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("legal.close")}</button>
+      </Sheet>
+    );
+  }
+
+  const INSIGHTS_RANGE_MS = { "7d": 7 * 864e5, "30d": 30 * 864e5, "90d": 90 * 864e5 };
+
+  const insightsCutoff = (range, now) => {
+    if (range === "all") return 0;
+    return now - (INSIGHTS_RANGE_MS[range] || INSIGHTS_RANGE_MS["30d"]);
+  };
+
+  const myInsightStories = (state, { range, now }) => {
+    const cutoff = insightsCutoff(range, now);
+    return (state.stories || [])
+      .filter((s) => s.author === ME_ID || s.author === state.user.id)
+      .flatMap((s) => (s.items || []).map((it, idx) => ({
+        id: it.id || `${s.id}_${idx}`,
+        ts: it.ts || s.ts || 0,
+        views: it.views || 0,
+      })))
+      .filter((it) => !cutoff || (it.ts || 0) >= cutoff);
+  };
+
+  const myInsightPosts = (state, { range, type, postId, now }) => {
+    const cutoff = insightsCutoff(range, now);
+    const authorIds = portfolioAuthorIds(state, ME_ID);
+    let rows = buildFeed(state).filter((p) => authorIds.has(p.author));
+    if (type === "posts") rows = feedGridPostsOnly(rows);
+    else if (type === "reels") rows = reelPostsOnly(rows);
+    else if (type === "stories") return [];
+    if (postId) rows = rows.filter((p) => p.id === postId);
+    if (cutoff) rows = rows.filter((p) => (p.ts || 0) >= cutoff);
+    return rows;
+  };
+
+  const aggregateInsights = (state, { range, type, postId, now }) => {
+    const ix = loadFeedIx();
+    const posts = myInsightPosts(state, { range, type, postId, now });
+    const stories = type === "stories" || type === "all"
+      ? myInsightStories(state, { range, now })
+      : [];
+    let likes = 0;
+    let comments = 0;
+    let views = 0;
+    let saves = 0;
+    let shares = 0;
+    let reach = 0;
+    let profileVisits = 0;
+    let ratingSum = 0;
+    let ratingCount = 0;
+    posts.forEach((p) => {
+      likes += p.likes || 0;
+      comments += (ix.comments[p.id] || []).length;
+      views += postViewCount(p);
+      shares += p.shares || 0;
+      const tracked = getPostAnalytics(p.id);
+      saves += tracked.saves || 0;
+      reach += tracked.reach || 0;
+      profileVisits += tracked.profileVisits || 0;
+      if ((p.avgRating ?? 0) > 0) {
+        ratingSum += p.avgRating;
+        ratingCount += 1;
+      }
+    });
+    stories.forEach((s) => { views += s.views || 0; });
+    const contentCount = type === "stories" ? stories.length : type === "all" ? posts.length + stories.length : posts.length;
+    return {
+      contentCount,
+      posts: posts.length,
+      stories: stories.length,
+      likes,
+      comments,
+      views,
+      impressions: views,
+      saves,
+      shares,
+      reach,
+      profileVisits,
+      connections: state.friends.length,
+      reachPct: computeReach(state.friends),
+      avgRating: ratingCount ? ratingSum / ratingCount : 0,
+    };
+  };
+
+  function InsightsModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const [range, setRange] = useState(payload?.range || "30d");
+    const [type, setType] = useState(payload?.type || "all");
+    const [postId, setPostId] = useState(payload?.postId || "");
+    const stats = useMemo(
+      () => aggregateInsights(state, { range, type, postId: postId || null, now }),
+      [state, range, type, postId, now],
+    );
+    const postOptions = useMemo(
+      () => myInsightPosts(state, { range, type: "all", postId: null, now }),
+      [state, range, now],
+    );
+
+    const overviewRows = [
+      ["posts", stats.contentCount],
+      ["views", stats.views],
+      ["likes", stats.likes],
+      ["comments", stats.comments],
+    ];
+    const engagementRows = [
+      ["saves", stats.saves],
+      ["shares", stats.shares],
+      ["avgRating", stats.avgRating > 0 ? stats.avgRating.toFixed(1) : "—"],
+      ["reach", stats.reach],
+    ];
+    const audienceRows = [
+      ["connections", stats.connections],
+      ["profileVisits", stats.profileVisits],
+      ["reachScore", `${stats.reachPct}%`],
+    ];
+
+    const renderSection = (titleKey, rows) => (
+      <section className="insights-section">
+        <h4>{tr(titleKey)}</h4>
+        <div className="insights-grid">
+          {rows.map(([k, v]) => (
+            <div key={k} className="insights-cell">
+              <b>{v}</b>
+              <small>{tr(`insights.${k}`)}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+    );
+
+    return (
+      <Sheet dismissable className="insights-sheet">
+        <header className="insights-head">
+          <h3>{tr("insights.postTitle")}</h3>
+        </header>
+        <div className="insights-filters">
+          <span className="insights-filter-label">{tr("insights.filterRange")}</span>
+          <div className="insights-chips">
+            {[["7d", "insights.range7d"], ["30d", "insights.range30d"], ["90d", "insights.range90d"], ["all", "insights.rangeAll"]].map(([id, label]) => (
+              <button key={id} type="button" className={"insights-chip" + (range === id ? " on" : "")} onClick={() => { sfx.tap(); setRange(id); }}>{tr(label)}</button>
+            ))}
+          </div>
+          <span className="insights-filter-label">{tr("insights.filterType")}</span>
+          <div className="insights-chips">
+            {[["all", "insights.typeAll"], ["posts", "insights.typePosts"], ["reels", "insights.typeReels"], ["stories", "insights.typeStories"]].map(([id, label]) => (
+              <button key={id} type="button" className={"insights-chip" + (type === id ? " on" : "")} onClick={() => { sfx.tap(); setType(id); setPostId(""); }}>{tr(label)}</button>
+            ))}
+          </div>
+          {type !== "stories" && postOptions.length > 0 && (
+            <label className="insights-post-pick">
+              <span>{tr("insights.selectPost")}</span>
+              <select value={postId} onChange={(e) => setPostId(e.target.value)}>
+                <option value="">{tr("insights.allPosts")}</option>
+                {postOptions.map((p) => (
+                  <option key={p.id} value={p.id}>{(p.caption || p.emoji || p.id).toString().slice(0, 48)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        {stats.contentCount === 0 ? (
+          <p className="insights-empty muted">{tr("insights.empty")}</p>
+        ) : (
+          <>
+            {renderSection("insights.overview", overviewRows)}
+            {renderSection("insights.engagement", engagementRows)}
+            {renderSection("insights.audience", audienceRows)}
+          </>
+        )}
+        <button type="button" className="btn soft insights-close" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("legal.close")}</button>
+      </Sheet>
+    );
+  }
+
+  function CreatorDashboardModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const stats = useMemo(() => aggregateInsights(state, { range: "30d", type: "all", postId: null, now }), [state, now]);
+    return (
+      <Sheet dismissable className="creator-dash-sheet">
+        <h3 style={{ margin: "0 0 8px", color: "#1A1520" }}>{tr("creator.title")}</h3>
+        <p className="muted" style={{ fontSize: 12, marginBottom: 14 }}>{tr("creator.sub")}</p>
+        <div className="insights-grid">
+          <div className="insights-cell"><b>{stats.posts}</b><small>{tr("creator.posts")}</small></div>
+          <div className="insights-cell"><b>{stats.likes}</b><small>{tr("creator.likes")}</small></div>
+          <div className="insights-cell"><b>{stats.connections}</b><small>{tr("profile.followers")}</small></div>
+          <div className="insights-cell"><b>{stats.reachPct}%</b><small>{tr("creator.reach")}</small></div>
+        </div>
+        <button type="button" className="btn soft" style={{ width: "100%", marginTop: 12 }} onClick={() => { dispatch({ type: "CLOSE_MODAL" }); dispatch({ type: "OPEN_MODAL", modal: "insights", payload: { range: "30d", type: "all" } }); }}>
+          {tr("creator.viewInsights")}
+        </button>
+      </Sheet>
+    );
+  }
+
+  function BroadcastChannelModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [text, setText] = useState("");
+    const channels = state.igExtras?.broadcastChannels || [];
+    const [active, setActive] = useState(channels[0]?.id || null);
+
+    const create = () => {
+      sfx.tap();
+      dispatch({ type: "ADD_BROADCAST_CHANNEL", name: tr("broadcast.defaultName") });
+    };
+
+    const send = () => {
+      if (!text.trim() || !active) return;
+      dispatch({ type: "POST_BROADCAST", channelId: active, text: text.trim() });
+      setText("");
+      sfx.success();
+    };
+
+    const ch = channels.find((c) => c.id === active);
+
+    return (
+      <Sheet dismissable className="broadcast-sheet">
+        <h3 style={{ margin: "0 0 8px", color: "#262626" }}>{tr("broadcast.title")}</h3>
+        <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>{tr("broadcast.sub")}</p>
+        {channels.length === 0 ? (
+          <button type="button" className="btn primary" onClick={create}>{tr("broadcast.create")}</button>
+        ) : (
+          <>
+            <div className="broadcast-channels">
+              {channels.map((c) => (
+                <button key={c.id} type="button" className={"broadcast-chip" + (active === c.id ? " on" : "")} onClick={() => setActive(c.id)}>{c.name}</button>
+              ))}
+              <button type="button" className="broadcast-chip add" onClick={create}><Plus size={14} /></button>
+            </div>
+            <div className="broadcast-feed">
+              {(ch?.posts || []).slice().reverse().map((p) => (
+                <div key={p.id} className="broadcast-post"><p>{p.text}</p><small>{formatPostAge(p.ts, Date.now())}</small></div>
+              ))}
+            </div>
+            <div className="broadcast-compose">
+              <input value={text} onChange={(e) => setText(e.target.value)} placeholder={tr("broadcast.placeholder")} />
+              <button type="button" onClick={send}><Send size={18} /></button>
+            </div>
+          </>
+        )}
+      </Sheet>
+    );
+  }
+
+  function PrivacyToolsModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [words, setWords] = useState((state.igExtras?.blockedWords || []).join(", "));
+
+    return (
+      <Sheet dismissable className="ech-privacy-sheet">
+        <header className="ech-privacy-head">
+          <h3>{tr("privacy.title")}</h3>
+          <p className="muted">{tr("settings.privacyNote")}</p>
+        </header>
+        <Toggle label={tr("privacy.private")} sub={tr("privacy.privateSub")} on={state.privateProfile} onClick={() => dispatch({ type: "TOGGLE_PRIVATE_PROFILE" })} icon={Lock} />
+        <Toggle label={tr("privacy.twoFactor")} sub={tr("privacy.twoFactorSub")} on={state.igExtras?.twoFactorEnabled} onClick={() => dispatch({ type: "SET_TWO_FACTOR", enabled: !state.igExtras?.twoFactorEnabled })} icon={Shield} />
+        <label className="ech-privacy-field">
+          <span>{tr("privacy.hiddenWords")}</span>
+          <input value={words} onChange={(e) => setWords(e.target.value)} placeholder={tr("privacy.hiddenWordsPh")} onBlur={() => dispatch({ type: "SET_HIDDEN_WORDS", words: words.split(",").map((w) => w.trim()).filter(Boolean) })} />
+        </label>
+        <p className="ech-privacy-hint muted">{tr("privacy.restrictHint")}</p>
+        <button type="button" className="btn soft" style={{ width: "100%", marginTop: 12 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("legal.close")}</button>
+      </Sheet>
+    );
+  }
+
+  const profilePickableMedia = (state) => {
+    const authorIds = portfolioAuthorIds(state, ME_ID);
+    const posts = feedGridPostsOnly(buildFeed(state))
+      .filter((p) => authorIds.has(p.author))
+      .map((p) => ({ type: "post", id: p.id, mediaUrl: p.mediaUrl, mediaType: p.mediaType, ts: p.ts, label: "post" }));
+    const reels = reelPostsOnly(buildFeed(state))
+      .filter((p) => authorIds.has(p.author))
+      .map((p) => ({ type: "reel", id: p.id, mediaUrl: p.mediaUrl, mediaType: p.mediaType || "video", ts: p.ts, label: "reel" }));
+    const stories = (state.stories || [])
+      .filter((s) => s.author === ME_ID || s.author === state.user.id)
+      .flatMap((s) => (s.items || []).map((it, idx) => ({
+        type: "story",
+        id: it.id || `${s.id}_${idx}`,
+        mediaUrl: it.mediaUrl,
+        mediaType: it.mediaType,
+        ts: it.ts || s.ts,
+        storyId: s.id,
+        label: "story",
+      })));
+    return [...posts, ...reels, ...stories].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  };
+
+  const albumTypeLabel = (tr, type) => {
+    if (type === "reel") return tr("profile.albumTypeReel");
+    if (type === "story") return tr("profile.albumTypeStory");
+    return tr("profile.albumTypePost");
+  };
+
+  function AlbumEditorModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const albumId = payload?.albumId;
+    const album = albumId ? (state.igExtras?.highlights || []).find((h) => h.id === albumId) : null;
+    const [title, setTitle] = useState(album?.title || "");
+    const [picked, setPicked] = useState([]);
+    const [q, setQ] = useState("");
+    const [typeFilter, setTypeFilter] = useState("all");
+    const allMedia = profilePickableMedia(state);
+    const media = useMemo(() => {
+      const needle = q.trim().toLowerCase();
+      return allMedia.filter((item) => {
+        if (typeFilter !== "all" && item.type !== typeFilter) return false;
+        if (!needle) return true;
+        const cap = (item.caption || "").toLowerCase();
+        return item.type.includes(needle) || cap.includes(needle) || albumTypeLabel(tr, item.type).toLowerCase().includes(needle);
+      });
+    }, [allMedia, q, typeFilter, tr]);
+
+    const toggle = (item) => {
+      sfx.tap();
+      setPicked((prev) => {
+        const key = `${item.type}:${item.id}`;
+        const has = prev.some((x) => `${x.type}:${x.id}` === key);
+        return has ? prev.filter((x) => `${x.type}:${x.id}` !== key) : [...prev, item];
+      });
+    };
+
+    const save = () => {
+      if (!picked.length) return;
+      sfx.success();
+      if (albumId) {
+        dispatch({ type: "ADD_ALBUM_ITEMS", albumId, items: picked });
+        dispatch({ type: "SET_APP_TOAST", message: tr("profile.albumSaved") });
+      } else {
+        const coverUrl = picked[0]?.mediaUrl;
+        dispatch({ type: "ADD_HIGHLIGHT", highlight: { title: title.trim() || tr("profile.albumUntitled"), coverUrl, items: picked } });
+        dispatch({ type: "SET_APP_TOAST", message: tr("profile.albumCreated") });
+      }
+      dispatch({ type: "CLOSE_MODAL" });
+    };
+
+    return (
+      <Sheet dismissable className="album-editor-sheet">
+        <header className="album-editor-head">
+          <h3>{albumId ? tr("profile.albumAdd") : tr("profile.albumNew")}</h3>
+          {picked.length > 0 && (
+            <span className="album-editor-picked">{tr("profile.albumPicked", { count: picked.length })}</span>
+          )}
+        </header>
+        {!albumId && (
+          <input className="album-editor-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={tr("profile.albumNamePh")} />
+        )}
+        <div className="album-editor-search">
+          <Search size={15} color="#8C6BD8" strokeWidth={2} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("profile.albumSearchPh")} />
+          {q && <button type="button" className="album-editor-search-clear" onClick={() => setQ("")} aria-label={tr("legal.close")}><X size={14} /></button>}
+        </div>
+        <div className="album-editor-tabs">
+          {[["all", tr("profile.albumFilterAll")], ["post", tr("profile.albumTypePost")], ["reel", tr("profile.albumTypeReel")], ["story", tr("profile.albumTypeStory")]].map(([id, label]) => (
+            <button key={id} type="button" className={typeFilter === id ? " on" : ""} onClick={() => { sfx.tap(); setTypeFilter(id); }}>{label}</button>
+          ))}
+        </div>
+        <div className="album-editor-grid">
+          {media.length === 0 ? (
+            <p className="album-editor-empty">{tr("profile.albumEmptyMedia")}</p>
+          ) : media.map((item, idx) => {
+            const on = picked.some((x) => x.type === item.type && x.id === item.id);
+            const tileKey = `${item.type}-${item.id}-${idx}`;
+            return (
+              <button key={tileKey} type="button" className={"album-editor-tile" + (on ? " on" : "")} onClick={() => toggle(item)}>
+                <span className="album-editor-tile-media">
+                  {item.mediaUrl ? (
+                    item.mediaType === "video"
+                      ? <video src={mediaUrl(item.mediaUrl)} muted playsInline preload="metadata" />
+                      : <img src={mediaUrl(item.mediaUrl)} alt="" loading="lazy" decoding="async" />
+                  ) : (
+                    <span className="album-editor-tile-fallback" aria-hidden>✨</span>
+                  )}
+                </span>
+                <span className="album-editor-type">{albumTypeLabel(tr, item.type)}</span>
+                {on && <span className="album-editor-check"><Check size={14} strokeWidth={2.5} /></span>}
+              </button>
+            );
+          })}
+        </div>
+        <button type="button" className="btn primary album-editor-save" disabled={!picked.length} onClick={save}>{tr("profile.albumSave")}</button>
+      </Sheet>
+    );
+  }
+
+  function AlbumViewerModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const album = (state.igExtras?.highlights || []).find((h) => h.id === payload?.albumId);
+    if (!album) return null;
+    const items = album.items || [];
+
+    return (
+      <Sheet dismissable className="album-viewer-sheet">
+        <div className="album-viewer-head">
+          <h3>{album.title}</h3>
+          <span className="muted">{tr("profile.albumCount", { count: items.length })}</span>
+        </div>
+        <div className="album-viewer-grid">
+          {items.length === 0 ? <p className="muted album-viewer-empty">{tr("profile.albumEmpty")}</p> : items.map((item, idx) => (
+            <div key={`${item.type}-${item.id}-${idx}`} className="album-viewer-tile">
+              <span className="album-viewer-tile-media">
+                {item.mediaType === "video" ? <video src={mediaUrl(item.mediaUrl)} muted playsInline preload="metadata" /> : <img src={mediaUrl(item.mediaUrl)} alt="" loading="lazy" />}
+              </span>
+              <span className="album-viewer-type">{albumTypeLabel(tr, item.type)}</span>
+              <button type="button" className="album-viewer-trash" aria-label={tr("profile.albumRemove")} onClick={() => {
+                sfx.tap();
+                dispatch({ type: "REMOVE_ALBUM_ITEM", albumId: album.id, itemType: item.type, itemId: item.id });
+                dispatch({ type: "SET_APP_TOAST", message: tr("profile.albumRemoved") });
+              }}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button type="button" className="btn soft" style={{ width: "100%", marginTop: 12 }} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "albumeditor", payload: { albumId: album.id } }); }}>
+          {tr("profile.albumAdd")}
+        </button>
+      </Sheet>
+    );
+  }
+
+  function PostQrCanvas({ url }) {
+    const [src, setSrc] = useState("");
+    useEffect(() => {
+      let alive = true;
+      QRCode.toDataURL(url, {
+        width: 220,
+        margin: 1,
+        color: { dark: "#5A4A60", light: "#FFFFFF" },
+      }).then((data) => { if (alive) setSrc(data); }).catch(() => {});
+      return () => { alive = false; };
+    }, [url]);
+    if (!src) return <div className="ech-post-qr-loading"><Loader size={28} className="spin" color="#8C6BD8" /></div>;
+    return <img src={src} alt="" className="ech-post-qr-img" width={220} height={220} />;
+  }
+
+  function AboutAccountModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const user = payload?.userId ? getAuthor(state, payload.userId) : null;
+    if (!user) return null;
+    const score = user.score ?? 3.5;
+    const tier = getTier(score);
+    const postCount = buildFeed(state).filter((p) => p.author === user.id).length;
+
+    return (
+      <Sheet dismissable className="ech-about-sheet">
+        <h3 style={{ margin: "0 0 12px", color: "#5A4A60" }}>{tr("aboutAccount.title")}</h3>
+        <div className="ech-about-head">
+          <Avatar c={user} size={64} ring showScore={false} />
+          <div>
+            <b style={{ fontSize: 16, color: "#5A4A60" }}>{user.handle?.replace(/^@/, "") || user.name}</b>
+            <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>{user.name}</p>
+            <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>{tr("postOptions.aboutSub")}</p>
+          </div>
+        </div>
+        {user.bio && <p className="ech-about-bio">{user.bio}</p>}
+        <div className="ech-about-stats">
+          <div><b>{postCount}</b><span>{tr("aboutAccount.posts")}</span></div>
+          <div><b>{score.toFixed(2)}</b><span>{tr("aboutAccount.score")}</span></div>
+          <div><b>{tier.label}</b><span>{tr("aboutAccount.tier")}</span></div>
+        </div>
+        <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>{tr("aboutAccount.memberSince", { year: new Date().getFullYear() })}</p>
+        <button type="button" className="btn primary" style={{ width: "100%", marginTop: 14 }} onClick={() => { dispatch({ type: "CLOSE_MODAL" }); openUserProfile(dispatch, user.id); }}>
+          {tr("postOptions.viewProfile")}
+        </button>
+      </Sheet>
+    );
+  }
+
+  function PostOptionsModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const postId = payload?.postId;
+    const post = buildFeed(state).find((p) => p.id === postId);
+    if (!post) return null;
+    const author = getAuthor(state, post.author);
+    const isOwner = isPostOwner(state, post);
+    const saved = loadFeedIx().saved?.includes?.(postId);
+    const shareUrl = postDeepLink(postId);
+
+    const closeThen = (fn) => {
+      sfx.tap();
+      dispatch({ type: "CLOSE_MODAL" });
+      if (fn) fn();
+    };
+
+    const toggleSave = () => {
+      const ix = loadFeedIx();
+      const set = new Set(ix.saved || []);
+      const wasSaved = set.has(postId);
+      if (wasSaved) set.delete(postId); else set.add(postId);
+      saveFeedIx({ saved: [...set] });
+      dispatch({ type: "SET_APP_TOAST", message: tr(wasSaved ? "feed.unsaved" : "feed.saved") });
+      if (!wasSaved) dispatch({ type: "SAVE_TO_COLLECTION", collectionId: "col_all", postId });
+    };
+
+    const deleteOwnPost = () => {
+      sfx.tap();
+      if (!window.confirm(tr("postOptions.deleteConfirm"))) return;
+      dispatch({ type: "DELETE_FEED_POST", postId });
+      dispatch({ type: "SET_APP_TOAST", message: tr("postOptions.deleted") });
+      if (state.liveData) api.deletePost(postId).catch(() => {});
+    };
+
+    const listActions = isOwner
+      ? [
+          { id: "delete", icon: Trash2, label: tr("postOptions.delete"), danger: true, run: deleteOwnPost },
+        ]
+      : [
+          { id: "about", icon: UserRound, label: tr("postOptions.about"), run: () => dispatch({ type: "OPEN_MODAL", modal: "aboutaccount", payload: { userId: author.id } }) },
+          { id: "why", icon: Info, label: tr("postOptions.why"), run: () => dispatch({ type: "OPEN_MODAL", modal: "whypost", payload: { postId } }) },
+          { id: "interested", icon: Eye, label: tr("postOptions.interested"), run: () => {
+            const extras = recordPostAnalytics(postId, "interested");
+            dispatch({ type: "SYNC_IG_EXTRAS", extras });
+            dispatch({ type: "SET_APP_TOAST", message: tr("postOptions.interestedDone") });
+          }},
+          { id: "notinterested", icon: EyeOff, label: tr("postOptions.notInterested"), run: () => {
+            recordPostAnalytics(postId, "not_interested");
+            dispatch({ type: "HIDE_POST", postId });
+            dispatch({ type: "SET_APP_TOAST", message: tr("postOptions.notInterestedDone") });
+          }},
+          { id: "report", icon: AlertCircle, label: tr("postOptions.report"), danger: true, run: () => dispatch({ type: "OPEN_MODAL", modal: "reportpost", payload: { postId } }) },
+        ];
+
+    if (payload?.qr) {
+      return createPortal(
+        <div className="ech-post-options-backdrop ech-post-options-backdrop--center" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+          <div className="ech-post-qr-card" onClick={(e) => e.stopPropagation()}>
+            <span className="wordmark sm ech-feed-wordmark">echelon</span>
+            <h3>{tr("postOptions.qrTitle")}</h3>
+            <PostQrCanvas url={shareUrl} />
+            <p className="ech-post-qr-handle">{author.handle || `@${author.name.split(" ")[0].toLowerCase()}`}</p>
+            <p className="ech-post-qr-url">{shareUrl.replace(/^https?:\/\//, "")}</p>
+            <p className="muted" style={{ fontSize: 12, lineHeight: 1.45, margin: "0 0 14px" }}>{tr("postOptions.qrHint")}</p>
+            <button type="button" className="ech-post-options-close" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("legal.close")}</button>
+          </div>
+        </div>,
+        document.body
+      );
+    }
+
+    return createPortal(
+      <div className="ech-post-options-backdrop" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="ech-post-options-sheet ech-post-options-sheet--compact" onClick={(e) => e.stopPropagation()}>
+          <div className="ech-post-options-grab" />
+          <div className="ech-post-options-quick">
+            <button type="button" className={"ech-post-options-qbtn" + (saved ? " on" : "")} onClick={() => { sfx.tap(); toggleSave(); }}>
+              <Bookmark size={18} strokeWidth={1.75} fill={saved ? "#8C6BD8" : "none"} />
+              <span>{tr("postOptions.save")}</span>
+            </button>
+            <button type="button" className="ech-post-options-qbtn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "postoptions", payload: { postId, qr: true } }); }}>
+              <QrCode size={18} strokeWidth={1.75} />
+              <span>{tr("postOptions.qr")}</span>
+            </button>
+            <button type="button" className="ech-post-options-qbtn" onClick={() => closeThen(() => dispatch({ type: "OPEN_MODAL", modal: "algorithm" }))}>
+              <SlidersHorizontal size={18} strokeWidth={1.75} />
+              <span>{tr("postOptions.prefsShort")}</span>
+            </button>
+          </div>
+          <ul className="ech-post-options-list ech-post-options-list--compact">
+            {listActions.map(({ id, icon: Icon, label, danger, run: action }) => (
+              <li key={id}>
+                <button type="button" className={"ech-post-options-item" + (danger ? " danger" : "")} aria-label={label} onClick={() => closeThen(action)}>
+                  <Icon size={16} strokeWidth={1.75} />
+                  <span>{label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  function WhyPostModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const post = buildFeed(state).find((p) => p.id === payload?.postId);
+    const author = post ? getAuthor(state, post.author) : null;
+    const topics = (state.igExtras?.algorithmTopics || defaultAlgorithmTopics()).filter(Boolean).join(", ");
+    return (
+      <Sheet dismissable className="why-post-sheet">
+        <h3 style={{ margin: "0 0 8px", color: "#262626" }}>{tr("postOptions.why")}</h3>
+        <p className="muted" style={{ fontSize: 13, lineHeight: 1.45, marginBottom: 12 }}>{tr("postOptions.whyBody", { topics: topics || tr("algorithm.ph") })}</p>
+        {author && <p style={{ fontSize: 13 }}><b>{author.name}</b> · {tr("postOptions.whyAuthor")}</p>}
+        <button type="button" className="btn primary" style={{ width: "100%", marginTop: 14 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("legal.close")}</button>
+      </Sheet>
+    );
+  }
+
+  function ReportPostModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const reasons = [tr("postOptions.reportSpam"), tr("postOptions.reportHarass"), tr("postOptions.reportFalse"), tr("postOptions.reportOther")];
+    const submit = (reason) => {
+      sfx.tap();
+      recordPostAnalytics(payload?.postId, "report");
+      dispatch({ type: "HIDE_POST", postId: payload?.postId });
+      dispatch({ type: "SET_APP_TOAST", message: tr("postOptions.reportDone") });
+      dispatch({ type: "CLOSE_MODAL" });
+    };
+    return (
+      <Sheet dismissable>
+        <h3 style={{ margin: "0 0 10px", color: "#262626" }}>{tr("postOptions.report")}</h3>
+        <div className="post-options-list" style={{ margin: 0 }}>
+          {reasons.map((label) => (
+            <button key={label} type="button" className="post-options-row danger" onClick={() => submit(label)}>
+              <AlertCircle size={18} />
+              <span>{label}</span>
+            </button>
+          ))}
+        </div>
+      </Sheet>
+    );
+  }
+
+  function DiscoverPartiesPanel() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { effective } = useDerived(state, now);
+    const [range, setRange] = useState(25);
+    const [sort, setSort] = useState("near");
+    const [search, setSearch] = useState("");
+    const [debouncedQ, setDebouncedQ] = useState("");
+    const [busy, setBusy] = useState(false);
+    const canHost = canHostParties(state, effective);
+
+    useEffect(() => {
+      const t = setTimeout(() => setDebouncedQ(search.trim()), 280);
+      return () => clearTimeout(t);
+    }, [search]);
+
+    const loadParties = () => {
+      if (!state.liveData) return;
+      setBusy(true);
+      api.gatherings({ q: debouncedQ, sort, kind: "party", maxMiles: range }).then((list) => {
+        dispatch({ type: "SYNC_GATHERINGS", gatherings: list || [] });
+      }).catch(() => {}).finally(() => setBusy(false));
+    };
+
+    useEffect(() => {
+      if (state.screen === "explore") loadParties();
+    }, [state.screen, state.liveData, debouncedQ, sort, range]);
+
+    let list = (state.gatherings || []).filter((e) => e.kind === "party" && e.miles <= range);
+    list = [...list].sort((a, b) => {
+      if (sort === "rank" || sort === "rating") return b.req - a.req || a.miles - b.miles;
+      if (sort === "name") return a.name.localeCompare(b.name);
+      if (sort === "newest") return (b.ts || 0) - (a.ts || 0);
+      return a.miles - b.miles || b.req - a.req;
+    });
+
+    const tryRsvp = async (ev) => {
+      if (effective < ev.req) {
+        sfx.lock();
+        dispatch({
+          type: "OPEN_MODAL",
+          modal: "lock",
+          payload: { feature: { label: ev.name, req: ev.req, icon: Ticket, copy: `${tr("parties.minScore")} ${ev.req.toFixed(1)} · ${tr("parties.yourScore")} ${effective.toFixed(2)}.` } },
+        });
+        return;
+      }
+      try {
+        if (state.liveData) await api.rsvp(ev.id);
+        dispatch({ type: "RSVP", id: ev.id });
+        dispatch({ type: "OPEN_MODAL", modal: "party", payload: { id: ev.id, ev: { ...ev, hasRsvp: true } } });
+        sfx.success();
+        loadParties();
+      } catch {
+        sfx.penalty();
+      }
+    };
+
+    return (
+      <div className="ech-parties-panel">
+        {!state.liveData && (
+          <div className="ech-parties-note"><Info size={16} color="#B79CF0" /><span>{tr("parties.liveOnly")}</span></div>
+        )}
+        <div className="ech-parties-toolbar">
+          <div className="ech-parties-search">
+            <Search size={16} color="#8C6BD8" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={tr("parties.searchPlaceholder")} disabled={!state.liveData} />
+            {busy && <Loader size={16} className="spin" color="#C9A0DC" />}
+          </div>
+          {canHost ? (
+            <button type="button" className="ech-parties-host" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "createparty" }); }}>
+              <Plus size={16} /> {tr("parties.createParty")}
+            </button>
+          ) : (
+            <p className="muted ech-parties-gate">{tr("parties.hostGate")}</p>
+          )}
+        </div>
+        {state.liveData && (
+          <div className="ech-parties-filters">
+            <div className="ech-parties-range-head">
+              <b>{tr("parties.withinMi", { range })}</b>
+              <span className="muted">{list.length} {tr("parties.found")}</span>
+            </div>
+            <input className="range" type="range" min={1} max={50} value={range} onChange={(e) => setRange(+e.target.value)} />
+            <div className="ech-parties-sort">
+              <button type="button" className={sort === "near" ? "on" : ""} onClick={() => { setSort("near"); sfx.tap(); }}><MapPin size={12} /> {tr("parties.sortNear")}</button>
+              <button type="button" className={sort === "rank" ? "on" : ""} onClick={() => { setSort("rank"); sfx.tap(); }}><Crown size={12} /> {tr("parties.sortRating")}</button>
+              <button type="button" className={sort === "newest" ? "on" : ""} onClick={() => { setSort("newest"); sfx.tap(); }}><Clock size={12} /> {tr("parties.sortNew")}</button>
+            </div>
+          </div>
+        )}
+        {state.liveData && list.length === 0 && (
+          <p className="ech-discover-empty">{tr("parties.empty")}</p>
+        )}
+        <div className="ech-parties-list">
+          {list.map((ev) => {
+            const open = effective >= ev.req;
+            const going = state.rsvps.includes(ev.id) || ev.hasRsvp;
+            const locLabel = ev.secretAddress && !going && !ev.isHost
+              ? `${formatCityLabel(ev.city, ev.countryCode) || ev.venue} · ${tr("parties.secretLoc")}`
+              : ev.venue;
+            const bannerSrc = ev.bannerUrl ? mediaUrl(ev.bannerUrl) : null;
+            return (
+              <button
+                key={ev.id}
+                type="button"
+                className="ech-party-card"
+                style={{ filter: open ? "none" : "saturate(.65)" }}
+                onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "party", payload: { id: ev.id, ev } }); }}
+              >
+                <div className="ech-party-banner" style={bannerSrc ? { backgroundImage: `url(${bannerSrc})` } : { background: grad(ev.scene) }}>
+                  {!bannerSrc && <span>{ev.emoji || "🎉"}</span>}
+                  <span className="ech-party-dist"><MapPin size={10} /> {ev.miles.toFixed(1)} mi</span>
+                  {open
+                    ? <span className="ech-party-req"><Check size={10} /> {ev.req.toFixed(1)}+</span>
+                    : <span className="ech-party-req lock"><Lock size={10} /> {ev.req.toFixed(1)}+</span>}
+                </div>
+                <div className="ech-party-meta">
+                  <div>
+                    <b>{ev.name}</b>
+                    <p className="muted">{locLabel} · {ev.when}</p>
+                  </div>
+                  {going ? (
+                    <span className="badge-ok"><Check size={12} /> {tr("parties.going")}</span>
+                  ) : open ? (
+                    <span className="ratebtn" onClick={(e) => { e.stopPropagation(); tryRsvp(ev); }}><Ticket size={12} /> RSVP</span>
+                  ) : (
+                    <Lock size={14} color="#C9B8C6" />
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  function ExploreScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const [q, setQ] = useState("");
+    const [discoverPane, setDiscoverPane] = useState("grid");
+    const posts = useMemo(() => filterExploreQuery(globalExplorePosts(state, now), q, state), [state, now, q]);
+    const users = useMemo(() => exploreSearchUsers(state, q), [state, q]);
+    const hasQuery = !!(q || "").trim();
+    const ratedScores = useMemo(() => loadFeedIx().ratedPostScores || {}, [state.ratedPosts]);
+
+    return (
+      <div className="ech-discover-screen">
+        <header className="ech-discover-head">
+          <div className="ech-discover-title">
+            <h1>{tr("explore.title")}</h1>
+            <p>{discoverPane === "parties" ? tr("parties.title") : tr("explore.forYou24h")}</p>
+          </div>
+          <IgTopChrome compact />
+        </header>
+        <div className="ech-discover-tabs">
+          <button type="button" className={discoverPane === "grid" ? "on" : ""} onClick={() => { sfx.tap(); setDiscoverPane("grid"); }}>
+            <Compass size={15} /> <span>{tr("explore.tabGrid")}</span>
+          </button>
+          <button type="button" className={discoverPane === "parties" ? "on" : ""} onClick={() => { sfx.tap(); setDiscoverPane("parties"); }}>
+            <Ticket size={15} /> <span>{tr("explore.tabParties")}</span>
+          </button>
+        </div>
+        {discoverPane === "grid" && (
+          <div className="ech-discover-search">
+            <Search size={16} color="#8C6BD8" />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("explore.searchAll")} />
+            {q && <button type="button" className="ech-discover-clear" onClick={() => setQ("")}><X size={16} /></button>}
+          </div>
+        )}
+        <Scroll className="ech-discover-scroll">
+          {discoverPane === "parties" ? (
+            <DiscoverPartiesPanel />
+          ) : (
+            <>
+              {hasQuery && users.length > 0 && (
+                <section className="ech-discover-users">
+                  <h3>{tr("explore.users")}</h3>
+                  <ul>
+                    {users.map((u) => (
+                      <li key={u.id}>
+                        <button type="button" className="ech-discover-user-card" onClick={() => openUserProfile(dispatch, u.id)}>
+                          <Avatar c={u} size={44} showScore={false} />
+                          <div>
+                            <b>{u.handle?.replace(/^@/, "") || u.name.split(" ")[0]}</b>
+                            <span>{u.name}</span>
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {posts.length === 0 && (!hasQuery || users.length === 0) ? (
+                <p className="ech-discover-empty">{tr("explore.empty")}</p>
+              ) : posts.length > 0 ? (
+                <div className="ech-discover-masonry">
+                  {posts.map((p) => {
+                    const myStars = ratedScores[p.id];
+                    const ratedByMe = myStars != null && myStars >= 1;
+                    const showScore = ratedByMe || (p.avgRating ?? 0) > 0;
+                    const scoreVal = ratedByMe ? Number(myStars).toFixed(1) : Number(p.avgRating).toFixed(1);
+                    const kind = discoverPostKind(p);
+                    const TypeIcon = kind === "reel" ? SquarePlay : kind === "album" ? LayoutGrid : kind === "video" ? Video : ImageIcon;
+                    const views = postViewCount(p);
+                    const isMe = isPostOwner(state, p);
+                    return (
+                      <button key={p.id} type="button" className="ech-discover-tile" onClick={() => openPostViewer(dispatch, p.id, { fromExplore: true })}>
+                        {p.mediaType === "video" || isReelPost(p) ? (
+                          <video src={mediaUrl(p.mediaUrl)} muted playsInline />
+                        ) : (
+                          <img src={mediaUrl(p.mediaUrl)} alt="" />
+                        )}
+                        {isMe && (
+                          <button type="button" className="post-tile-delete" aria-label={tr("postOptions.delete")} onClick={(e) => { e.stopPropagation(); quickDeletePost(state, dispatch, p, tr); }}>
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                        <span className="ech-discover-type" aria-hidden>
+                          <TypeIcon size={12} strokeWidth={2} />
+                        </span>
+                        {showScore && <MediaAvgRatingBadge avgRating={ratedByMe ? myStars : p.avgRating} className="ech-media-avg-rating--corner" />}
+                        <div className="ech-discover-meta">
+                          {showScore && (
+                            <span className={"ech-discover-meta-score" + (ratedByMe ? " mine" : "")}>
+                              <Star size={9} fill={ratedByMe ? "#FF7EB3" : "#FFD56B"} color={ratedByMe ? "#E05A8A" : "#E8B84A"} /> {scoreVal}
+                            </span>
+                          )}
+                          <span className="ech-discover-meta-item"><Clock size={9} /> {formatPostAge(p.ts, now)}</span>
+                          <span className="ech-discover-meta-item"><Eye size={9} /> {formatEngagementCount(views)}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </>
+          )}
+        </Scroll>
+      </div>
+    );
+  }
+
+  function ExploreModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [q, setQ] = useState("");
+    const tab = state.exploreTab || "posts";
+    const grid = buildExploreGrid(state.feedPosts, Object.values(byId), Date.now());
+
+    return (
+      <Sheet dismissable className="explore-sheet">
+        <h3 style={{ margin: "0 0 8px", color: "#262626" }}>{tr("explore.title")}</h3>
+        <div className="searchbar searchbar-page" style={{ marginBottom: 10 }}>
+          <Search size={16} color="#8E8E8E" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("explore.searchPh")} />
+        </div>
+        <div className="explore-tabs">
+          {[["posts", tr("explore.posts")], ["reels", tr("explore.reels")], ["accounts", tr("explore.accounts")]].map(([id, label]) => (
+            <button key={id} type="button" className={tab === id ? "on" : ""} onClick={() => dispatch({ type: "SET_EXPLORE_TAB", tab: id })}>{label}</button>
+          ))}
+        </div>
+        {tab === "accounts" ? (
+          <div className="explore-accounts">
+            {grid.suggested.filter((u) => !q || u.name.toLowerCase().includes(q.toLowerCase())).map((u) => (
+              <button key={u.id} type="button" className="explore-account-row" onClick={() => { dispatch({ type: "CLOSE_MODAL" }); openUserProfile(dispatch, u.id); }}>
+                <Avatar c={u} size={40} showScore={false} />
+                <span>{u.name}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="explore-grid">
+            {(tab === "reels" ? grid.reels : grid.trending).map((p) => (
+              <button key={p.id} type="button" className="explore-tile" onClick={() => { dispatch({ type: "CLOSE_MODAL" }); openPostViewer(dispatch, p.id); }}>
+                {p.mediaType === "video" ? <video src={mediaUrl(p.mediaUrl)} muted playsInline /> : <img src={mediaUrl(p.mediaUrl)} alt="" />}
+              </button>
+            ))}
+          </div>
+        )}
+      </Sheet>
+    );
+  }
+
+  function CloseFriendsModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const close = new Set(state.igExtras?.closeFriends || []);
+    const friends = state.friends.map((id) => byId[id]).filter(Boolean);
+
+    return (
+      <Sheet dismissable>
+        <h3 style={{ margin: "0 0 8px", color: "#262626" }}>{tr("feed.storyCloseFriends")}</h3>
+        <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>{tr("closeFriends.sub")}</p>
+        {friends.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            className={"close-friend-row" + (close.has(f.id) ? " on" : "")}
+            onClick={() => {
+              const next = new Set(close);
+              if (next.has(f.id)) next.delete(f.id); else next.add(f.id);
+              dispatch({ type: "SET_CLOSE_FRIENDS", ids: [...next] });
+            }}
+          >
+            <Avatar c={f} size={36} showScore={false} />
+            <span>{f.name}</span>
+            {close.has(f.id) && <Check size={16} />}
+          </button>
+        ))}
+      </Sheet>
+    );
+  }
+
+  function AccountSwitcherMenu({ open, onClose, anchorRef }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [busy, setBusy] = useState(false);
+    const accounts = loadSavedAccounts();
+    const currentId = state.user.id || ME_ID;
+
+    const switchTo = async (acct) => {
+      if (!acct?.token || acct.id === currentId) { onClose(); return; }
+      setBusy(true);
+      sfx.tap();
+      try {
+        setToken(acct.token);
+        const data = await tryBootstrap();
+        if (data) dispatch({ type: "HYDRATE", payload: data });
+        sfx.success();
+      } catch {
+        sfx.penalty();
+      } finally {
+        setBusy(false);
+        onClose();
+      }
+    };
+
+    if (!open) return null;
+
+    return createPortal(
+      <div className="acct-switch-backdrop" onClick={onClose}>
+        <div
+          className="acct-switch-menu"
+          style={anchorRef?.current ? { top: anchorRef.current.getBoundingClientRect().bottom + 6 } : undefined}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {accounts.map((acct) => (
+            <button key={acct.id} type="button" className={"acct-switch-row" + (acct.id === currentId ? " on" : "")} disabled={busy} onClick={() => switchTo(acct)}>
+              <Avatar c={{ name: acct.name, id: acct.id, emoji: acct.emoji, color: acct.color, avatarUrl: acct.avatarUrl }} size={36} showScore={false} ring={false} />
+              <span className="acct-switch-meta">
+                <b>{acct.handle?.replace(/^@/, "") || acct.name}</b>
+                <small>{acct.name}</small>
+              </span>
+              {acct.id === currentId && <Check size={18} />}
+            </button>
+          ))}
+          <button type="button" className="acct-switch-add" disabled={busy} onClick={() => { sfx.tap(); onClose(); dispatch({ type: "OPEN_MODAL", modal: "addaccount" }); }}>
+            <PlusCircle size={20} />
+            {tr("accounts.add")}
+          </button>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  function AlgorithmDashboardModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const saved = algorithmPrefsFromState(state);
+    const [draft, setDraft] = useState({ ...saved });
+
+    const toggleInterest = (id) => {
+      sfx.tap();
+      setDraft((d) => {
+        const set = new Set(d.interests || []);
+        if (set.has(id)) set.delete(id); else if (set.size < 5) set.add(id);
+        return { ...d, interests: [...set] };
+      });
+    };
+
+    const toggleMute = (id) => {
+      sfx.tap();
+      setDraft((d) => {
+        const set = new Set(d.muteTopics || []);
+        if (set.has(id)) set.delete(id); else set.add(id);
+        return { ...d, muteTopics: [...set] };
+      });
+    };
+
+    const save = () => {
+      sfx.success();
+      dispatch({ type: "SET_ALGORITHM_PREFS", prefs: draft });
+      dispatch({ type: "SET_APP_TOAST", message: tr("algorithm.saved") });
+      dispatch({ type: "CLOSE_MODAL" });
+    };
+
+    return (
+      <Sheet dismissable className="ech-algorithm-sheet">
+        <header className="ech-screen-head">
+          <div className="ech-screen-head-main">
+            <SlidersHorizontal size={18} color="#8C6BD8" strokeWidth={2} />
+            <div className="ech-screen-head-titles">
+              <h1>{tr("algorithm.title")}</h1>
+              <p>{tr("algorithm.sub")}</p>
+            </div>
+          </div>
+        </header>
+
+        <section className="ech-algo-section">
+          <h4 className="ech-kicker">{tr("algorithm.signals")}</h4>
+          <div className="ech-algo-toggles">
+            {[
+              ["boostRated", tr("algorithm.boostRated")],
+              ["boostFollowing", tr("algorithm.boostFollowing")],
+              ["boostFresh", tr("algorithm.boostFresh")],
+            ].map(([key, label]) => (
+              <button key={key} type="button" className={"ech-algo-toggle" + (draft[key] ? " on" : "")} onClick={() => { sfx.tap(); setDraft((d) => ({ ...d, [key]: !d[key] })); }}>
+                <span>{label}</span>
+                <em className={draft[key] ? "on" : ""} />
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="ech-algo-section">
+          <h4 className="ech-kicker">{tr("algorithm.mix")}</h4>
+          <div className="ech-feed-segments ech-algo-mix">
+            {["posts", "balanced", "reels"].map((id) => (
+              <button key={id} type="button" className={"ech-feed-segment" + (draft.mix === id ? " on" : "")} onClick={() => { sfx.tap(); setDraft((d) => ({ ...d, mix: id })); }}>
+                <span>{tr("algorithm.mix_" + id)}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="ech-algo-section">
+          <h4 className="ech-kicker">{tr("algorithm.interests")}</h4>
+          <div className="ech-algo-chips">
+            {ALGORITHM_INTERESTS.map((id) => (
+              <button key={id} type="button" className={"ech-algo-chip" + ((draft.interests || []).includes(id) ? " on" : "")} onClick={() => toggleInterest(id)}>
+                {tr("algorithm.tag." + id)}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="ech-algo-section">
+          <h4 className="ech-kicker">{tr("algorithm.showLess")}</h4>
+          <div className="ech-algo-chips">
+            {ALGORITHM_MUTE.map((id) => (
+              <button key={id} type="button" className={"ech-algo-chip ech-algo-chip--mute" + ((draft.muteTopics || []).includes(id) ? " on" : "")} onClick={() => toggleMute(id)}>
+                {tr("algorithm.mute." + id)}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <button type="button" className="ech-algo-save" onClick={save}>{tr("algorithm.save")}</button>
+      </Sheet>
+    );
+  }
+
+  function IgFeaturesModal() {
+    const { dispatch } = useStore();
+    const tr = useT();
+    const go = (screen, modal) => {
+      sfx.tap();
+      dispatch({ type: "CLOSE_MODAL" });
+      if (screen) dispatch({ type: "SCREEN", screen });
+      if (modal?.type) dispatch({ type: "OPEN_MODAL", modal: modal.type, payload: modal.payload });
+    };
+    const open = (modal, payload) => go(null, { type: modal, payload });
+    const sections = [
+      {
+        title: tr("igf.profile"),
+        items: [
+          { label: tr("igf.grid"), run: () => go("profile") },
+          { label: tr("profile.editTitle"), run: () => open("profileedit") },
+          { label: tr("igf.highlights"), run: () => go("profile") },
+          { label: tr("igf.notes"), run: () => go("messages") },
+        ],
+      },
+      {
+        title: tr("igf.feed"),
+        items: [
+          { label: tr("igf.posts"), run: () => go("feed") },
+          { label: tr("igf.carousel"), run: () => open("mediapick", { mode: "post", cameraOnly: true, carousel: true }) },
+          { label: tr("igf.reels"), run: () => open("mediapick", { mode: "reel", cameraOnly: true }) },
+          { label: tr("igf.collab"), run: () => open("mediapick", { mode: "post", cameraOnly: true, collab: true }) },
+          { label: tr("igf.pinned"), run: () => go("profile") },
+          { label: tr("igf.saved"), run: () => { dispatch({ type: "SET_FEED_FILTER", filter: "favorites" }); go("feed"); } },
+          { label: tr("collections.title"), run: () => open("collections", { postId: null }) },
+        ],
+      },
+      {
+        title: tr("igf.stories"),
+        items: [
+          { label: tr("igf.stories"), run: () => open("mediapick", { mode: "story", gallery: true }) },
+          { label: tr("igf.storyStickers"), run: () => open("mediapick", { mode: "story", gallery: true }) },
+          { label: tr("igf.closeFriends"), run: () => open("closefriends") },
+          { label: tr("igf.live"), run: () => open("mediapick", { mode: "live", cameraOnly: true }) },
+        ],
+      },
+      {
+        title: tr("igf.discovery"),
+        items: [
+          { label: tr("igf.explore"), run: () => go("explore") },
+          { label: tr("algorithm.title"), run: () => open("algorithm") },
+          { label: tr("igf.friendsMap"), run: () => go("lens") },
+          { label: tr("igf.search"), run: () => go("spark") },
+        ],
+      },
+      {
+        title: tr("igf.messaging"),
+        items: [
+          { label: tr("igf.dms"), run: () => go("messages") },
+          { label: tr("igf.notes"), run: () => go("messages") },
+          { label: tr("igf.instants"), run: () => open("mediapick", { mode: "instant", cameraOnly: true }) },
+          { label: tr("igf.broadcast"), run: () => open("broadcast") },
+          { label: tr("igf.vanish"), run: () => go("messages") },
+        ],
+      },
+      {
+        title: tr("igf.social"),
+        items: [
+          { label: tr("igf.follow"), run: () => go("friends") },
+          { label: tr("igf.mentions"), run: () => open("mediapick", { mode: "post", cameraOnly: true }) },
+          { label: tr("igf.collab"), run: () => open("mediapick", { mode: "post", cameraOnly: true }) },
+        ],
+      },
+      {
+        title: tr("igf.creator"),
+        items: [
+          { label: tr("creator.title"), run: () => open("creatordash") },
+          { label: tr("insights.postTitle"), run: () => open("insights", { range: "30d", type: "all" }) },
+          { label: tr("igf.trialReels"), run: () => open("mediapick", { mode: "reel", trial: true }) },
+          { label: tr("igf.earlyAccess"), run: () => open("mediapick", { mode: "reel", earlyAccess: true }) },
+          { label: tr("igf.subscriptions"), run: () => open("creatordash") },
+          { label: tr("igf.leadForms"), run: () => open("profileedit") },
+          { label: tr("igf.shopping"), run: () => open("mediapick", { mode: "post" }) },
+          { label: tr("igf.audio"), run: () => open("explore") },
+        ],
+      },
+      {
+        title: tr("igf.privacy"),
+        items: [
+          { label: tr("igf.private"), run: () => open("privacytools") },
+          { label: tr("igf.closeFriends"), run: () => open("closefriends") },
+          { label: tr("igf.restrict"), run: () => open("privacytools") },
+          { label: tr("igf.hiddenWords"), run: () => open("privacytools") },
+          { label: tr("profile.aiLabel"), run: () => open("profileedit") },
+        ],
+      },
+    ];
+    return (
+      <Sheet dismissable className="ig-features-sheet">
+        <h3 className="ig-features-title">{tr("igf.title")}</h3>
+        <p className="muted ig-features-sub">{tr("igf.sub")}</p>
+        <div className="ig-features-scroll">
+          {sections.map((sec) => (
+            <section key={sec.title} className="ig-features-section">
+              <h4>{sec.title}</h4>
+              <div className="ig-features-grid">
+                {sec.items.map((item) => (
+                  <button key={item.label} type="button" className="ig-features-chip" onClick={item.run}>{item.label}</button>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </Sheet>
+    );
+  }
+
+  function AddAccountModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+
+    const addWithProvider = async (provider) => {
+      setBusy(true);
+      setErr("");
+      sfx.tap();
+      try {
+        let token;
+        let user;
+        if (provider === "google") {
+          const cfg = await fetchAuthConfig();
+          if (!cfg?.clientId) throw new Error(tr("accounts.googleUnavailable"));
+          initGoogleAuth(cfg.clientId);
+          const credential = await signInWithGmail();
+          const res = await api.authGoogle(credential);
+          token = res.token;
+          user = res.user;
+        } else if (provider === "apple") {
+          const appleCfg = await fetchAppleConfig();
+          if (!appleCfg?.clientId) throw new Error(tr("accounts.appleUnavailable"));
+          await initAppleAuth({ clientId: appleCfg.clientId, redirectUri: appleCfg.appleRedirectUri });
+          const apple = await signInWithApple();
+          const res = await api.authApple({ idToken: apple.idToken, name: apple.name, email: apple.email });
+          token = res.token;
+          user = res.user;
+        }
+        if (token) {
+          setToken(token);
+          persistAccountSnapshot(user, token);
+          const data = user?.onboarded ? await api.bootstrap() : null;
+          if (data) dispatch({ type: "HYDRATE", payload: data });
+          else dispatch({ type: "HYDRATE", payload: { user, contacts: [], gatherings: [], feed: [], friends: [], rsvps: [], history: [], notifications: [], settings: {} } });
+          dispatch({ type: "CLOSE_MODAL" });
+          sfx.success();
+        }
+      } catch (e) {
+        setErr(e?.message || tr("accounts.error"));
+        sfx.penalty();
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    return (
+      <Sheet dismissable={!busy}>
+        <h3 style={{ margin: "0 0 8px", textAlign: "center", color: "#262626", fontFamily: "-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif" }}>{tr("accounts.addTitle")}</h3>
+        <p className="muted" style={{ textAlign: "center", fontSize: 13, marginBottom: 14 }}>{tr("accounts.addSub")}</p>
+        {err && <p style={{ color: "#B07E7E", fontSize: 12, textAlign: "center" }}>{err}</p>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <button type="button" className="btn soft" disabled={busy} onClick={() => addWithProvider("google")}>
+            <GmailGlyph size={16} /> {tr("accounts.continueGoogle")}
+          </button>
+          <button type="button" className="btn" style={{ background: "#111", color: "#fff" }} disabled={busy} onClick={() => addWithProvider("apple")}>
+            <AppleGlyph size={16} /> {tr("accounts.continueApple")}
+          </button>
+          <button type="button" className="btn soft" disabled={busy} onClick={() => { dispatch({ type: "CLOSE_MODAL" }); dispatch({ type: "LOGOUT" }); }}>
+            {tr("accounts.createNew")}
+          </button>
+        </div>
+      </Sheet>
+    );
+  }
+
+  // ---- ALERTS / NOTIFICATIONS ----------------------------------------------- //
+  function AlertsScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [filter, setFilter] = useState("all");
+    const [acctOpen, setAcctOpen] = useState(false);
+    const acctBtnRef = useRef(null);
+
+    const appeal = (id) => {
+      dispatch({ type: "APPEAL", id });
+      setTimeout(() => {
+        const outcome = Math.random() < 0.12 ? "upheld" : "denied";
+        dispatch({ type: "RESOLVE_APPEAL", id, outcome });
+      }, 3400);
+    };
+
+    const filtered = state.notifs.filter((n) => {
+      if (filter === "follow") return n.kind === "friend_request" || n.kind === "friend_accept" || n.kind === "follow_started" || n.kind === "friend";
+      if (filter === "comments") return n.kind === "comment" || (n.tag || "").toLowerCase().includes("comment");
+      if (filter === "mentions") return n.kind === "mention";
+      return true;
+    });
+
+    const groups = useMemo(() => {
+      const now = Date.now();
+      const today = [];
+      const yesterday = [];
+      const older = [];
+      filtered.forEach((n) => {
+        const age = now - (n.ts || 0);
+        if (age < 86400000) today.push(n);
+        else if (age < 172800000) yesterday.push(n);
+        else older.push(n);
+      });
+      return [
+        { key: "today", label: tr("alerts.today"), items: today },
+        { key: "yesterday", label: tr("alerts.yesterday"), items: yesterday },
+        { key: "older", label: tr("alerts.earlier"), items: older },
+      ].filter((g) => g.items.length);
+    }, [filtered, tr]);
+
+    return (
+      <div className="ech-pulse-screen">
+        <header className="ech-pulse-head">
+          <button type="button" className="ech-pulse-back" aria-label="Back" onClick={() => dispatch({ type: "SCREEN", screen: (state.lastMain && state.lastMain !== "alerts") ? state.lastMain : "feed" })}>
+            <ChevronLeft size={20} />
+          </button>
+          <div className="ech-pulse-title">
+            <Bell size={18} color="#8C6BD8" />
+            <h1>{tr("alerts.pulse")}</h1>
+          </div>
+          <button type="button" className="ech-pulse-acct" ref={acctBtnRef} onClick={() => { sfx.tap(); setAcctOpen((v) => !v); }} aria-label={tr("accounts.add")}>
+            <ChevronDown size={16} />
+          </button>
+        </header>
+        <AccountSwitcherMenu open={acctOpen} onClose={() => setAcctOpen(false)} anchorRef={acctBtnRef} />
+        <div className="ech-pulse-filters">
+          {[
+            ["all", LayoutGrid, tr("alerts.filterAll")],
+            ["follow", UserPlus, tr("alerts.filterFollow")],
+            ["comments", MessageCircle, tr("alerts.filterComments")],
+            ["mentions", AtSign, tr("alerts.filterMentions")],
+          ].map(([id, Icon, label]) => (
+            <button key={id} type="button" className={"ech-pulse-chip" + (filter === id ? " on" : "")} onClick={() => { sfx.tap(); setFilter(id); }}>
+              <Icon size={14} /> <span>{label}</span>
+            </button>
+          ))}
+        </div>
+        <Scroll className="ech-pulse-scroll">
+          {filtered.length === 0 ? (
+            <div className="ech-pulse-empty-wrap">
+              <p className="ech-pulse-empty">{tr("alerts.empty")}</p>
+            </div>
+          ) : (
+            groups.map((group) => (
+              <section key={group.key} className="ech-pulse-group">
+                <h3>{group.label}</h3>
+                <ul className="ech-pulse-list">
+                  {group.items.map((n) => {
+                    const peer = notifPeer(n);
+                    const openPeer = () => { if (peer?.id) openUserProfile(dispatch, peer.id); };
+                    return (
+                      <li key={n.id} className="ech-pulse-card">
+                        <div className="ig-notif-row-left">
+                          {peer ? (
+                            <button type="button" className="ig-notif-avatar-btn" onClick={openPeer}>
+                              <Avatar c={peer} size={44} showScore={false} ring={!!n.stars} />
+                            </button>
+                          ) : (
+                            <span className="ig-notif-row-icon"><Bell size={20} /></span>
+                          )}
+                          <div className="ig-notif-row-text">
+                            <p>
+                              {n.kind === "follow_started" && peer ? (
+                                <>{tr("alerts.followedYou", { name: peer.name.split(" ")[0] })}</>
+                              ) : n.kind === "friend_accept" && peer ? (
+                                <>{tr("alerts.friendAccept", { name: peer.name.split(" ")[0] })}</>
+                              ) : n.kind === "friend_request" && peer ? (
+                                <>{tr("alerts.followRequest", { name: peer.name.split(" ")[0] })}</>
+                              ) : n.kind === "mention" ? (
+                                <button type="button" className="ig-notif-mention-link" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "mentionsviewer", payload: { mentionId: n.mentionId } }); }}>
+                                  {n.title || tr("alerts.mentionedYou", { name: peer?.name?.split(" ")[0] || "" })}
+                                </button>
+                              ) : n.stars ? (
+                                <>{peer && <button type="button" className="ig-notif-name-link" onClick={openPeer}><b>{peer.name.split(" ")[0]}</b></button>}{" rated you "}<span className="ig-notif-stars">{"★".repeat(n.stars)}</span></>
+                              ) : (
+                                <>{peer ? <button type="button" className="ig-notif-name-link" onClick={openPeer}><b>{peer.name.split(" ")[0]} </b></button> : null}{n.title || n.body}</>
+                              )}
+                              <span className="ig-notif-age"> · {rel(n.ts)}</span>
+                            </p>
+                            {n.kind === "friend_request" && n.tag && (
+                              <div className="ig-notif-row-actions">
+                                <button type="button" className="ig-notif-btn ig-notif-btn--primary" onClick={() => { sfx.tap(); acceptFriendRequestAction(dispatch, state, n.tag); dispatch({ type: "REMOVE_NOTIF", id: n.id }); }}>
+                                  {tr("friends.followBack")}
+                                </button>
+                              </div>
+                            )}
+                            {n.kind === "follow_started" && peer?.id && !state.friends.includes(peer.id) && (
+                              <div className="ig-notif-row-actions">
+                                {followUiForUser(state, peer.id) === "pending" ? (
+                                  <span className="ig-notif-btn ig-notif-btn--muted">{tr("friends.requestSent")}</span>
+                                ) : (
+                                  <button type="button" className="ig-notif-btn ig-notif-btn--primary" onClick={() => { sfx.tap(); sendFriendRequest(dispatch, state, peer.id); }}>
+                                    {tr("friends.followBack")}
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                            {n.appeal === "none" && (
+                              <button type="button" className="ig-notif-link" onClick={() => appeal(n.id)}>{tr("alerts.appeal")}</button>
+                            )}
+                          </div>
+                        </div>
+                        {n.postThumb && (
+                          <img src={n.postThumb} alt="" className="ig-notif-thumb" />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))
+          )}
+        </Scroll>
+      </div>
+    );
+  }
+
+  // ---- PROFILE -------------------------------------------------------------- //
+  function ProfileMentionsSection({ userId }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const items = mentionsForUser(state.igExtras || loadIgExtras(), userId);
+    if (!items.length) return null;
+    return (
+      <section className="ech-profile-section">
+        <div className="ech-section-head">
+          <h3>{tr("profile.mentions")}</h3>
+          <button type="button" className="ech-section-link" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "mentionsviewer", payload: { userId } }); }}>
+            <span>{tr("profile.mentionsSeeAll", { count: items.length })}</span>
+          </button>
+        </div>
+        <div className="mentions-grid">
+          {items.slice(0, 6).map((m) => (
+            <button key={m.id} type="button" className="mentions-tile" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "mentionsviewer", payload: { userId, mentionId: m.id } }); }}>
+              {m.mediaType === "video"
+                ? <video src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : mediaUrl(m.mediaUrl)} muted playsInline />
+                : <img src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : mediaUrl(m.mediaUrl)} alt="" loading="lazy" />}
+              <span className="mentions-tile-by">@{normalizeHandle(m.authorHandle || "").replace(/^@/, "") || "user"}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  function MentionsViewerModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const userId = payload?.userId || ME_ID;
+    const isSelf = userId === ME_ID || userId === state.user.id;
+    const items = mentionsForUser(state.igExtras || loadIgExtras(), userId);
+    const [focusId, setFocusId] = useState(payload?.mentionId || items[0]?.id || null);
+    const focus = items.find((m) => m.id === focusId) || items[0];
+
+    const openMedia = (m) => {
+      if (!m) return;
+      const post = buildFeed(state).find((p) => p.id === m.postId);
+      if (post) {
+        dispatch({ type: "OPEN_MODAL", modal: "postviewer", payload: { postId: post.id } });
+        return;
+      }
+      if (m.contentType === "story") {
+        const story = (state.stories || []).find((s) => s.items?.some((it) => m.postId?.includes(it.id) || m.postId?.includes(s.id)));
+        if (story) {
+          dispatch({ type: "OPEN_MODAL", modal: "story", payload: { authorId: story.author, queue: buildStoryQueue(state.stories, state, story.author, Date.now()) } });
+        }
+      }
+    };
+
+    const removeMention = (m) => {
+      if (!isSelf || !m) return;
+      sfx.tap();
+      dispatch({ type: "REMOVE_MENTION", mentionId: m.id, userId });
+      dispatch({ type: "SET_APP_TOAST", message: tr("profile.mentionRemoved") });
+      const next = items.filter((x) => x.id !== m.id);
+      if (!next.length) dispatch({ type: "CLOSE_MODAL" });
+      else setFocusId(next[0]?.id);
+    };
+
+    if (!items.length) {
+      return (
+        <Sheet dismissable>
+          <h3 style={{ margin: "0 0 8px" }}>{tr("profile.mentions")}</h3>
+          <p className="muted">{tr("profile.mentionsEmpty")}</p>
+        </Sheet>
+      );
+    }
+
+    return (
+      <Sheet dismissable className="mentions-viewer-sheet">
+        <div className="mentions-viewer-head">
+          <h3>{tr("profile.mentions")}</h3>
+          <span className="muted">{items.length}</span>
+        </div>
+        {focus && (
+          <div className="mentions-viewer-focus">
+            <button type="button" className="mentions-viewer-media" onClick={() => openMedia(focus)}>
+              {focus.mediaType === "video"
+                ? <video src={focus.mediaUrl?.startsWith("blob") ? focus.mediaUrl : mediaUrl(focus.mediaUrl)} muted playsInline autoPlay loop />
+                : <img src={focus.mediaUrl?.startsWith("blob") ? focus.mediaUrl : mediaUrl(focus.mediaUrl)} alt="" />}
+            </button>
+            <p className="mentions-viewer-meta">
+              {tr("profile.mentionByLabel")}{" "}
+              <button type="button" className="mentions-viewer-author" onClick={() => { sfx.tap(); if (focus.authorId) openUserProfile(dispatch, focus.authorId); }}>
+                {focus.authorName || tr("profile.mentionSomeone")}
+              </button>
+            </p>
+            {isSelf && (
+              <button type="button" className="btn soft mentions-viewer-remove" onClick={() => removeMention(focus)}>
+                <Trash2 size={14} /> {tr("profile.mentionRemove")}
+              </button>
+            )}
+          </div>
+        )}
+        <div className="mentions-viewer-grid">
+          {items.map((m) => (
+            <button key={m.id} type="button" className={"mentions-viewer-thumb" + (focusId === m.id ? " on" : "")} onClick={() => { sfx.tap(); setFocusId(m.id); }}>
+              {m.mediaType === "video"
+                ? <video src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : mediaUrl(m.mediaUrl)} muted playsInline />
+                : <img src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : mediaUrl(m.mediaUrl)} alt="" loading="lazy" />}
+            </button>
+          ))}
+        </div>
+      </Sheet>
+    );
+  }
+
+  function ProfileScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { effective, tier, reach, boostLive } = useDerived(state, now);
+    const prof = state.igExtras?.profile || {};
+    const me = { ...state.user, score: effective, bio: prof.bio || state.user.bio, website: prof.website || state.user.website, category: prof.category || state.user.category };
+    const albums = state.igExtras?.highlights || [];
+    const fileRef = useRef(null);
+    const [photoBusy, setPhotoBusy] = useState(false);
+    const [photoError, setPhotoError] = useState("");
+    const handle = (me.handle || "@you").replace(/^@/, "");
+    const onFile = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      setPhotoError("");
+      setPhotoBusy(true);
+      try {
+        if (state.liveData) {
+          const { url } = await api.upload(f);
+          const updated = await api.patchMe({ avatarUrl: url });
+          dispatch({ type: "SET_AVATAR", url: updated.avatarUrl || url });
+        } else {
+          const r = new FileReader();
+          r.onload = () => dispatch({ type: "SET_AVATAR", url: r.result });
+          r.readAsDataURL(f);
+        }
+        sfx.shutter();
+      } catch {
+        setPhotoError(tr("profile.photoError"));
+      } finally {
+        setPhotoBusy(false);
+        e.target.value = "";
+      }
+    };
+  
+    const postCount = feedGridPostsOnly(buildFeed(state)).filter((p) => portfolioAuthorIds(state, ME_ID).has(p.author)).length;
+    const reelCount = reelPostsOnly(buildFeed(state)).filter((p) => portfolioAuthorIds(state, ME_ID).has(p.author)).length;
+
+    return (
+      <div className="ech-profile-screen">
+        <Scroll className="ech-profile-scroll">
+          <div className="ech-profile-compact">
+            <div className="ech-profile-topbar">
+              <span className="ech-profile-page-label">{tr("tabs.me")}</span>
+              <div className="ech-profile-topbar-actions">
+                <button type="button" className="ech-profile-toolbtn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "profileedit" }); }} aria-label={tr("profile.editTitle")}>
+                  <Pencil size={16} />
+                </button>
+                <button type="button" className="ech-profile-toolbtn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "insights", payload: {} }); }} aria-label={tr("insights.postTitle")}>
+                  <BarChart2 size={16} />
+                </button>
+                <button type="button" className="ech-profile-toolbtn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "privacytools" }); }} aria-label={tr("privacy.title")}>
+                  <Lock size={16} />
+                </button>
+                <button type="button" className="ech-profile-toolbtn" onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "settings" }); }} aria-label={tr("settings.title")}>
+                  <Settings size={16} />
+                </button>
+                <button
+                  type="button"
+                  className={"ech-profile-lens" + (state.lens ? " on" : "")}
+                  onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_LENS" }); }}
+                  aria-pressed={state.lens}
+                  aria-label={tr("settings.lens")}
+                >
+                  {state.lens ? <Eye size={15} /> : <EyeOff size={15} />}
+                </button>
+              </div>
+            </div>
+
+            <div className="ech-profile-inline">
+              <div className="ech-profile-avatar-block">
+                <Avatar c={me} size={52} ring showScore={false} />
+                <button type="button" className="ech-profile-cam" onClick={() => !photoBusy && fileRef.current?.click()} disabled={photoBusy} aria-label={tr("profile.editTitle")}>
+                  {photoBusy ? <Loader size={10} className="spin" /> : <Camera size={10} />}
+                </button>
+                <input ref={fileRef} type="file" accept="image/*" onChange={onFile} style={{ display: "none" }} />
+              </div>
+              <div className="ech-profile-inline-main">
+                <div className="ech-profile-inline-id">
+                  <h2>{me.name}{me.instagram?.verified && <BadgeCheck size={13} color="#8C6BD8" style={{ marginLeft: 3 }} />}</h2>
+                  <span className="ech-profile-handle">@{handle}</span>
+                </div>
+                <div className="ech-profile-inline-stats">
+                  <span><b>{postCount}</b> {tr("profile.posts")}</span>
+                  <span className="ech-profile-stat-dot" aria-hidden>·</span>
+                  <span><b>{reelCount}</b> {tr("profile.reels")}</span>
+                  <span className="ech-profile-stat-dot" aria-hidden>·</span>
+                  <span><b>{state.friends.length}</b> {tr("profile.followers")}</span>
+                </div>
+              </div>
+              <div className="ech-profile-inline-score">
+                <span className="ech-profile-score-num" style={{ color: tier.ink }}>{effective.toFixed(2)}</span>
+                <TierPill score={effective} small />
+              </div>
+            </div>
+            {photoError && <p className="profile-photo-err">{photoError}</p>}
+            {me.bio ? <p className="ech-profile-bio ech-profile-bio--inline">{me.bio}</p> : null}
+            {me.website ? (
+              <a className="ech-profile-link ech-profile-link--inline" href={me.website.startsWith("http") ? me.website : `https://${me.website}`} target="_blank" rel="noopener noreferrer">{me.website.replace(/^https?:\/\//, "")}</a>
+            ) : null}
+          </div>
+
+          <ScoreHistorySection history={state.history} score={effective} userId={state.user.id || ME_ID} />
+
+          <section className="ech-profile-section">
+            <div className="ech-section-head">
+              <h3>{tr("profile.collections")}</h3>
+              <button type="button" className="ech-section-link" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "albumeditor", payload: { mode: "create" } }); }}>
+                <Plus size={14} /> <span>{tr("profile.albumNew")}</span>
+              </button>
+            </div>
+            <div className="ech-album-shelf">
+              {albums.length === 0 ? (
+                <button type="button" className="ech-album-card ech-album-card--new" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "albumeditor", payload: { mode: "create" } }); }}>
+                  <Plus size={22} />
+                  <span>{tr("profile.albumNew")}</span>
+                </button>
+              ) : albums.map((hl) => (
+                <button key={hl.id} type="button" className="ech-album-card" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "albumviewer", payload: { albumId: hl.id } }); }}>
+                  {hl.coverUrl ? <img src={mediaUrl(hl.coverUrl)} alt="" /> : <span className="ech-album-fallback">{(hl.title || "?")[0]}</span>}
+                  <span className="ech-album-title">{hl.title}</span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <ProfileMentionsSection userId={ME_ID} />
+
+          <section className="ech-profile-section ech-profile-section--grid">
+            <div className="ech-section-head">
+              <h3>{tr("profile.portfolio")}</h3>
+            </div>
+            <ProfilePostGrid userId={ME_ID} dispatch={dispatch} postsOnly />
+          </section>
+
+          {state.user.locked && (
+            <div className="ech-profile-hold card">
+              <ShieldAlert size={16} />
+              <span>{tr("profile.holdActive")}</span>
+            </div>
+          )}
+        </Scroll>
+      </div>
+    );
+  }
+  
+  const Stat = ({ label, value }) => (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ fontWeight: 700, fontSize: 18, color: "#5A4A60" }}>{value}</div>
+      <div className="muted" style={{ fontSize: 11 }}>{label}</div>
+    </div>
+  );
+  
+  function FaceScanRetryCard({ dispatch, tr }) {
+    const fileRef = useRef(null);
+    const [busy, setBusy] = useState(false);
+
+    const onPick = async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      e.target.value = "";
+      setBusy(true);
+      sfx.tap();
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result);
+          r.onerror = reject;
+          r.readAsDataURL(f);
+        });
+        const res = await api.faceScanRetry(dataUrl);
+        dispatch({ type: "SYNC_USER", user: { ...res.user, score: res.score ?? res.user?.score } });
+        sfx.success();
+        window.alert(res.note || tr("settings.faceRetryDone"));
+      } catch (err) {
+        sfx.penalty();
+        window.alert(err?.message || tr("onb.scanError"));
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    return (
+      <div className="card" style={{ padding: "12px 14px", marginBottom: 8 }}>
+        <b style={{ fontSize: 13.5 }}>{tr("settings.faceRetry")}</b>
+        <p className="muted" style={{ fontSize: 11.5, margin: "6px 0 10px", lineHeight: 1.45 }}>{tr("settings.faceRetrySub")}</p>
+        <input ref={fileRef} type="file" accept="image/*" capture="user" style={{ display: "none" }} onChange={onPick} />
+        <button type="button" className="btn soft" disabled={busy} onClick={() => fileRef.current?.click()}>
+          {busy ? <Loader size={14} className="spin" /> : <Camera size={14} />}
+          {busy ? tr("onb.analyzing") : tr("settings.faceRetryBtn")}
+        </button>
+      </div>
+    );
+  }
+
+  // ---- SETTINGS ------------------------------------------------------------- //
+  function SettingsScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [open, setOpen] = useState(null);
+
+    const signOut = async () => {
+      sfx.tap();
+      try { await api.logout(); } catch { /* session may already be gone */ }
+      setToken(null);
+      dispatch({ type: "LOGOUT" });
+    };
+
+    const deleteAccount = async () => {
+      if (!window.confirm(tr("settings.deleteConfirm"))) return;
+      sfx.tap();
+      if (state.liveData) {
+        try { await api.deleteAccount(); } catch { /* ignore */ }
+      }
+      try { await api.logout(); } catch { /* ignore */ }
+      setToken(null);
+      try { localStorage.removeItem("echelon-token"); } catch { /* ignore */ }
+      dispatch({ type: "LOGOUT" });
+    };
+
+    const FAQ = [
+      [tr("faq.q1"), tr("faq.a1")],
+      [tr("faq.q2"), tr("faq.a2")],
+      [tr("faq.q3"), tr("faq.a3")],
+      [tr("faq.q4"), tr("faq.a4")],
+      [tr("faq.q5"), tr("faq.a5")],
+    ];
+  
+    return (
+      <div className="ech-settings-screen">
+        <header className="ech-screen-head ech-screen-head--row ech-settings-head">
+          <button type="button" className="ech-screen-back" onClick={() => dispatch({ type: "SCREEN", screen: "profile" })} aria-label="Back"><ChevronLeft size={22} /></button>
+          <div className="ech-screen-head-titles">
+            <h1>{tr("settings.title")}</h1>
+          </div>
+          <IgTopChrome compact />
+        </header>
+        <Scroll className="ech-settings-scroll">
+        <SectionLabel>{tr("settings.language")}</SectionLabel>
+        <div className="card ig-settings-card" style={{ padding: "12px 14px" }}>
+          <p className="muted" style={{ fontSize: 11.5, marginBottom: 10 }}>{tr("settings.languageSub")}</p>
+          <LanguageTabs
+            lang={state.lang}
+            onChange={(id) => dispatch({ type: "SET_LANG", lang: id, chosen: true })}
+          />
+        </div>
+  
+        {state.user.faceScanRetryAvailable && (
+          <FaceScanRetryCard dispatch={dispatch} tr={tr} />
+        )}
+
+        <SectionLabel>{tr("settings.lensSec")}</SectionLabel>
+        <Toggle label={tr("settings.lens")} sub={tr("settings.lensSub")} on={state.lens} onClick={() => dispatch({ type: "TOGGLE_LENS" })} icon={Eye} />
+        <Toggle label={tr("settings.live")} sub={tr("settings.liveSub")} on={state.live} onClick={() => dispatch({ type: "TOGGLE_LIVE" })} icon={Gauge} />
+        <Toggle label={tr("settings.sound")} sub={tr("settings.soundSub")} on={state.sound} onClick={() => dispatch({ type: "TOGGLE_SOUND" })} icon={state.sound ? Volume2 : VolumeX} />
+  
+        <SectionLabel>{tr("settings.accounts")}</SectionLabel>
+        {state.user.authMethod === "google" && (
+          <div className="card row">
+            <div className="acct-ic" style={{ background: "#fff", border: "1px solid #dadce0" }}><GmailGlyph size={16} /></div>
+            <div style={{ flex: 1 }}>
+              <b style={{ fontSize: 13.5 }}>Gmail</b>
+              <p className="muted" style={{ fontSize: 11.5 }}>{state.user.email || tr("settings.gmailSub")}</p>
+            </div>
+            <button type="button" className="ratebtn danger-soft" onClick={async () => {
+              if (!window.confirm(tr("settings.disconnectConfirm"))) return;
+              sfx.tap();
+              try {
+                await api.disconnectGoogle();
+                dispatch({ type: "DISCONNECT_GOOGLE", authMethod: "email" });
+                sfx.success();
+              } catch { sfx.penalty(); }
+            }}>{tr("settings.disconnect")}</button>
+          </div>
+        )}
+        {state.user.authMethod === "apple" && (
+          <div className="card row">
+            <div className="acct-ic" style={{ background: "#111" }}><AppleGlyph size={16} /></div>
+            <div style={{ flex: 1 }}>
+              <b style={{ fontSize: 13.5 }}>Apple</b>
+              <p className="muted" style={{ fontSize: 11.5 }}>{tr("settings.appleSub")}</p>
+            </div>
+            <span className="badge-ok"><Check size={12} /> {tr("settings.connected")}</span>
+          </div>
+        )}
+        {(state.user.authMethod === "password" || state.user.authMethod === "email") && (
+          <div className="card row">
+            <div className="acct-ic" style={{ background: "#EFE9FF" }}><User size={16} color="#8C6BD8" /></div>
+            <div style={{ flex: 1 }}>
+              <b style={{ fontSize: 13.5 }}>{tr("settings.emailAccount")}</b>
+              <p className="muted" style={{ fontSize: 11.5 }}>{state.user.email || state.user.handle}</p>
+            </div>
+            <span className="badge-ok"><Check size={12} /> {tr("settings.connected")}</span>
+          </div>
+        )}
+        <div className="card row">
+          <div className="acct-ic ig"><Instagram size={16} color="#fff" /></div>
+          <div style={{ flex: 1 }}>
+            <b style={{ fontSize: 13.5 }}>Instagram</b>
+            <p className="muted" style={{ fontSize: 11.5 }}>{state.user.instagram ? `${state.user.instagram.handle} · ${tr("settings.verified").toLowerCase()}` : tr("settings.igVerify")}</p>
+          </div>
+          {state.user.instagram
+            ? (
+              <button type="button" className="ratebtn danger-soft" onClick={async () => {
+                if (!window.confirm(tr("settings.disconnectIgConfirm"))) return;
+                sfx.tap();
+                try {
+                  const res = await api.instagramDisconnect();
+                  dispatch({ type: "DISCONNECT_INSTAGRAM", score: res.user?.score ?? state.user.score - 0.05 });
+                  sfx.success();
+                } catch { sfx.penalty(); }
+              }}>{tr("settings.disconnect")}</button>
+            )
+            : <button className="ratebtn" onClick={() => dispatch({ type: "OPEN_MODAL", modal: "instagram" })}>{tr("settings.connect")}</button>}
+        </div>
+
+        {state.user.instagram?.verified && (
+          <Toggle
+            label={tr("settings.igAutoSync")}
+            sub={state.user.instagram?.syncFeed ? tr("settings.igAutoSyncOn") : tr("settings.igAutoSyncOff")}
+            on={!!state.user.instagram?.syncFeed}
+            onClick={() => dispatch({ type: "TOGGLE_INSTAGRAM_SYNC" })}
+            icon={Instagram}
+          />
+        )}
+
+        <SectionLabel>{tr("settings.notifSec")}</SectionLabel>
+        <Toggle label={tr("settings.proxAlert")} sub={tr("settings.proxAlertSub")} on={state.proximityAlerts} onClick={() => dispatch({ type: "TOGGLE_PROXIMITY_ALERTS" })} icon={MapPin} />
+        <Toggle label={tr("settings.ratingNotif")} sub={tr("settings.ratingNotifSub")} on={state.ratingNotifs} onClick={() => dispatch({ type: "TOGGLE_RATING_NOTIFS" })} icon={state.ratingNotifs ? Bell : BellOff} />
+        <Toggle label={tr("settings.autoScan")} sub={tr("settings.autoScanSub")} on={state.proximityAutoScan} onClick={() => dispatch({ type: "TOGGLE_PROXIMITY_AUTOSCAN" })} icon={Radar} />
+
+        <SectionLabel>{tr("settings.privacySec")}</SectionLabel>
+        <Toggle
+          label={tr("settings.hideMapLocation")}
+          sub={state.hideMapLocation ? tr("settings.hideMapLocationOn") : tr("settings.hideMapLocationOff")}
+          on={state.hideMapLocation}
+          onClick={() => dispatch({ type: "TOGGLE_HIDE_MAP_LOCATION" })}
+          icon={MapPin}
+        />
+        <Toggle label={tr("settings.privateProfile")} sub={state.privateProfile ? tr("settings.privateProfileOn") : tr("settings.privateProfileOff")} on={state.privateProfile} onClick={() => dispatch({ type: "TOGGLE_PRIVATE_PROFILE" })} icon={Lock} />
+        <Toggle label={tr("settings.strangers")} sub={tr("settings.strangersSub")} on={state.strangerRatings} onClick={() => dispatch({ type: "TOGGLE_STRANGER_RATINGS" })} icon={Users} />
+        <Toggle label={tr("settings.showScore")} sub={state.publicScore ? tr("settings.showScoreOn") : tr("settings.showScoreOff")} on={state.publicScore} onClick={() => dispatch({ type: "TOGGLE_PUBLIC_SCORE" })} icon={state.publicScore ? Eye : EyeOff} />
+        <Toggle label={tr("settings.showTier")} sub={tr("settings.showTierSub")} on={state.publicTier} onClick={() => dispatch({ type: "TOGGLE_PUBLIC_TIER" })} icon={Crown} />
+
+        <SectionLabel>{tr("settings.a11ySec")}</SectionLabel>
+        <Toggle label={tr("settings.reduceMotion")} sub={tr("settings.reduceMotionSub")} on={state.reduceMotion} onClick={() => dispatch({ type: "TOGGLE_REDUCE_MOTION" })} icon={Moon} />
+
+        <SectionLabel>{tr("settings.accountSec")}</SectionLabel>
+        <button type="button" className="card row settings-link" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "instagram" }); }}>
+          <div className="gate-ic" style={{ background: "#EFE9FF", width: 38, height: 38 }}><Instagram size={17} color="#C13584" /></div>
+          <div style={{ flex: 1, textAlign: "left" }}>
+            <b style={{ fontSize: 13.5 }}>{tr("settings.igVerifyBtn")}</b>
+            <p className="muted" style={{ fontSize: 11.5 }}>{tr("settings.igVerifyBtnSub")}</p>
+          </div>
+          <ChevronRight size={16} color="#C9B8C6" />
+        </button>
+        <button type="button" className="card row settings-link" onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "alerts" }); }}>
+          <div className="gate-ic" style={{ background: "#EFE9FF", width: 38, height: 38 }}><Bell size={17} color="#8C6BD8" /></div>
+          <div style={{ flex: 1, textAlign: "left" }}>
+            <b style={{ fontSize: 13.5 }}>{tr("settings.notifHistory")}</b>
+            <p className="muted" style={{ fontSize: 11.5 }}>{tr("settings.notifHistorySub")}</p>
+          </div>
+          <ChevronRight size={16} color="#C9B8C6" />
+        </button>
+        <div className="card softnote" style={{ marginTop: 4 }}>
+          <Shield size={16} color="#B79CF0" />
+          <span className="muted" style={{ fontSize: 12, lineHeight: 1.45 }}>{tr("settings.privacyNote")}</span>
+        </div>
+        <button type="button" className="card row settings-link settings-danger" onClick={deleteAccount}>
+          <div className="gate-ic" style={{ background: "#FFF0F3", width: 38, height: 38 }}><Trash2 size={17} color="#E05A7A" /></div>
+          <div style={{ flex: 1, textAlign: "left" }}>
+            <b style={{ fontSize: 13.5, color: "#C44D6E" }}>{tr("settings.deleteAccount")}</b>
+            <p className="muted" style={{ fontSize: 11.5 }}>{tr("settings.deleteAccountSub")}</p>
+          </div>
+        </button>
+        <button type="button" className="signout-btn" onClick={signOut}>
+          <LogOut size={16} /> {tr("settings.signOut")}
+        </button>
+
+        <SectionLabel>{tr("settings.legalSec")}</SectionLabel>
+        {[
+          ["privacy", tr("legal.privacy")],
+          ["terms", tr("legal.terms")],
+          ["cookies", tr("legal.cookies")],
+          ["data_deletion", tr("legal.dataDeletion")],
+        ].map(([doc, label]) => (
+          <button key={doc} type="button" className="card row settings-link" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "legal", payload: { doc } }); }}>
+            <div className="gate-ic" style={{ background: "#EFE9FF", width: 38, height: 38 }}><Scale size={17} color="#8C6BD8" /></div>
+            <div style={{ flex: 1, textAlign: "left" }}>
+              <b style={{ fontSize: 13.5 }}>{label}</b>
+            </div>
+            <ChevronRight size={16} color="#C9B8C6" />
+          </button>
+        ))}
+        <button type="button" className="card row settings-link" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "cookies" }); }}>
+          <div className="gate-ic" style={{ background: "#EFE9FF", width: 38, height: 38 }}><Shield size={17} color="#8C6BD8" /></div>
+          <div style={{ flex: 1, textAlign: "left" }}>
+            <b style={{ fontSize: 13.5 }}>{tr("legal.cookieSettings")}</b>
+          </div>
+          <ChevronRight size={16} color="#C9B8C6" />
+        </button>
+
+        <SectionLabel>{tr("settings.faqSec")}</SectionLabel>
+        {FAQ.map(([q, a], i) => (
+          <button key={i} type="button" className="card qa" onClick={() => setOpen(open === i ? null : i)}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Info size={15} color="#B79CF0" />
+              <b style={{ fontSize: 13.5, flex: 1, textAlign: "left" }}>{q}</b>
+              <ChevronDown size={16} style={{ transform: open === i ? "rotate(180deg)" : "none", transition: ".2s", color: "#C9B8C6" }} />
+            </div>
+            {open === i && <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.6, marginTop: 8, textAlign: "left" }}>{a}</p>}
+          </button>
+        ))}
+
+        <div style={{ height: 8 }} />
+        </Scroll>
+      </div>
+    );
+  }
+
+  function Toggle({ label, sub, on, onClick, icon: Icon, muted }) {
+    const handleClick = () => {
+      if (muted || !onClick) return;
+      sfx.tap();
+      onClick();
+    };
+    return (
+      <button type="button" className="card toggle" onClick={handleClick} aria-pressed={on} style={{ cursor: muted ? "default" : "pointer", opacity: muted ? 0.72 : 1 }}>
+        <div className="gate-ic" style={{ background: on ? "#EFE9FF" : "#EFE9EF", width: 38, height: 38 }}>
+          <Icon size={17} color={on ? "#8C6BD8" : "#B0A4AE"} />
+        </div>
+        <div style={{ flex: 1, textAlign: "left" }}>
+          <b style={{ fontSize: 13.5 }}>{label}</b>
+          <p className="muted" style={{ fontSize: 11.5 }}>{sub}</p>
+        </div>
+        <span className={on ? "switch on" : "switch"} aria-hidden="true"><span className="knob" /></span>
+      </button>
+    );
+  }
+  
+  function PostViewerModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { effective, tier } = useDerived(state, now);
+    const canSeePremium = effective >= 4.0;
+    const postId = payload?.postId;
+    const fromExplore = !!payload?.fromExplore;
+    const post = buildFeed(state).find((p) => p.id === postId);
+    const ixBoot = useMemo(() => loadFeedIx(), []);
+    const [liked, setLiked] = useState(() => new Set(ixBoot.liked));
+    const [saved, setSaved] = useState(() => new Set(ixBoot.saved || []));
+    const [ratedPosts, setRatedPosts] = useState(() => new Set([...(state.ratedPosts || []), ...ixBoot.ratedPosts]));
+    const mediaWrapRef = useRef(null);
+
+    useEffect(() => {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => { document.body.style.overflow = prev; };
+    }, []);
+
+    if (!post) return null;
+    const author = getAuthor(state, post.author);
+    const locked = post.premium && !canSeePremium;
+    const isMe = isPostOwner(state, post);
+    const followUi = followUiForUser(state, author.id);
+    const isLiked = liked.has(post.id);
+    const isSaved = saved.has(post.id);
+    const displayLikes = post.likes ?? 0;
+    const commentCount = (loadFeedIx().comments[postId] || []).length;
+    const caption = displayPostCaption(post);
+    const canRate = fromExplore
+      ? canRateExplorePost(state, post, author, canSeePremium, ratedPosts)
+      : canRatePost(state, post, author, canSeePremium, ratedPosts);
+    const alreadyRated = ratedPosts.has(post.id);
+    const myStars = alreadyRated ? getRatedPostScore(post.id) : null;
+    const onRatePost = (stars) => {
+      if (!isUiTestPost(post) && ratedPosts.has(post.id)) return;
+      if (!canRate) return;
+      if (!isUiTestPost(post)) {
+        setRatedPosts((prev) => {
+          const next = new Set(prev);
+          next.add(post.id);
+          saveFeedIx({ ratedPosts: [...next] });
+          return next;
+        });
+        saveRatedPostScore(post.id, stars);
+        dispatch({ type: "MARK_POST_RATED", postId: post.id });
+      }
+      if (state.liveData) api.rate(author.id, stars, null, fromExplore ? "explore" : "feed", post.id).catch(() => {});
+      sfx.rateCommit(stars);
+    };
+
+    const onLike = () => {
+      sfx.tap();
+      const wasLiked = isLiked;
+      setLiked((prev) => {
+        const next = new Set(prev);
+        if (wasLiked) next.delete(postId); else next.add(postId);
+        saveFeedIx({ liked: [...next] });
+        return next;
+      });
+      dispatch({ type: "PATCH_FEED_POST_LIKES", postId, likes: Math.max(0, displayLikes + (wasLiked ? -1 : 1)) });
+    };
+
+    const isFollowing = state.friends.includes(author.id);
+    const captionOnMedia = overlaysFromPost(post).length > 0;
+    const authorLabel = author.handle?.replace(/^@/, "") || author.name.split(" ")[0];
+    const TypeIcon = postKindIcon(post);
+
+    const onBookmark = () => {
+      sfx.tap();
+      setSaved((prev) => {
+        const next = new Set(prev);
+        if (next.has(postId)) next.delete(postId);
+        else next.add(postId);
+        saveFeedIx({ saved: [...next] });
+        return next;
+      });
+      dispatch({ type: "OPEN_MODAL", modal: "collections", payload: { postId } });
+      recordPostAnalytics(postId, "saves");
+    };
+
+    return createPortal(
+      <div className="ech-media-viewer" role="dialog" aria-modal="true">
+        <div className="ech-media-viewer-stage">
+          <div ref={mediaWrapRef} className="ech-media-viewer-media">
+            <PostMedia post={post} locked={locked} cinematic feedMode={false} viewerMode tr={tr} dispatch={dispatch} />
+            {(post.avgRating ?? 0) > 0 && (
+              <MediaAvgRatingBadge avgRating={post.avgRating} className="ech-media-avg-rating--corner ech-media-avg-rating--viewer" />
+            )}
+            {!locked && !isMe && alreadyRated && !isUiTestPost(post) && myStars && (
+              <EchRateOverlay
+                canRate={false}
+                alreadyRated
+                myStars={myStars}
+                onPick={() => {}}
+                size="pill"
+                onDark
+                className="ech-rate-overlay--corner ech-rate-overlay--viewer-mine"
+              />
+            )}
+          </div>
+          <header className="ech-media-viewer-top">
+            <button type="button" className="ech-media-viewer-back" aria-label="Back" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+              <ChevronLeft size={20} strokeWidth={2} />
+            </button>
+            <button type="button" className="ech-media-viewer-author-chip" onClick={() => openUserProfile(dispatch, author.id)}>
+              <span className="ech-media-viewer-type" aria-hidden>
+                <TypeIcon size={14} strokeWidth={2} />
+              </span>
+              <b>@{authorLabel}</b>
+            </button>
+            <div className="ech-media-viewer-top-actions">
+              {!isMe && isFollowing && (
+                <span className="ech-media-viewer-iconbtn ech-media-viewer-iconbtn--state" aria-label={tr("friends.following")}><UserCheck size={18} strokeWidth={2} /></span>
+              )}
+              {!isMe && !isFollowing && followUi === "pending" && (
+                <span className="ech-media-viewer-iconbtn ech-media-viewer-iconbtn--state" aria-label={tr("friends.requestSent")}><Clock size={18} strokeWidth={1.75} /></span>
+              )}
+              {!isMe && !isFollowing && followUi === "follow" && (
+                <button type="button" className="ech-media-viewer-iconbtn" aria-label={tr("friends.add")} onClick={() => sendFriendRequest(dispatch, state, author.id)}>
+                  <UserPlus size={18} strokeWidth={1.75} />
+                </button>
+              )}
+              {isMe && (
+                <button type="button" className="ech-media-viewer-iconbtn ech-media-viewer-iconbtn--danger" aria-label={tr("postOptions.delete")} onClick={() => {
+                  sfx.tap();
+                  if (!window.confirm(tr("postOptions.deleteConfirm"))) return;
+                  dispatch({ type: "DELETE_FEED_POST", postId });
+                  dispatch({ type: "SET_APP_TOAST", message: tr("postOptions.deleted") });
+                  if (state.liveData) api.deletePost(postId).catch(() => {});
+                }}>
+                  <Trash2 size={18} strokeWidth={1.75} />
+                </button>
+              )}
+              <button type="button" className="ech-media-viewer-iconbtn" aria-label="More" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "postoptions", payload: { postId } }); }}>
+                <MoreHorizontal size={18} strokeWidth={1.75} />
+              </button>
+            </div>
+          </header>
+        </div>
+
+        <div className="ech-media-viewer-sheet">
+          <div className="feed-post-actions feed-post-actions--icon">
+            <button
+              type="button"
+              className={"feed-action" + (isLiked ? " on" : "")}
+              aria-pressed={isLiked}
+              aria-label={tr("explore.viewerLikes")}
+              onClick={onLike}
+            >
+              <Heart size={20} strokeWidth={isLiked ? 2.2 : 1.75} color={isLiked ? "#FF3B7A" : "#5A4A60"} fill={isLiked ? "#FF3B7A" : "none"} />
+              {displayLikes > 0 && <span>{formatEngagementCount(displayLikes)}</span>}
+            </button>
+            <button type="button" className="feed-action" aria-label={tr("feed.comments")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "postcomments", payload: { postId } }); }}>
+              <MessageCircle size={20} strokeWidth={1.75} color="#5A4A60" />
+              {commentCount > 0 && <span>{formatEngagementCount(commentCount)}</span>}
+            </button>
+            <button type="button" className="feed-action" aria-label={tr("feed.shareViaDm")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "sharepost", payload: { post } }); }}>
+              <Send size={20} strokeWidth={1.75} color="#5A4A60" />
+              {(post.shares ?? 0) > 0 && <span>{formatEngagementCount(post.shares ?? 0)}</span>}
+            </button>
+            <button
+              type="button"
+              className={"feed-action feed-action--save" + (isSaved ? " on" : "")}
+              aria-pressed={isSaved}
+              aria-label={isSaved ? tr("feed.unsaved") : tr("feed.saved")}
+              onClick={onBookmark}
+            >
+              <Bookmark size={20} strokeWidth={isSaved ? 2.2 : 1.75} color="#5A4A60" fill={isSaved ? "#5A4A60" : "none"} />
+            </button>
+          </div>
+
+          {!locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post)) && (
+            <div className="ech-media-viewer-rate-row">
+              <span className="ech-media-viewer-rate-kicker">{tr("rate.tapStars")}</span>
+              <EchRateOverlay
+                canRate
+                alreadyRated={false}
+                myStars={null}
+                onPick={onRatePost}
+                size="md"
+                onDark={false}
+                className="ech-rate-overlay--sheet"
+              />
+            </div>
+          )}
+
+          {caption && !captionOnMedia && (
+            <p className="feed-post-caption feed-post-caption--compact ech-media-viewer-caption">
+              <button type="button" className="mention-link mention-link--author" onClick={() => openUserProfile(dispatch, author.id)}>
+                {authorLabel}
+              </button>{" "}
+              <MentionText text={caption} tags={post.tags} dispatch={dispatch} />
+            </p>
+          )}
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  const COMMENT_QUICK_EMOJI = ["❤️", "🙌", "🔥", "👏", "😢", "😍", "😮", "😂"];
+
+  const seedDemoComments = (post, author) => {
+    const handle = author.handle?.replace(/^@/, "") || author.name.split(" ")[0];
+    const now = Date.now();
+    return [
+      { id: "demo1", text: "Isto está incrível! 🔥", author: "Sofia Martins", handle: "sofiam", ts: now - 259200000, likes: 2, authorLiked: true },
+      { id: "demo2", text: "Adoro o vibe desta publicação.", author: author.name, handle, ts: now - 61200000, likes: 5, authorLiked: false },
+      { id: "demo3", text: "Quando é o próximo?", author: "Miguel R.", handle: "miguelr", ts: now - 61200000, likes: 0, authorLiked: false },
+    ];
+  };
+
+  function PostCommentsModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const postId = payload?.postId;
+    const post = buildFeed(state).find((p) => p.id === postId);
+    const [sortOpen, setSortOpen] = useState(false);
+    const [commentSort, setCommentSort] = useState("foryou");
+    const [comments, setComments] = useState(() => {
+      const saved = loadFeedIx().comments[postId] || [];
+      if (saved.length) return saved;
+      const p = buildFeed(state).find((x) => x.id === postId);
+      if (p && isUiTestPost(p)) {
+        const author = getAuthor(state, p.author);
+        return seedDemoComments(p, author);
+      }
+      return saved;
+    });
+    const [text, setText] = useState("");
+    const [replyTo, setReplyTo] = useState(null);
+    const endRef = useRef(null);
+
+    useEffect(() => {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [comments.length]);
+
+    if (!post) return null;
+    const author = getAuthor(state, post.author);
+    const me = state.user;
+
+    const persist = (rows) => {
+      const all = loadFeedIx();
+      const commentsMap = { ...all.comments, [postId]: rows };
+      saveFeedIx({ comments: commentsMap });
+      setComments(rows);
+    };
+
+    const send = (body) => {
+      const raw = (body ?? text).trim();
+      if (!raw) return;
+      const t = filterHiddenWords(raw, state.igExtras?.blockedWords || []);
+      if (!t.replace(/•/g, "").trim()) return;
+      sfx.tap();
+      const row = {
+        id: "c" + Date.now(),
+        text: t,
+        author: me.name,
+        handle: me.handle,
+        ts: Date.now(),
+        replyTo: replyTo?.author || null,
+        likes: 0,
+        authorLiked: post.author === me.id,
+        liked: false,
+      };
+      persist([...comments, row]);
+      setText("");
+      setReplyTo(null);
+    };
+
+    const authorHandle = author.handle?.replace(/^@/, "") || author.name.split(" ")[0];
+
+    const sortedComments = useMemo(() => {
+      const rows = [...comments];
+      if (commentSort === "new") return rows.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      if (commentSort === "top") return rows.sort((a, b) => (b.likes || 0) - (a.likes || 0) || (b.ts || 0) - (a.ts || 0));
+      return rows;
+    }, [comments, commentSort]);
+
+    const sortLabel = commentSort === "new" ? tr("feed.commentSortNew") : commentSort === "top" ? tr("feed.commentSortTop") : tr("feed.commentSort");
+
+    return createPortal(
+      <div className="ig-sheet-backdrop ig-comments-backdrop" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="ig-comments-sheet ig-comments-sheet--ig" onClick={(e) => e.stopPropagation()}>
+          <div className="ig-sheet-grab" aria-hidden />
+          <header className="ig-comments-head">
+            <h2>{tr("feed.comments")}</h2>
+            <button type="button" className="ig-comments-share" aria-label={tr("feed.shareViaDm")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "sharepost", payload: { post } }); }}>
+              <Send size={20} />
+            </button>
+          </header>
+          <div className="ig-comments-sort-wrap">
+            <button type="button" className="ig-comments-sort" onClick={() => { sfx.tap(); setSortOpen((v) => !v); }}>
+              <span>{sortLabel}</span>
+              <ChevronDown size={14} className={sortOpen ? " open" : ""} />
+            </button>
+            {sortOpen && (
+              <div className="ig-comments-sort-menu">
+                {[
+                  ["foryou", tr("feed.commentSort")],
+                  ["top", tr("feed.commentSortTop")],
+                  ["new", tr("feed.commentSortNew")],
+                ].map(([id, label]) => (
+                  <button key={id} type="button" className={commentSort === id ? "on" : ""} onClick={() => { sfx.tap(); setCommentSort(id); setSortOpen(false); }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="ig-comments-scroll">
+            {sortedComments.length === 0 ? (
+              <p className="ig-comments-empty">{tr("feed.noComments")}</p>
+            ) : (
+              <ul className="ig-comments-list">
+                {sortedComments.map((c) => {
+                  const isAuthor = c.author === author.name;
+                  const handle = c.handle?.replace(/^@/, "") || c.author.split(" ")[0];
+                  return (
+                    <li key={c.id} className="ig-comment-row">
+                      <Avatar c={{ name: c.author, id: c.author, emoji: isAuthor ? author.emoji : "😊", color: isAuthor ? author.color : "#FFE0EC" }} size={32} showScore={false} ring={isAuthor} />
+                      <div className="ig-comment-body">
+                        <p className="ig-comment-meta">
+                          <b>{handle}</b>
+                          <span className="ig-comment-age">{formatPostAge(c.ts, Date.now())}</span>
+                          {c.authorLiked && (
+                            <em className="ig-comment-author-liked">
+                              <Heart size={10} strokeWidth={0} />
+                              {tr("feed.likedByAuthor")}
+                            </em>
+                          )}
+                          {isAuthor && <em className="ig-comment-author-tag">{tr("feed.commentAuthor")}</em>}
+                        </p>
+                        <p className="ig-comment-text">{c.text}</p>
+                        <button type="button" className="ig-comment-reply-btn" onClick={() => { setReplyTo(c); setText(`@${handle} `); }}>
+                          {tr("feed.reply")}
+                        </button>
+                        {replyTo?.id === c.id && (
+                          <div className="ig-comment-reply-inline">
+                            <Avatar c={me} size={18} showScore={false} />
+                            <span>{tr("feed.replyTo", { name: handle })}</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="ig-comment-like-col">
+                        <button
+                          type="button"
+                          className={"ig-comment-like" + (c.liked ? " on" : "")}
+                          aria-label="Like comment"
+                          onClick={() => {
+                            sfx.tap();
+                            persist(comments.map((row) => row.id === c.id
+                              ? { ...row, liked: !row.liked, likes: Math.max(0, (row.likes || 0) + (row.liked ? -1 : 1)) }
+                              : row));
+                          }}
+                        >
+                          <Heart size={16} strokeWidth={1.5} fill={c.liked ? "currentColor" : "none"} />
+                        </button>
+                        {(c.likes || 0) > 0 && <span className="ig-comment-like-count">{c.likes}</span>}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <div ref={endRef} />
+          </div>
+          <div className="ig-comments-foot">
+            <div className="ig-comments-emoji-row">
+              {COMMENT_QUICK_EMOJI.map((em) => (
+                <button key={em} type="button" className="ig-comments-emoji" onClick={() => send(em)}>{em}</button>
+              ))}
+            </div>
+            <div className="ig-comments-input-row">
+              <Avatar c={me} size={32} showScore={false} />
+              <div className="ig-comments-input-wrap">
+                <input
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder={replyTo ? tr("feed.replyTo", { name: replyTo.author.split(" ")[0] }) : tr("feed.commentPrompt")}
+                  onKeyDown={(e) => { if (e.key === "Enter") send(); }}
+                />
+                <button type="button" className="ig-comments-sticker" aria-label="Emoji"><Smile size={20} /></button>
+              </div>
+              <button type="button" className="ig-comments-send" disabled={!text.trim()} onClick={() => send()}>
+                {tr("feed.commentPost")}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  function EchModalClose({ onClick, className = "" }) {
+    const tr = useT();
+    return (
+      <button
+        type="button"
+        className={"ech-modal-close" + (className ? " " + className : "")}
+        aria-label={tr("legal.close")}
+        onClick={() => { sfx.tap(); onClick(); }}
+      >
+        <X size={18} strokeWidth={2.2} />
+      </button>
+    );
+  }
+
+  function LegalDocModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const doc = getLegalDoc(state.lang, payload?.doc || "privacy");
+    return (
+      <div className="backdrop legal-backdrop" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="legal-modal" onClick={(e) => e.stopPropagation()}>
+          <EchModalClose onClick={() => dispatch({ type: "CLOSE_MODAL" })} />
+          <div className="legal-modal-head">
+            <h2>{doc.title}</h2>
+          </div>
+          <div className="legal-modal-body">
+            <p className="legal-updated">{doc.updatedLabel}: {doc.updated}</p>
+            {doc.sections.map((s, i) => (
+              <div key={i} className="legal-section">
+                <h3>{s.heading}</h3>
+                {s.paragraphs.map((p, j) => <p key={j}>{p}</p>)}
+                {s.list && <ul>{s.list.map((li, k) => <li key={k}>{li}</li>)}</ul>}
+              </div>
+            ))}
+          </div>
+          <footer className="legal-modal-foot">
+            <button type="button" className="btn primary legal-modal-close-btn" onClick={() => { sfx.tap(); dispatch({ type: "CLOSE_MODAL" }); }}>
+              {tr("legal.close")}
+            </button>
+          </footer>
+        </div>
+      </div>
+    );
+  }
+
+  function CookiePrefsModal() {
+    const { dispatch } = useStore();
+    const tr = useT();
+    const existing = getCookieConsent();
+    const [functional, setFunctional] = useState(existing?.functional ?? false);
+    const save = (all) => {
+      saveCookieConsent({ functional: all ? true : functional, analytics: false });
+      dispatch({ type: "CLOSE_MODAL" });
+    };
+    return (
+      <div className="backdrop" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="legal-modal cookie-prefs" onClick={(e) => e.stopPropagation()}>
+          <EchModalClose onClick={() => dispatch({ type: "CLOSE_MODAL" })} />
+          <div className="legal-modal-head">
+            <h2>{tr("legal.cookieSettings")}</h2>
+          </div>
+          <div className="legal-modal-body">
+            <p className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>{tr("cookie.banner.text")}</p>
+            <label className="cookie-pref-row">
+              <span><b>{tr("cookie.functional")}</b></span>
+              <span className={functional ? "switch on" : "switch"} onClick={() => setFunctional(!functional)} role="switch" aria-checked={functional}><span className="knob" /></span>
+            </label>
+            <label className="cookie-pref-row muted" style={{ opacity: .7 }}>
+              <span>{tr("cookie.analytics")}</span>
+              <span className="switch" style={{ opacity: .5 }}><span className="knob" /></span>
+            </label>
+            <div className="cookie-banner-actions" style={{ marginTop: 16 }}>
+              <button type="button" className="btn ghost" onClick={() => save(false)}>{tr("cookie.save")}</button>
+              <button type="button" className="btn primary" onClick={() => save(true)}>{tr("cookie.acceptAll")}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function CookieBanner() {
+    const { dispatch } = useStore();
+    const tr = useT();
+    const [visible, setVisible] = useState(() => !isScreenshotDemoMode() && !hasCookieConsent());
+    const [prefs, setPrefs] = useState(false);
+    const [functional, setFunctional] = useState(true);
+    if (!visible) return null;
+    const close = (consent) => {
+      saveCookieConsent(consent);
+      setVisible(false);
+      setPrefs(false);
+    };
+    return (
+      <div className="cookie-banner" role="dialog" aria-labelledby="cookie-banner-title">
+        <div className="cookie-banner-inner">
+          {!prefs ? (
+            <>
+              <b id="cookie-banner-title">{tr("cookie.banner.title")}</b>
+              <p className="muted">{tr("cookie.banner.text")}</p>
+              <div className="cookie-banner-links">
+                <button type="button" className="legal-link" onClick={() => dispatch({ type: "OPEN_MODAL", modal: "legal", payload: { doc: "privacy" } })}>{tr("legal.privacy")}</button>
+                <span className="muted"> · </span>
+                <button type="button" className="legal-link" onClick={() => dispatch({ type: "OPEN_MODAL", modal: "legal", payload: { doc: "cookies" } })}>{tr("legal.cookies")}</button>
+              </div>
+              <div className="cookie-banner-actions">
+                <button type="button" className="btn ghost" onClick={() => close({ functional: false, analytics: false })}>{tr("cookie.reject")}</button>
+                <button type="button" className="btn ghost" onClick={() => setPrefs(true)}>{tr("cookie.manage")}</button>
+                <button type="button" className="btn primary" onClick={() => close({ functional: true, analytics: false })}>{tr("cookie.acceptAll")}</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <b>{tr("cookie.manage")}</b>
+              <label className="cookie-pref-row">
+                <span>{tr("cookie.functional")}</span>
+                <span className={functional ? "switch on" : "switch"} onClick={() => setFunctional(!functional)} role="switch" aria-checked={functional}><span className="knob" /></span>
+              </label>
+              <div className="cookie-banner-actions">
+                <button type="button" className="btn ghost" onClick={() => setPrefs(false)}>{tr("legal.close")}</button>
+                <button type="button" className="btn primary" onClick={() => close({ functional, analytics: false })}>{tr("cookie.save")}</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  /* ============================================================================
+     7. MODALS & SHEETS
+  ============================================================================ */
+  
+  function RatingModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const c = payload?.id ? getAuthor(state, payload.id) : null;
+    const postId = payload?.postId || null;
+    const forced = payload.forced;
+    const [picked, setPicked] = useState(0);
+    const [serverBlock, setServerBlock] = useState(false);
+    const [cooldownUntil, setCooldownUntil] = useState(null);
+    const afterInteraction = payload.afterChat || payload.afterCall;
+    const isProx = !!payload.prox;
+    const callNotAccepted = payload.afterCall && !payload.callAccepted;
+    const cooldownMs = proxCooldownLeft(state, c?.id);
+    const ratedSet = useMemo(() => new Set([...(state.ratedPosts || []), ...loadFeedIx().ratedPosts]), [state.ratedPosts]);
+    const postAlreadyRated = postId && ratedSet.has(postId);
+    const blocked = callNotAccepted
+      ? true
+      : afterInteraction
+        ? serverBlock
+        : (serverBlock || postAlreadyRated || (isProx ? !canRateProximity(state, c) : !canRateFeed(state, c)));
+
+    useEffect(() => {
+      if (!state.liveData || !c?.id) return;
+      const ctx = payload.afterChat ? "chat" : payload.afterCall ? "call" : isProx ? "proximity" : postId ? "feed" : "feed";
+      api.canRate(c.id, ctx, postId).then((r) => {
+        if (!r.canRate) {
+          setServerBlock(true);
+          if (r.nextAt) setCooldownUntil(r.nextAt);
+          if (r.nextAt && !postId) {
+            dispatch({ type: "PROX_RATED", id: c.id, ts: r.nextAt - PROX_COOLDOWN_MS });
+          }
+        }
+      }).catch(() => {});
+    }, [c?.id, isProx, postId, state.liveData, payload.afterChat, payload.afterCall]);
+
+    const interactionCooldownMs = cooldownUntil ? Math.max(0, cooldownUntil - Date.now()) : cooldownMs;
+
+    const title = payload.afterChat
+      ? tr("rate.afterChat")
+      : payload.afterCall
+        ? tr("rate.afterCall")
+        : tr("rate.howWas");
+
+    const scoreEligible = c && hasHigherScoreThan(state, c);
+
+    const submitStars = (stars) => {
+      if (blocked || !c || !stars || !scoreEligible) return;
+      setPicked(stars);
+      sfx.rateCommit(stars);
+      const ctx = payload.afterChat ? "chat" : payload.afterCall ? "call" : isProx ? "proximity" : "feed";
+      setTimeout(() => {
+        dispatch({ type: "CLOSE_MODAL" });
+        if (state.liveData) {
+          api.rate(c.id, stars, null, ctx, postId).then(() => {
+            if (!postId) dispatch({ type: "PROX_RATED", id: c.id });
+            if (postId) {
+              dispatch({ type: "MARK_POST_RATED", postId });
+              saveRatedPostScore(postId, stars);
+              const ix = loadFeedIx();
+              saveFeedIx({ ratedPosts: [...new Set([...(ix.ratedPosts || []), postId])] });
+            }
+          }).catch(() => {});
+        } else if (postId) {
+          dispatch({ type: "MARK_POST_RATED", postId });
+          saveRatedPostScore(postId, stars);
+          saveFeedIx({ ratedPosts: [...new Set([...loadFeedIx().ratedPosts, postId])] });
+        }
+      }, 380);
+    };
+
+    const blockReason = callNotAccepted
+      ? tr("rate.blockCall")
+      : postAlreadyRated
+        ? tr("rate.blockPost")
+        : interactionCooldownMs > 0
+          ? tr("rate.blockCooldown", { name: c?.name?.split(" ")[0] || "", time: formatCooldown(interactionCooldownMs) })
+          : (isProx ? (lensBlockReason(state, c, tr) || tr("rate.blockProx")) : (feedBlockReason(state, c, tr) || tr("feed.rateBlocked")));
+
+    return (
+      <Sheet dismissable={!forced} className="ech-rate-sheet">
+        <div className="ech-rate-modal">
+          <div className="ech-rate-modal-hero">
+            <Avatar c={c} size={64} ring showScore />
+            <h3>{title}</h3>
+            <p className="ech-rate-modal-sub">
+              {forced ? tr("rate.required") + " · " : ""}{tr("rate.withName", { name: c?.name?.split(" ")[0] || "them" })}
+            </p>
+            {c && (
+              <div className={"ech-rate-score-compare" + (scoreEligible ? " ok" : " locked")}>
+                <span><b>{tr("docs.yourScore")}</b> {state.user.score.toFixed(2)}</span>
+                <ChevronRight size={12} />
+                <span><b>{c.name?.split(" ")[0] || "them"}</b> {(c.score ?? 0).toFixed(2)}</span>
+                {scoreEligible ? <Check size={14} color="#2ECC71" /> : <Lock size={14} color="#C9A0DC" />}
+              </div>
+            )}
+          </div>
+          {!blocked ? (
+            <>
+              <EchRateStars size="xl" showLabels value={picked} onPick={submitStars} />
+              <p className="ech-rate-modal-hint">{tr("rate.oneTap")}</p>
+              <p className="ech-rate-modal-rule">{tr("docs.ratingRuleShort")}</p>
+            </>
+          ) : (
+            <div className="ech-rate-modal-block">
+              <Shield size={18} color="#B79CF0" />
+              <span>{blockReason}</span>
+            </div>
+          )}
+          {forced && !blocked && (
+            <p className="ech-rate-modal-forced">{tr("rate.forcedNote")}</p>
+          )}
+        </div>
+      </Sheet>
+    );
+  }
+  
+  function ChatMessage({ m, c, mine, selected, onSelect, onReact, onReply, onDelete, playingId, onPlayVoice, tr, onConsume, now, dispatch, timeLabel }) {
+    const longPressRef = useRef(null);
+    const didLongPress = useRef(false);
+    const lastTapRef = useRef(0);
+    const [revealed, setRevealed] = useState(false);
+
+    const clearLongPress = () => {
+      if (longPressRef.current) {
+        clearTimeout(longPressRef.current);
+        longPressRef.current = null;
+      }
+    };
+
+    const handlePointerDown = () => {
+      didLongPress.current = false;
+      clearLongPress();
+      longPressRef.current = setTimeout(() => {
+        didLongPress.current = true;
+        sfx.tap();
+        onSelect(m.id);
+      }, 480);
+    };
+
+    const handlePointerUp = () => {
+      clearLongPress();
+      if (didLongPress.current) return;
+      const nowTap = Date.now();
+      if (nowTap - lastTapRef.current < 320) {
+        lastTapRef.current = 0;
+        sfx.tap();
+        onReact(m.id, "❤️");
+        return;
+      }
+      lastTapRef.current = nowTap;
+      if (!mine && !m.locked && !m.expired) {
+        sfx.tap();
+        onReply(m);
+      }
+    };
+
+    const burnLeft = m.expiresAt ? Math.max(0, Math.ceil((m.expiresAt - now) / 1000)) : 0;
+
+    const openViewOnce = async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      if (mine || !m.locked) return;
+      sfx.tap();
+      try {
+        const full = await onConsume(m);
+        if (full?.mediaUrl) setRevealed(full);
+      } catch { /* ignore */ }
+    };
+
+    if (m.expired) {
+      return (
+        <div className={"dm-row" + (mine ? " mine" : "")} data-msg-id={m.id}>
+          {!mine && <Avatar c={c} size={28} showScore={false} ring={false} />}
+          <div className="dm-bubble-wrap">
+            <div className="dm-bubble dm-expired">
+              <Timer size={14} />
+              <span>{tr("chat.expired")}</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (m.consumed && m.viewOnce && !mine) {
+      return (
+        <div className={"dm-row" + (mine ? " mine" : "")} data-msg-id={m.id}>
+          {!mine && <Avatar c={c} size={28} showScore={false} ring={false} />}
+          <div className="dm-bubble-wrap">
+            <div className="dm-bubble dm-opened-once">
+              <Eye size={14} />
+              <span>{tr("chat.openedOnce")}</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const isSticker = m.mediaType === "sticker";
+    const showMedia = m.mediaUrl && !m.voice && !isSticker && (!m.locked || revealed);
+    const showSticker = isSticker && m.mediaUrl && (!m.locked || revealed);
+    const lockedCard = m.locked && !revealed;
+
+    return (
+      <div className={"dm-row" + (mine ? " mine" : "") + (selected ? " selected" : "")} data-msg-id={m.id}>
+        {!mine && <Avatar c={c} size={28} showScore={false} ring={false} />}
+        <div className="dm-bubble-wrap">
+          {(m.viewOnce || m.burnMode === "timer") && (
+            <span className={"dm-burn-badge" + (mine ? " mine" : "")}>
+              {m.viewOnce ? tr("chat.viewOnce") : `${burnLeft}s`}
+            </span>
+          )}
+          <div
+            role="button"
+            tabIndex={0}
+            className={"dm-bubble" + (mine ? " mine" : "") + (showMedia ? " has-media" : "") + (showSticker ? " has-sticker" : "") + (m.voice ? " has-voice" : "") + (lockedCard ? " locked-once" : "")}
+            onPointerDown={lockedCard ? undefined : handlePointerDown}
+            onPointerUp={lockedCard ? undefined : handlePointerUp}
+            onPointerLeave={clearLongPress}
+            onPointerCancel={clearLongPress}
+            onClick={lockedCard ? openViewOnce : undefined}
+            onKeyDown={(e) => { if (e.key === "Enter" && !mine && !lockedCard) onReply(m); }}
+          >
+            {m.replyTo && (
+              <div className={"dm-reply-in" + (mine ? " mine" : "")}>
+                <span className="dm-reply-in-bar" />
+                <span className="dm-reply-in-text">{m.replyTo.text || replySnippet(m.replyTo)}</span>
+              </div>
+            )}
+            {lockedCard && (
+              <div className="dm-view-once-card">
+                <Eye size={22} />
+                <b>{m.mediaType === "video" ? tr("chat.viewOnceVideo") : tr("chat.viewOncePhoto")}</b>
+                <span>{tr("chat.viewOnceHint")}</span>
+              </div>
+            )}
+            {showSticker && (
+              <img
+                src={mediaUrl(m.mediaUrl)}
+                alt=""
+                className="dm-sticker-img"
+                onError={(e) => { e.currentTarget.style.display = "none"; }}
+              />
+            )}
+            {showMedia && (
+              m.mediaType === "video"
+                ? <video src={mediaUrl(m.mediaUrl)} className="dm-media" controls playsInline preload="metadata" onClick={(e) => e.stopPropagation()} />
+                : <img src={mediaUrl(m.mediaUrl)} alt="" className="dm-media" />
+            )}
+            {m.voice && (
+              <div className="dm-voice">
+                <button
+                  type="button"
+                  className={"dm-voice-play" + (playingId === m.id ? " playing" : "")}
+                  aria-label={playingId === m.id ? "Pause" : "Play"}
+                  onClick={(e) => { e.stopPropagation(); e.preventDefault(); onPlayVoice(m); }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  {playingId === m.id ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" />}
+                </button>
+                <div className={"dm-voice-bars" + (playingId === m.id ? " active" : "")}>
+                  {Array.from({ length: 18 }).map((_, i) => (
+                    <span key={i} style={{ height: 4 + (i % 5) * 3 + (m.voiceSeed || 0) % 4 }} />
+                  ))}
+                </div>
+                <span className="dm-voice-dur">{m.voiceDur || "0:03"}</span>
+              </div>
+            )}
+            {m.sharedPost && (
+              <button
+                type="button"
+                className="dm-shared-post"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  sfx.tap();
+                  if (m.sharedPost?.id) openPostViewer(dispatch, m.sharedPost.id);
+                }}
+              >
+                <div
+                  className="dm-shared-post-media"
+                  style={!m.sharedPost.mediaUrl ? { background: grad(m.sharedPost.scene || ["#FFE9A8", "#FFC6DA"]) } : undefined}
+                >
+                  {m.sharedPost.mediaUrl ? (
+                    m.sharedPost.mediaType === "video"
+                      ? <video src={mediaUrl(m.sharedPost.mediaUrl)} className="dm-shared-post-vid" muted playsInline />
+                      : <img src={mediaUrl(m.sharedPost.mediaUrl)} alt="" className="dm-shared-post-img" />
+                  ) : (
+                    <span className="dm-shared-post-emoji">{m.sharedPost.emoji || "✨"}</span>
+                  )}
+                </div>
+                <div className="dm-shared-post-meta">
+                  <b>{m.sharedPost.authorName || "Echelon"}</b>
+                  <span className="dm-shared-post-stats">
+                    {m.sharedPost.avgRating != null && <><Star size={11} fill="#FFD56B" color="#E8B84A" /> {Number(m.sharedPost.avgRating).toFixed(1)}</>}
+                    {m.sharedPost.ts != null && <em>{formatPostAge(m.sharedPost.ts, now)}</em>}
+                  </span>
+                  {m.sharedPost.caption && <span className="dm-shared-post-caption">{m.sharedPost.caption}</span>}
+                  <span className="dm-shared-post-link">{tr("feed.viewPost")}</span>
+                </div>
+              </button>
+            )}
+            {m.text && !m.sharedPost && !showSticker && <p>{m.text}</p>}
+            <span className="dm-time">{timeLabel || formatChatTime(m.ts)}</span>
+          </div>
+          {m.reaction && <span className="dm-react-float">{m.reaction}</span>}
+          {selected && (
+            <div className="dm-react-bar" onClick={(e) => e.stopPropagation()}>
+              {mine && onDelete && (
+                <button type="button" className="dm-delete-btn" aria-label={tr("chat.deleteMessage")} onClick={() => onDelete(m.id)}>
+                  <Trash2 size={15} />
+                </button>
+              )}
+              {CHAT_REACTS.map((e) => (
+                <button key={e} type="button" className="dm-react-btn" onClick={() => onReact(m.id, e)}>{e}</button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function UserProfileModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const isMe = payload?.id === ME_ID || payload?.id === state.user.id;
+
+    useEffect(() => {
+      if (isMe) {
+        dispatch({ type: "CLOSE_MODAL" });
+        dispatch({ type: "SCREEN", screen: "profile" });
+      }
+    }, [isMe, dispatch]);
+
+    if (isMe) return null;
+
+    const c = getAuthor(state, payload?.id);
+    const [profile, setProfile] = useState(c);
+    const blocked = (state.blocked || []).includes(payload.id);
+
+    useEffect(() => {
+      if (!payload?.id) return;
+      const local = getAuthor(state, payload.id);
+      if (!state.liveData) {
+        setProfile(local);
+        return;
+      }
+      const apiId = isMe ? state.user.id : payload.id;
+      if (!apiId || apiId === ME_ID) {
+        setProfile(local);
+        return;
+      }
+      api.userProfile(apiId).then((u) => { registerUsers([u]); setProfile(u); }).catch(() => setProfile(local));
+    }, [payload?.id, state.liveData, state.user.id, state.user.name, state.user.handle, state.user.score]);
+
+    const u = profile || c;
+    if (!u) return null;
+    const isSelf = isMe || u.id === state.user.id;
+    const { tier } = useDerived({ ...state, user: { ...u, score: u.score || 3 } }, now);
+    const friend = state.friends.includes(u.id);
+    const locked = !isSelf && (u.profileLocked || u.privateProfile || u.blocked);
+    const feedEligible = canRateFeed(state, u);
+    const [rateGate, setRateGate] = useState({ can: false, nextAt: null });
+    const showRateBtn = canShowProfileRate(state, u, rateGate.can);
+
+    useEffect(() => {
+      if (!u?.id || !feedEligible) {
+        setRateGate({ can: false, nextAt: null });
+        return;
+      }
+      if (!state.liveData) {
+        setRateGate({ can: proxCooldownLeft(state, u.id) <= 0, nextAt: null });
+        return;
+      }
+      let cancelled = false;
+      api.canRate(u.id, "feed").then((r) => {
+        if (cancelled) return;
+        setRateGate({ can: !!r.canRate, nextAt: r.nextAt || null });
+      }).catch(() => { if (!cancelled) setRateGate({ can: false, nextAt: null }); });
+      return () => { cancelled = true; };
+    }, [u?.id, feedEligible, state.liveData, state.proximityCooldowns]);
+
+    useEffect(() => {
+      if (!state.liveData || !u?.id || rateGate.can || !rateGate.nextAt) return;
+      const ms = rateGate.nextAt - Date.now();
+      const recheck = () => {
+        api.canRate(u.id, "feed").then((r) => {
+          setRateGate({ can: !!r.canRate, nextAt: r.nextAt || null });
+        }).catch(() => setRateGate({ can: false, nextAt: null }));
+      };
+      if (ms <= 0) {
+        recheck();
+        return;
+      }
+      const t = setTimeout(recheck, ms + 500);
+      return () => clearTimeout(t);
+    }, [rateGate.can, rateGate.nextAt, u?.id, state.liveData]);
+
+    const openChat = () => {
+      if (locked || blocked) return;
+      sfx.tap();
+      dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: u.id } });
+    };
+
+    const toggleBlock = async () => {
+      sfx.tap();
+      if (!state.liveData) {
+        dispatch({ type: blocked ? "UNBLOCK_USER" : "BLOCK_USER", id: u.id });
+        sfx.success();
+        return;
+      }
+      try {
+        if (blocked) {
+          await api.unblockUser(u.id);
+          dispatch({ type: "UNBLOCK_USER", id: u.id });
+        } else {
+          await api.blockUser(u.id);
+          dispatch({ type: "BLOCK_USER", id: u.id });
+        }
+        sfx.success();
+      } catch { sfx.penalty(); }
+    };
+
+    const isMuted = (state.igExtras?.muted || []).includes(u.id);
+
+    const userStory = state.stories.find((s) => s.author === u.id);
+    const hasStory = !!(userStory && activeStories([userStory], now).length);
+    const followUi = followUiForUser(state, u.id);
+    const openUserStory = () => {
+      if (!hasStory) return;
+      sfx.tap();
+      const queue = buildStoryQueue(state.stories, state, u.id, now);
+      dispatch({ type: "OPEN_MODAL", modal: "story", payload: { authorId: u.id, queue } });
+    };
+
+    return (
+      <div className="ech-user-profile-screen">
+        <header className="ech-user-profile-head">
+          <button type="button" className="ech-screen-back" aria-label="Back" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+            <ChevronLeft size={20} />
+          </button>
+          <div className="ech-screen-head-titles">
+            <h1>{u.handle?.replace(/^@/, "") || u.name.split(" ")[0]}</h1>
+            <p>{tier.label} · {u.score?.toFixed?.(2) ?? "—"}</p>
+          </div>
+        </header>
+        <Scroll className="ech-user-profile-scroll">
+          {blocked ? (
+            <div className="ech-empty-card">
+              <Shield size={28} color="#8C6BD8" />
+              <h3>{tr("profile.blockedTitle")}</h3>
+              <p className="muted">{tr("profile.blockedSub")}</p>
+            </div>
+          ) : locked ? (
+            <div className="ech-empty-card">
+              <Lock size={28} color="#B79CF0" />
+              <h3>{u.privateProfile ? tr("profile.privateTitle") : tr("profile.blockedTitle")}</h3>
+              <p className="muted">{u.privateProfile ? tr("profile.privateSub") : tr("profile.blockedSub")}</p>
+            </div>
+          ) : (
+            <>
+              <div className="ech-user-profile-id">
+                <button type="button" className={"ech-user-avatar-btn" + (hasStory ? " has-story" : "")} onClick={openUserStory} aria-label={hasStory ? tr("feed.storyTap") : u.name}>
+                  <Avatar c={u} size={52} ring={hasStory} showScore={false} />
+                  {hasStory && <span className="ech-user-story-hint">{tr("feed.momentum")}</span>}
+                </button>
+                <div className="ech-user-profile-meta">
+                  <b>{u.name}{u.instagram?.verified && <BadgeCheck size={14} color="#8C6BD8" style={{ marginLeft: 4 }} />}</b>
+                  <span>{u.handle}</span>
+                  {u.bio && <p>{u.bio}</p>}
+                </div>
+                <TierPill score={u.score} small />
+              </div>
+
+              <section className="ech-user-profile-content">
+                <div className="ech-section-head">
+                  <h3>{tr("profile.portfolio")}</h3>
+                </div>
+                <ProfilePostGrid userId={u.id} dispatch={dispatch} />
+              </section>
+
+              <ScoreHistorySection history={null} score={u.score ?? 3} userId={u.id} />
+            </>
+          )}
+          <div className="scroll-pad" />
+        </Scroll>
+        {!isSelf && (
+          <footer className="ech-user-quickbar">
+            {!blocked && !locked && (
+              <>
+                <button type="button" className="ech-user-qbtn" onClick={openChat} aria-label={tr("chat.message")}>
+                  <MessageCircle size={18} strokeWidth={1.75} />
+                  <span>{tr("chat.message")}</span>
+                </button>
+                {showRateBtn && (
+                  <button type="button" className="ech-user-qbtn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "rate", payload: { id: u.id } }); }} aria-label={tr("tabs.rate")}>
+                    <Star size={18} strokeWidth={1.75} />
+                    <span>{tr("tabs.rate")}</span>
+                  </button>
+                )}
+                {friend ? (
+                  <span className="ech-user-qbtn ech-user-qbtn--state" aria-label={tr("friends.following")}>
+                    <UserCheck size={18} strokeWidth={2} />
+                    <span>{tr("friends.following")}</span>
+                  </span>
+                ) : followUi === "pending" ? (
+                  <span className="ech-user-qbtn ech-user-qbtn--state" aria-label={tr("friends.requestSent")}>
+                    <Clock size={18} strokeWidth={1.75} />
+                    <span>{tr("friends.requestSent")}</span>
+                  </span>
+                ) : (
+                  <button type="button" className="ech-user-qbtn" onClick={() => { sfx.tap(); sendFriendRequest(dispatch, state, u.id); }} aria-label={tr("friends.add")}>
+                    <UserPlus size={18} strokeWidth={1.75} />
+                    <span>{tr("friends.add")}</span>
+                  </button>
+                )}
+              </>
+            )}
+            {!blocked && !locked && (
+              <button type="button" className={"ech-user-qbtn" + (isMuted ? " on" : "")} onClick={() => { sfx.tap(); dispatch({ type: "MUTE_USER", userId: u.id }); }} aria-label={isMuted ? tr("privacy.unmute") : tr("privacy.mute")}>
+                {isMuted ? <Volume2 size={18} strokeWidth={1.75} /> : <VolumeX size={18} strokeWidth={1.75} />}
+                <span>{isMuted ? tr("privacy.unmute") : tr("privacy.mute")}</span>
+              </button>
+            )}
+            {!blocked && !locked && friend && (
+              <button type="button" className="ech-user-qbtn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "call", payload: { id: u.id, mode: "voice" } }); }} aria-label={tr("call.title")}>
+                <Phone size={18} strokeWidth={1.75} />
+                <span>{tr("call.title")}</span>
+              </button>
+            )}
+            <button type="button" className={"ech-user-qbtn ech-user-qbtn--block" + (blocked ? " on" : "")} onClick={toggleBlock} aria-label={blocked ? tr("block.unblock") : tr("block.block")}>
+              <Shield size={18} strokeWidth={1.75} />
+              <span>{blocked ? tr("block.unblock") : tr("block.block")}</span>
+            </button>
+          </footer>
+        )}
+      </div>
+    );
+  }
+
+  function ChatCameraView({ onCapture, onClose, maxVideoSec = MAX_VIDEO_SEC }) {
+    const tr = useT();
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+    const recorderRef = useRef(null);
+    const chunksRef = useRef([]);
+    const holdTimerRef = useRef(null);
+    const shutterPressedRef = useRef(false);
+    const recordingRef = useRef(false);
+    const recordSecsRef = useRef(0);
+    const [recording, setRecording] = useState(false);
+    const [recordSecs, setRecordSecs] = useState(0);
+    const [ready, setReady] = useState(false);
+    const [error, setError] = useState(false);
+    const [facing, setFacing] = useState("environment");
+
+    useEffect(() => {
+      let stream;
+      let cancelled = false;
+      (async () => {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setError(true);
+          return;
+        }
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: true,
+          });
+          if (cancelled) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          streamRef.current = stream;
+          const v = videoRef.current;
+          if (v) {
+            v.srcObject = stream;
+            await v.play().catch(() => {});
+          }
+          setReady(true);
+        } catch {
+          setError(true);
+        }
+      })();
+      return () => {
+        cancelled = true;
+        clearTimeout(holdTimerRef.current);
+        if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+      };
+    }, [facing]);
+
+    useEffect(() => {
+      recordSecsRef.current = recordSecs;
+    }, [recordSecs]);
+
+    useEffect(() => {
+      if (!recording) return;
+      const iv = setInterval(() => setRecordSecs((s) => s + 1), 1000);
+      return () => clearInterval(iv);
+    }, [recording]);
+
+    useEffect(() => {
+      if (!recording || recordSecs < maxVideoSec) return;
+      stopRecord();
+    }, [recording, recordSecs, maxVideoSec]);
+
+    const takePhoto = () => {
+      const v = videoRef.current;
+      if (!v?.videoWidth) return;
+      sfx.shutter();
+      const canvas = document.createElement("canvas");
+      canvas.width = v.videoWidth;
+      canvas.height = v.videoHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(v, 0, 0);
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        onCapture(new File([blob], `photo_${Date.now()}.jpg`, { type: "image/jpeg" }));
+      }, "image/jpeg", 0.92);
+    };
+
+    const startRecord = () => {
+      if (!streamRef.current || recordingRef.current) return;
+      chunksRef.current = [];
+      const mime = pickVideoMime();
+      let mr;
+      try {
+        mr = mime ? new MediaRecorder(streamRef.current, { mimeType: mime }) : new MediaRecorder(streamRef.current);
+      } catch {
+        return;
+      }
+      recorderRef.current = mr;
+      mr.ondataavailable = (e) => { if (e.data?.size) chunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "video/webm" });
+        const ext = (mr.mimeType || "").includes("mp4") ? "mp4" : "webm";
+        if (blob.size > 0) {
+          onCapture(new File([blob], `video_${Date.now()}.${ext}`, { type: blob.type || "video/webm" }));
+        }
+        recordingRef.current = false;
+        setRecording(false);
+        setRecordSecs(0);
+        recordSecsRef.current = 0;
+      };
+      mr.start(200);
+      recordingRef.current = true;
+      setRecording(true);
+      setRecordSecs(0);
+      recordSecsRef.current = 0;
+      sfx.tap();
+    };
+
+    const stopRecord = () => {
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    };
+
+    const onShutterDown = (e) => {
+      e.preventDefault();
+      if (e.button !== 0 || !ready) return;
+      shutterPressedRef.current = true;
+      holdTimerRef.current = setTimeout(() => startRecord(), 320);
+    };
+
+    const onShutterUp = () => {
+      clearTimeout(holdTimerRef.current);
+      if (!shutterPressedRef.current) return;
+      shutterPressedRef.current = false;
+      if (recordingRef.current) stopRecord();
+      else if (ready) takePhoto();
+    };
+
+    const onShutterLeave = () => {
+      clearTimeout(holdTimerRef.current);
+      if (!shutterPressedRef.current) return;
+      shutterPressedRef.current = false;
+      if (recordingRef.current) stopRecord();
+    };
+
+    const flipCamera = () => {
+      sfx.tap();
+      setFacing((f) => (f === "environment" ? "user" : "environment"));
+    };
+
+    if (error) {
+      return (
+        <div className="compose-camera compose-camera--fullscreen">
+          <div className="compose-camera-top">
+            <button type="button" className="compose-camera-topbtn" aria-label={tr("legal.close")} onClick={onClose}>
+              <X size={26} strokeWidth={2} />
+            </button>
+          </div>
+          <p className="compose-camera-fallback compose-camera-fallback--portal">{tr("call.camError")}</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="compose-camera compose-camera--fullscreen dm-chat-camera">
+        <div className="compose-camera-top">
+          <button type="button" className="compose-camera-topbtn" aria-label={tr("legal.close")} onClick={onClose}>
+            <X size={26} strokeWidth={2} />
+          </button>
+          <button type="button" className="compose-camera-topbtn" aria-label="Flip camera" onClick={flipCamera}>
+            <RotateCcw size={22} />
+          </button>
+        </div>
+        <video ref={videoRef} className="compose-camera-video" playsInline muted autoPlay />
+        {recording && (
+          <div className="compose-camera-rec-overlay">
+            <div className="compose-camera-rec-badge">
+              {tr("chat.videoRecording")} {Math.floor(recordSecs / 60)}:{String(recordSecs % 60).padStart(2, "0")} / 1:00
+            </div>
+          </div>
+        )}
+        <div className="compose-camera-bottom">
+          <p className="dm-chat-camera-hint">{tr("chat.cameraHoldVideo")}</p>
+          <div className="compose-camera-controls">
+            <div className="compose-camera-filters" aria-hidden>
+              <span className="compose-camera-filter-dot" />
+            </div>
+            <button
+              type="button"
+              className={"compose-shutter" + (recording ? " recording" : "")}
+              aria-label={tr("chat.camera")}
+              onPointerDown={onShutterDown}
+              onPointerUp={onShutterUp}
+              onPointerLeave={onShutterLeave}
+              onPointerCancel={onShutterLeave}
+            />
+            <div className="compose-camera-filters" aria-hidden>
+              <span className="compose-camera-filter-dot" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function ChatModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const c = byId[payload.id];
+    const live = state.liveData;
+    const [messages, setMessages] = useState([]);
+    const [text, setText] = useState("");
+    const [typing, setTyping] = useState(false);
+    const [emojiOpen, setEmojiOpen] = useState(false);
+    const [emojiTab, setEmojiTab] = useState("emoji");
+    const [chatStickerItems, setChatStickerItems] = useState(STORY_STICKER_PACK);
+    const [chatCustomStickers, setChatCustomStickers] = useState(() => loadCustomStickers());
+    const [chatStickerQuery, setChatStickerQuery] = useState("");
+    const [chatStickerBusy, setChatStickerBusy] = useState(false);
+    const chatStickerUploadRef = useRef(null);
+    const chatGiphyKey = (typeof import.meta !== "undefined" && import.meta.env?.VITE_GIPHY_API_KEY) || "dc6zaTOxFJmzC";
+    const [selectedId, setSelectedId] = useState(null);
+    const [replyTo, setReplyTo] = useState(null);
+    const [burnMode, setBurnMode] = useState("off");
+    const [burnSeconds, setBurnSeconds] = useState(10);
+    const [now, setNow] = useState(Date.now());
+    const [showTip, setShowTip] = useState(() => {
+      try { return !localStorage.getItem(CHAT_TIP_KEY); } catch { return true; }
+    });
+    const [recording, setRecording] = useState(false);
+    const [recordSecs, setRecordSecs] = useState(0);
+    const [chatCameraOpen, setChatCameraOpen] = useState(false);
+    const [holdVideoRec, setHoldVideoRec] = useState(false);
+    const [holdVideoSecs, setHoldVideoSecs] = useState(0);
+    const [playingId, setPlayingId] = useState(null);
+    const endRef = useRef(null);
+    const threadRef = useRef(null);
+    const stickToBottomRef = useRef(true);
+    const initialScrollRef = useRef(false);
+    const openingUnreadRef = useRef(0);
+    const firstUnreadIdRef = useRef(null);
+    const [showJumpLatest, setShowJumpLatest] = useState(false);
+    const [peerReadTs, setPeerReadTs] = useState(0);
+    const msgCountRef = useRef(0);
+    const lastScrollMsgIdRef = useRef(null);
+    const typingPingRef = useRef(null);
+    const inputRef = useRef(null);
+    const mediaRef = useRef(null);
+    const blobUrls = useRef([]);
+    const recorderRef = useRef(null);
+    const micStreamRef = useRef(null);
+    const voiceChunksRef = useRef([]);
+    const recorderMimeRef = useRef("audio/webm");
+    const audioRef = useRef(null);
+    const synthStopRef = useRef(null);
+    const recordSecsRef = useRef(0);
+    const camHoldTimerRef = useRef(null);
+    const camHoldActiveRef = useRef(false);
+    const holdVideoRef = useRef(null);
+    const holdStreamRef = useRef(null);
+    const holdRecorderRef = useRef(null);
+    const holdChunksRef = useRef([]);
+    const holdVideoSecsRef = useRef(0);
+    const shareSentRef = useRef(null);
+    const onPasteRef = useRef(() => {});
+
+    useEffect(() => {
+      const handler = (e) => onPasteRef.current?.(e);
+      window.addEventListener("paste", handler);
+      return () => window.removeEventListener("paste", handler);
+    }, []);
+
+    useEffect(() => {
+      recordSecsRef.current = recordSecs;
+    }, [recordSecs]);
+
+    useEffect(() => {
+      const iv = setInterval(() => setNow(Date.now()), 1000);
+      return () => clearInterval(iv);
+    }, []);
+
+    const bumpInbox = (msg, fromMe, incUnread = false) => {
+      dispatch({
+        type: "PATCH_CHAT_INBOX",
+        id: c.id,
+        patch: {
+          lastTs: msg.ts,
+          lastPreview: previewFromMessage(msg),
+          lastFrom: fromMe ? "me" : c.id,
+          ...(fromMe ? { unread: 0 } : {}),
+        },
+        incUnread: incUnread && !fromMe,
+      });
+    };
+
+    const onIncoming = (msg) => bumpInbox(msg, false, true);
+
+    const mapMessageRow = (m) => ({
+      ...m,
+      voiceUrl: m.voice && m.mediaUrl ? mediaUrl(m.mediaUrl) : m.voiceUrl,
+      replyTo: m.replyTo || (m.replyToId ? { id: m.replyToId, text: m.replyText } : null),
+    });
+
+    const mergeMessages = (prev, rows) => {
+      const byId = new Map(prev.map((m) => [m.id, m]));
+      let changed = false;
+      for (const row of rows) {
+        const mapped = mapMessageRow(row);
+        const existing = byId.get(mapped.id);
+        if (!existing) {
+          byId.set(mapped.id, mapped);
+          changed = true;
+        } else {
+          const next = { ...existing, ...mapped };
+          if (JSON.stringify(existing) !== JSON.stringify(next)) {
+            byId.set(mapped.id, next);
+            changed = true;
+          }
+        }
+      }
+      if (!changed) return prev;
+      return [...byId.values()].sort((a, b) => a.ts - b.ts);
+    };
+
+    useEffect(() => {
+      initialScrollRef.current = false;
+      openingUnreadRef.current = state.chatInbox?.[c.id]?.unread || 0;
+      stickToBottomRef.current = openingUnreadRef.current <= 0;
+      setShowJumpLatest(false);
+      const cached = loadChatThread(c.id).map(mapMessageRow);
+      const incoming = cached.filter((m) => m.from !== ME_ID);
+      const unreadN = openingUnreadRef.current;
+      firstUnreadIdRef.current = unreadN > 0 && incoming.length
+        ? incoming[Math.max(0, incoming.length - unreadN)].id
+        : null;
+      setMessages(cached);
+      setPeerReadTs(0);
+      setText("");
+      setTyping(false);
+      setReplyTo(null);
+      setSelectedId(null);
+      setBurnMode("off");
+    }, [c.id, live]);
+
+    const markChatReadNow = () => {
+      dispatch({ type: "MARK_CHAT_READ", id: c.id });
+      if (live) api.markChatRead(c.id).catch(() => {});
+    };
+
+    useEffect(() => {
+      const el = threadRef.current;
+      if (!el) return;
+      const onScroll = () => {
+        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+        const wasBottom = stickToBottomRef.current;
+        stickToBottomRef.current = nearBottom;
+        setShowJumpLatest(!nearBottom);
+        if (nearBottom && !wasBottom) markChatReadNow();
+      };
+      el.addEventListener("scroll", onScroll, { passive: true });
+      return () => el.removeEventListener("scroll", onScroll);
+    }, [c.id, live, dispatch]);
+
+    const scrollThreadToBottom = (instant = true) => {
+      const el = threadRef.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      if (instant) setShowJumpLatest(false);
+    };
+
+    const scrollToUnreadAnchor = () => {
+      const el = threadRef.current;
+      if (!el || messages.length === 0) return;
+      const incoming = messages.filter((m) => m.from !== ME_ID);
+      if (!incoming.length) {
+        scrollThreadToBottom(true);
+        return;
+      }
+      const unreadN = Math.max(1, openingUnreadRef.current || 1);
+      const anchor = incoming[Math.max(0, incoming.length - unreadN)];
+      const node = el.querySelector(`[data-msg-id="${anchor.id}"]`);
+      if (node) {
+        el.scrollTop = Math.max(0, node.offsetTop - 10);
+        stickToBottomRef.current = false;
+        setShowJumpLatest(true);
+        return;
+      }
+      scrollThreadToBottom(true);
+    };
+
+    useLayoutEffect(() => {
+      if (messages.length === 0) return;
+      if (!initialScrollRef.current) {
+        initialScrollRef.current = true;
+        msgCountRef.current = messages.length;
+        lastScrollMsgIdRef.current = messages[messages.length - 1]?.id ?? null;
+        requestAnimationFrame(() => {
+          if (openingUnreadRef.current > 0) scrollToUnreadAnchor();
+          else scrollThreadToBottom(true);
+        });
+        return;
+      }
+      const lastMsg = messages[messages.length - 1];
+      const grew = messages.length > msgCountRef.current;
+      const lastChanged = lastMsg?.id !== lastScrollMsgIdRef.current;
+      msgCountRef.current = messages.length;
+      lastScrollMsgIdRef.current = lastMsg?.id ?? null;
+      if (stickToBottomRef.current && grew && lastChanged) {
+        requestAnimationFrame(() => scrollThreadToBottom(true));
+      }
+    }, [messages]);
+
+    useEffect(() => {
+      if (openingUnreadRef.current <= 0) markChatReadNow();
+    }, [c.id, live]);
+
+    const firstMsgFetchRef = useRef(true);
+
+    useEffect(() => {
+      firstMsgFetchRef.current = true;
+    }, [c.id]);
+
+    useEffect(() => {
+      if (!live) return;
+      let cancelled = false;
+      const poll = () => {
+        const markRead = firstMsgFetchRef.current;
+        if (firstMsgFetchRef.current) firstMsgFetchRef.current = false;
+        api.messages(c.id, { markRead }).then((res) => {
+          if (cancelled) return;
+          const rows = Array.isArray(res) ? res : (res?.messages || []);
+          if (!Array.isArray(res) && res?.peerReadTs != null) setPeerReadTs(res.peerReadTs);
+          setMessages((prev) => {
+            const prevIds = new Set(prev.map((m) => m.id));
+            const merged = mergeMessages(prev, rows);
+            merged.forEach((m) => {
+              if (!prevIds.has(m.id) && m.from !== ME_ID) onIncoming(m);
+            });
+            saveChatThread(c.id, merged);
+            return merged;
+          });
+        }).catch(() => {});
+        api.chatTyping(c.id).then((res) => {
+          if (!cancelled) setTyping(!!res?.typing);
+        }).catch(() => {});
+      };
+      poll();
+      const iv = setInterval(poll, 2500);
+      return () => { cancelled = true; clearInterval(iv); };
+    }, [live, c.id]);
+
+    useEffect(() => {
+      if (!live || !text.trim()) return;
+      if (typingPingRef.current) clearTimeout(typingPingRef.current);
+      typingPingRef.current = setTimeout(() => {
+        api.setChatTyping(c.id).catch(() => {});
+      }, 350);
+      return () => { if (typingPingRef.current) clearTimeout(typingPingRef.current); };
+    }, [text, live, c.id]);
+
+    useEffect(() => () => {
+      blobUrls.current.forEach((u) => URL.revokeObjectURL(u));
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      audioRef.current?.pause();
+      synthStopRef.current?.();
+    }, []);
+
+    useEffect(() => {
+      if (!recording) return;
+      const iv = setInterval(() => setRecordSecs((s) => s + 1), 1000);
+      return () => clearInterval(iv);
+    }, [recording]);
+
+    const dismissTip = () => {
+      setShowTip(false);
+      try { localStorage.setItem(CHAT_TIP_KEY, "1"); } catch { /* ignore */ }
+    };
+
+    const stopPlayback = () => {
+      audioRef.current?.pause();
+      audioRef.current = null;
+      synthStopRef.current?.();
+      synthStopRef.current = null;
+      setPlayingId(null);
+    };
+
+    const playVoice = async (m) => {
+      if (playingId === m.id) {
+        stopPlayback();
+        return;
+      }
+      stopPlayback();
+      sfx.tap();
+      const url = m.voiceUrl || (m.voice && m.mediaUrl ? mediaUrl(m.mediaUrl) : null);
+      if (url) {
+        try {
+          const a = new Audio(url);
+          a.preload = "auto";
+          audioRef.current = a;
+          a.onended = () => setPlayingId(null);
+          a.onerror = () => { stopPlayback(); };
+          await a.play();
+          setPlayingId(m.id);
+          return;
+        } catch {
+          stopPlayback();
+          return;
+        }
+      }
+      if (!live) {
+        synthStopRef.current = playSyntheticVoice(m.voiceSeed, m.voiceDur, () => setPlayingId(null));
+        setPlayingId(m.id);
+      }
+    };
+
+    const pushMessage = (msg) => {
+      const withBurn = {
+        ...msg,
+        burnMode: msg.burnMode || (burnMode === "timer" ? "timer" : msg.viewOnce ? "view_once" : null),
+        burnSeconds: msg.burnSeconds || (burnMode === "timer" ? burnSeconds : null),
+        expiresAt: msg.expiresAt || (burnMode === "timer" ? Date.now() + burnSeconds * 1000 : null),
+        viewOnce: msg.viewOnce || burnMode === "view_once",
+      };
+      const withReply = replyTo && !withBurn.voice
+        ? { ...withBurn, replyTo: { id: replyTo.id, text: replySnippet(replyTo), from: replyTo.from } }
+        : withBurn;
+      if (replyTo && !withBurn.voice) setReplyTo(null);
+
+      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const optimistic = {
+        ...withReply,
+        id: localId,
+        ts: Date.now(),
+        from: withReply.from || ME_ID,
+      };
+      if (optimistic.from === ME_ID) {
+        stickToBottomRef.current = true;
+        setShowJumpLatest(false);
+      }
+      setMessages((m) => {
+        const next = [...m, optimistic];
+        saveChatThread(c.id, next);
+        return next;
+      });
+      bumpInbox(optimistic, optimistic.from === ME_ID);
+
+      if (live) {
+        const body = withReply.voice
+          ? { voice: true, voiceDur: withReply.voiceDur, voiceSeed: withReply.voiceSeed, mediaUrl: withReply.voiceUrl || withReply.mediaUrl }
+          : {
+            text: withReply.text,
+            mediaUrl: withReply.mediaUrl,
+            mediaType: withReply.mediaType,
+            replyToId: withReply.replyTo?.id,
+            replyText: withReply.replyTo?.text,
+            burnMode: withReply.burnMode,
+            burnSeconds: withReply.burnSeconds,
+            viewOnce: withReply.viewOnce,
+          };
+        api.sendMessage(c.id, body).then((saved) => {
+          const sent = {
+            ...optimistic,
+            id: saved.id,
+            ts: saved.ts,
+            from: ME_ID,
+            expiresAt: saved.expiresAt || withReply.expiresAt,
+            voiceUrl: saved.voiceUrl || optimistic.voiceUrl,
+            mediaUrl: saved.mediaUrl || optimistic.mediaUrl,
+          };
+          setMessages((m) => {
+            const next = m.map((x) => (x.id === localId ? sent : x));
+            saveChatThread(c.id, next);
+            return next;
+          });
+          bumpInbox(sent, true);
+        }).catch(() => {});
+      }
+    };
+
+    useEffect(() => {
+      shareSentRef.current = null;
+    }, [c.id]);
+
+    useEffect(() => {
+      const post = payload?.sharePost;
+      if (!post || !c?.id) return;
+      const key = `${c.id}:${post.id}`;
+      if (shareSentRef.current === key) return;
+      shareSentRef.current = key;
+      const postAuthor = getAuthor(state, post.author);
+      const caption = (post.caption || "").trim();
+      const sharedPost = {
+        id: post.id,
+        authorId: post.author,
+        authorName: postAuthor.name,
+        caption: displayPostCaption(post) || caption,
+        mediaUrl: post.mediaUrl,
+        mediaType: post.mediaType,
+        emoji: post.emoji,
+        scene: post.scene,
+        ts: post.ts,
+        avgRating: post.avgRating ?? null,
+      };
+      pushMessage({
+        from: ME_ID,
+        text: caption || tr("feed.sharePostFallback", { name: postAuthor.name.split(" ")[0] }),
+        sharedPost,
+      });
+    }, [payload?.sharePost, c?.id]);
+
+    const consumeMessage = async (m) => {
+      const full = await api.consumeMessage(c.id, m.id);
+      setMessages((list) => list.map((x) => x.id === m.id ? { ...full, voiceUrl: full.voiceUrl || (full.mediaUrl ? mediaUrl(full.mediaUrl) : null) } : x));
+      return full;
+    };
+
+    const send = () => {
+      const body = text.trim();
+      if (!body || typing) return;
+      sfx.tap();
+      pushMessage({ from: ME_ID, text: body });
+      setText("");
+      setEmojiOpen(false);
+    };
+
+    const startReply = (m) => {
+      setReplyTo(m.voice ? { ...m, text: tr("chat.replyVoice") } : m);
+      setSelectedId(null);
+      inputRef.current?.focus();
+    };
+
+    const visitProfile = () => {
+      sfx.tap();
+      dispatch({ type: "OPEN_MODAL", modal: "userprofile", payload: { id: c.id } });
+    };
+
+    const insertEmoji = (e) => {
+      sfx.tap();
+      setText((t) => t + e);
+      inputRef.current?.focus();
+    };
+
+    const onMedia = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      e.target.value = "";
+      await sendMediaFile(f);
+    };
+
+    const sendMediaFile = async (f) => {
+      const isVideo = f.type.startsWith("video/") || /\.(mp4|mov|webm|m4v|3gp)$/i.test(f.name || "");
+      const isImage = f.type.startsWith("image/") || /\.(jpe?g|png|gif|webp|heic)$/i.test(f.name || "");
+      if (!isImage && !isVideo) return;
+      const viewOnce = burnMode === "view_once";
+      sfx.shutter();
+      if (live) {
+        try {
+          const { url } = await api.upload(f);
+          pushMessage({ from: ME_ID, mediaUrl: url, mediaType: isVideo ? "video" : "image", viewOnce });
+        } catch { /* upload failed */ }
+      } else {
+        const url = URL.createObjectURL(f);
+        blobUrls.current.push(url);
+        pushMessage({ from: ME_ID, mediaUrl: url, mediaType: isVideo ? "video" : "image", viewOnce });
+      }
+      setEmojiOpen(false);
+    };
+
+    const onPaste = async (e) => {
+      const cd = e.clipboardData;
+      if (!cd) return;
+      const files = [];
+      if (cd.items) {
+        for (const item of cd.items) {
+          if (item.kind === "file") {
+            const f = item.getAsFile();
+            if (f) files.push(f);
+          }
+        }
+      }
+      if (!files.length) return;
+      e.preventDefault();
+      for (const f of files) {
+        await sendMediaFile(f);
+      }
+    };
+
+    const startVoice = async () => {
+      if (typing || recording) return;
+      sfx.tap();
+      voiceChunksRef.current = [];
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStreamRef.current = stream;
+        const mime = pickVoiceMime();
+        const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+        rec.ondataavailable = (ev) => { if (ev.data.size > 0) voiceChunksRef.current.push(ev.data); };
+        rec.start(200);
+        recorderRef.current = rec;
+        recorderMimeRef.current = mime || rec.mimeType || "audio/webm";
+        setRecording(true);
+        setRecordSecs(0);
+        recordSecsRef.current = 0;
+      } catch { /* mic unavailable */ }
+    };
+
+    const stopVoice = async () => {
+      if (!recording) return;
+      sfx.success();
+      const secs = recordSecsRef.current;
+      const dur = `${Math.floor(secs / 60)}:${String(Math.max(1, secs % 60)).padStart(2, "0")}`;
+      setRecording(false);
+      setRecordSecs(0);
+      recordSecsRef.current = 0;
+
+      const rec = recorderRef.current;
+      if (rec && rec.state !== "inactive") {
+        await new Promise((resolve) => {
+          rec.onstop = resolve;
+          rec.stop();
+        });
+      }
+      micStreamRef.current?.getTracks().forEach((t) => t.stop());
+      micStreamRef.current = null;
+      recorderRef.current = null;
+
+      let voiceUrl = null;
+      const chunks = voiceChunksRef.current;
+      const mime = recorderMimeRef.current || chunks[0]?.type || "audio/webm";
+      if (chunks.length) {
+        const blob = new Blob(chunks, { type: mime });
+        if (blob.size > 0) {
+          if (live) {
+            try {
+              const ext = /mp4|aac|m4a/i.test(mime) ? "m4a" : "webm";
+              const file = new File([blob], `voice.${ext}`, { type: mime });
+              const { url } = await api.upload(file);
+              voiceUrl = url;
+            } catch { /* ignore */ }
+          } else {
+            voiceUrl = URL.createObjectURL(blob);
+            blobUrls.current.push(voiceUrl);
+          }
+        }
+      }
+      voiceChunksRef.current = [];
+
+      pushMessage({
+        from: ME_ID,
+        voice: true,
+        voiceDur: dur,
+        voiceSeed: Math.floor(Math.random() * 5),
+        voiceUrl,
+        mediaUrl: voiceUrl,
+      });
+    };
+
+    useEffect(() => {
+      if (!recording || recordSecs < MAX_VOICE_SEC) return;
+      stopVoice();
+    }, [recording, recordSecs]);
+
+    const reactTo = (id, emoji) => {
+      sfx.tap();
+      setMessages((m) => m.map((x) => x.id === id ? { ...x, reaction: emoji } : x));
+      if (live) api.reactMessage(c.id, id, emoji).catch(() => {});
+      setSelectedId(null);
+    };
+
+    const deleteMessage = (id) => {
+      sfx.tap();
+      setSelectedId(null);
+      setMessages((list) => {
+        const next = list.filter((x) => x.id !== id);
+        saveChatThread(c.id, next);
+        const last = next[next.length - 1];
+        if (last) bumpInbox(last, last.from === ME_ID);
+        else {
+          dispatch({
+            type: "PATCH_CHAT_INBOX",
+            id: c.id,
+            patch: { lastPreview: tr("chat.messageDeleted"), lastTs: Date.now(), lastFrom: "me", unread: 0 },
+          });
+        }
+        return next;
+      });
+      if (live && id && !String(id).startsWith("local-")) {
+        api.deleteMessage(c.id, id).catch(() => {});
+      }
+    };
+
+    const displayChatStickers = useMemo(() => {
+      const q = chatStickerQuery.trim();
+      const base = q ? chatStickerItems : [...chatCustomStickers, ...chatStickerItems];
+      return [...new Set(base)];
+    }, [chatCustomStickers, chatStickerItems, chatStickerQuery]);
+
+    useEffect(() => {
+      if (!emojiOpen || emojiTab !== "stickers") return;
+      const q = chatStickerQuery.trim();
+      if (!q) {
+        setChatStickerItems(STORY_STICKER_PACK);
+        setChatStickerBusy(false);
+        return;
+      }
+      let cancelled = false;
+      setChatStickerBusy(true);
+      const t = setTimeout(() => {
+        const path = `https://api.giphy.com/v1/stickers/search?api_key=${chatGiphyKey}&q=${encodeURIComponent(q)}&limit=24&rating=g`;
+        fetch(path)
+          .then((r) => r.json())
+          .then((data) => {
+            if (cancelled) return;
+            const urls = (data.data || []).map((item) => {
+              const img = item.images?.fixed_height_small || item.images?.downsized || item.images?.original;
+              return img?.url || null;
+            }).filter(Boolean);
+            setChatStickerItems(urls.length ? urls : STORY_STICKER_PACK);
+          })
+          .catch(() => { if (!cancelled) setChatStickerItems(STORY_STICKER_PACK); })
+          .finally(() => { if (!cancelled) setChatStickerBusy(false); });
+      }, 450);
+      return () => { cancelled = true; clearTimeout(t); };
+    }, [emojiOpen, emojiTab, chatStickerQuery, chatGiphyKey]);
+
+    const onChatStickerUpload = (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        if (typeof dataUrl !== "string") return;
+        const next = addCustomSticker(dataUrl);
+        setChatCustomStickers(next);
+        sfx.success();
+      };
+      reader.readAsDataURL(f);
+      e.target.value = "";
+    };
+
+    const sendSticker = async (url) => {
+      if (!url) return;
+      sfx.tap();
+      setEmojiOpen(false);
+      let stickerUrl = url;
+      if (live && url.startsWith("data:")) {
+        try {
+          const res = await fetch(url);
+          const blob = await res.blob();
+          const ext = blob.type?.includes("gif") ? "gif" : blob.type?.includes("png") ? "png" : "webp";
+          const file = new File([blob], `sticker.${ext}`, { type: blob.type || "image/png" });
+          const { url: uploaded } = await api.upload(file);
+          stickerUrl = uploaded;
+        } catch { return; }
+      } else if (!live && url.startsWith("http")) {
+        stickerUrl = url;
+      }
+      pushMessage({ from: ME_ID, mediaUrl: stickerUrl, mediaType: "sticker" });
+    };
+
+    const endChat = async () => {
+      stopPlayback();
+      sfx.tap();
+      if (state.liveData) {
+        try {
+          const r = await api.canRate(c.id, "chat");
+          if (!r.canRate) {
+            dispatch({ type: "CLOSE_MODAL" });
+            return;
+          }
+        } catch {
+          dispatch({ type: "CLOSE_MODAL" });
+          return;
+        }
+      }
+      dispatch({ type: "OPEN_MODAL", modal: "rate", payload: { id: c.id, forced: true, afterChat: true } });
+    };
+
+    const askDeleteChat = () => {
+      sfx.tap();
+      dispatch({ type: "OPEN_MODAL", modal: "deletechat", payload: { id: c.id } });
+    };
+
+    useEffect(() => {
+      setMessages((list) => list.map((m) => {
+        if (!m.expiresAt || m.expiresAt > now) return m;
+        return { ...m, expired: true, text: null, mediaUrl: null };
+      }));
+    }, [now]);
+
+    const canSend = text.trim().length > 0;
+    const blocked = (state.blocked || []).includes(c?.id);
+    const lastMine = [...messages].reverse().find((m) => m.from === ME_ID);
+    const peerSeenLast = !!(lastMine && peerReadTs > 0 && peerReadTs >= lastMine.ts);
+    const threadNodes = useMemo(() => {
+      const nodes = [];
+      let lastDay = "";
+      messages.forEach((m) => {
+        const day = formatChatDayLabel(m.ts, now, tr);
+        if (day !== lastDay) {
+          lastDay = day;
+          nodes.push({ type: "day", key: `day-${m.ts}`, label: day });
+        }
+        if (firstUnreadIdRef.current && m.id === firstUnreadIdRef.current) {
+          nodes.push({ type: "new", key: `new-${m.id}` });
+        }
+        nodes.push({ type: "msg", key: m.id, m });
+      });
+      return nodes;
+    }, [messages, now, tr]);
+    onPasteRef.current = onPaste;
+
+    if (!c) return null;
+    if (blocked) {
+      return (
+        <div className="dm-screen">
+          <div className="dm-head">
+            <button type="button" className="icbtn" onClick={() => dispatch({ type: "CLOSE_MODAL" })}><ChevronLeft size={18} /></button>
+            <b>{tr("chat.message")}</b>
+          </div>
+          <div className="card" style={{ margin: 16, textAlign: "center", padding: 24 }}>
+            <Lock size={28} color="#B79CF0" />
+            <p>{tr("block.chatBlocked")}</p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="dm-screen" tabIndex={-1}>
+        <div className="dm-head">
+          <button type="button" className="icbtn" aria-label="Back" onClick={() => { stopPlayback(); dispatch({ type: "CLOSE_MODAL" }); }}>
+            <ChevronLeft size={18} />
+          </button>
+          <button type="button" className="dm-head-profile" onClick={visitProfile} title={tr("profile.viewProfile")}>
+            <Avatar c={c} size={36} showScore={false} />
+            <div className="dm-head-meta">
+              <b>{c.name}</b>
+              <span className="muted">
+                {typing ? tr("chat.typing") : (
+                  <>
+                    {getChatStatus(state, c.id) || c.handle}
+                    {c.score != null && !getChatStatus(state, c.id) && <em className="dm-head-score"> · {Number(c.score).toFixed(2)}</em>}
+                  </>
+                )}
+              </span>
+            </div>
+          </button>
+          <button type="button" className="dm-head-ic" title={tr("chat.call")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "call", payload: { id: c.id, mode: "audio" } }); }}>
+            <Phone size={16} />
+          </button>
+          <button type="button" className="dm-head-ic" title={tr("chat.camera")} onClick={() => mediaRef.current && mediaRef.current.click()}>
+            <Camera size={17} />
+          </button>
+          <button type="button" className="dm-head-ic" title={tr("messages.deleteChat")} onClick={askDeleteChat}>
+            <Trash2 size={16} />
+          </button>
+          <button type="button" className="dm-end-btn" onClick={endChat}>{tr("chat.endChat")}</button>
+        </div>
+
+        <div className="dm-thread" ref={threadRef} onClick={() => setSelectedId(null)} onPaste={onPaste}>
+          {showTip && (
+            <div className="dm-tip" onClick={(e) => e.stopPropagation()}>
+              <div className="dm-tip-icon"><MessageCircle size={18} /></div>
+              <div className="dm-tip-body">
+                <b>{tr("chat.tipTitle")}</b>
+                <span>{tr("chat.tipBody")}</span>
+              </div>
+              <button type="button" className="dm-tip-btn" onClick={dismissTip}>{tr("chat.tipGotIt")}</button>
+            </div>
+          )}
+
+          {threadNodes.map((node) => {
+            if (node.type === "day") {
+              return <div key={node.key} className="dm-day-divider"><span>{node.label}</span></div>;
+            }
+            if (node.type === "new") {
+              return <div key={node.key} className="dm-new-divider"><span>{tr("chat.newMessages")}</span></div>;
+            }
+            const m = node.m;
+            return (
+              <ChatMessage
+                key={m.id}
+                m={m}
+                c={c}
+                mine={m.from === ME_ID}
+                selected={selectedId === m.id}
+                onSelect={(id) => setSelectedId((p) => p === id ? null : id)}
+                onReact={reactTo}
+                onDelete={deleteMessage}
+                onReply={startReply}
+                playingId={playingId}
+                onPlayVoice={playVoice}
+                tr={tr}
+                onConsume={consumeMessage}
+                now={now}
+                dispatch={dispatch}
+                timeLabel={formatChatTime(m.ts)}
+              />
+            );
+          })}
+          {typing && (
+            <div className="dm-row">
+              <Avatar c={c} size={28} showScore={false} ring={false} />
+              <div className="dm-bubble typing"><span className="dm-typing-text">{tr("chat.typing")}</span></div>
+            </div>
+          )}
+          {messages.length < 4 && !typing && (
+            <div className="dm-quick-replies">
+              <span className="dm-quick-label">{tr("chat.quickReplies")}</span>
+              <div className="dm-quick-chips">
+                {CHAT_QUICK_REPLIES.map((q) => (
+                  <button key={q} type="button" className="dm-quick-chip" onClick={() => { sfx.tap(); pushMessage({ from: ME_ID, text: q }); }}>
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {peerSeenLast && !showJumpLatest && (
+            <div className="dm-seen-hint">{tr("chat.seen")}</div>
+          )}
+          <div ref={endRef} />
+        </div>
+
+        {showJumpLatest && (
+          <button type="button" className="dm-jump-latest" onClick={() => { sfx.tap(); scrollThreadToBottom(true); stickToBottomRef.current = true; markChatReadNow(); }}>
+            <ChevronDown size={16} />
+            <span>{tr("chat.jumpLatest")}</span>
+          </button>
+        )}
+
+        {emojiOpen && (
+          <div className="dm-emoji-panel">
+            <div className="dm-emoji-tabs">
+              <button type="button" className={emojiTab === "emoji" ? "on" : ""} onClick={() => setEmojiTab("emoji")}>{tr("chat.emoji")}</button>
+              <button type="button" className={emojiTab === "stickers" ? "on" : ""} onClick={() => { setEmojiTab("stickers"); setChatStickerItems(STORY_STICKER_PACK); }}>{tr("chat.stickers")}</button>
+            </div>
+            {emojiTab === "emoji" ? (
+              <div className="dm-emoji-grid">
+                {CHAT_EMOJIS.map((e) => (
+                  <button key={e} type="button" className="dm-emoji-btn" onClick={() => insertEmoji(e)}>{e}</button>
+                ))}
+              </div>
+            ) : (
+              <div className="dm-sticker-panel">
+                <input
+                  className="dm-sticker-search"
+                  value={chatStickerQuery}
+                  onChange={(e) => setChatStickerQuery(e.target.value)}
+                  placeholder={tr("chat.stickerSearch")}
+                />
+                <div className="dm-sticker-grid">
+                  <button type="button" className="dm-sticker-tile dm-sticker-upload" onClick={() => chatStickerUploadRef.current?.click()} title={tr("feed.uploadSticker")}>
+                    <ImageIcon size={18} />
+                  </button>
+                  {chatStickerBusy && <span className="dm-sticker-busy muted">…</span>}
+                  {!chatStickerBusy && displayChatStickers.map((url, i) => (
+                    <button key={`${url}-${i}`} type="button" className="dm-sticker-tile" onClick={() => sendSticker(url)}>
+                      <img src={url} alt="" loading="lazy" onError={(e) => { e.currentTarget.parentElement.style.display = "none"; }} />
+                    </button>
+                  ))}
+                </div>
+                <input ref={chatStickerUploadRef} type="file" accept="image/*,.gif,.webp,.png,.jpg,.jpeg" onChange={onChatStickerUpload} style={{ display: "none" }} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {recording && (
+          <div className="dm-recording">
+            <span className="dm-rec-dot" />
+            <span>{tr("chat.recording")} {Math.floor(recordSecs / 60)}:{String(recordSecs % 60).padStart(2, "0")} / 1:00 · {tr("chat.tapMicToSend")}</span>
+          </div>
+        )}
+
+        {replyTo && (
+          <div className="dm-reply-bar">
+            <div className="dm-reply-bar-inner">
+              <span className="dm-reply-bar-label">{tr("chat.replyingTo")} {c.name}</span>
+              <span className="dm-reply-bar-text">{replySnippet(replyTo)}</span>
+            </div>
+            <button type="button" className="dm-reply-bar-x" aria-label={tr("chat.replyCancel")} onClick={() => setReplyTo(null)}>
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        <div className="dm-burn-bar">
+          <button type="button" className={"dm-burn-opt" + (burnMode === "off" ? " on" : "")} onClick={() => setBurnMode("off")}>{tr("chat.burnOff")}</button>
+          <button type="button" className={"dm-burn-opt" + (burnMode === "timer" ? " on" : "")} onClick={() => setBurnMode("timer")}>
+            <Timer size={13} /> {tr("chat.burnTimer")}
+          </button>
+          <button type="button" className={"dm-burn-opt" + (burnMode === "view_once" ? " on" : "")} onClick={() => setBurnMode("view_once")}>
+            <Eye size={13} /> {tr("chat.viewOnce")}
+          </button>
+          {burnMode === "timer" && (
+            <div className="dm-burn-timers">
+              {BURN_TIMERS.map((s) => (
+                <button key={s} type="button" className={"dm-burn-sec" + (burnSeconds === s ? " on" : "")} onClick={() => setBurnSeconds(s)}>{s}s</button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="dm-compose" onPaste={onPaste}>
+          <input ref={mediaRef} type="file" accept="image/*,video/*,.mov,.mp4,.webm,.m4v" onChange={onMedia} style={{ display: "none" }} />
+          <button type="button" className={"dm-tool" + (emojiOpen ? " on" : "")} onClick={() => { sfx.tap(); setEmojiOpen((o) => !o); }} title={tr("chat.emoji")}>
+            <Smile size={20} />
+          </button>
+          <button type="button" className="dm-tool" onClick={() => mediaRef.current && mediaRef.current.click()} title={tr("chat.gallery")}>
+            <ImageIcon size={20} />
+          </button>
+          <button type="button" className="dm-tool" onClick={() => { const el = mediaRef.current; if (el) { el.accept = "video/*"; el.click(); el.accept = "image/*,video/*"; } }} title={tr("chat.video")}>
+            <Video size={20} />
+          </button>
+          <input
+            ref={inputRef}
+            className="dm-input"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={tr("chat.placeholder")}
+            onPaste={onPaste}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            onFocus={() => setEmojiOpen(false)}
+          />
+          {canSend ? (
+            <button type="button" className="dm-send" onClick={send}>
+              <Send size={18} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={"dm-send voice" + (recording ? " rec" : "")}
+              onClick={() => { if (recording) stopVoice(); else startVoice(); }}
+              title={recording ? tr("chat.tapMicToSend") : tr("chat.voice")}
+            >
+              <Mic size={18} />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function CallModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const c = payload?.id ? getAuthor(state, payload.id) : null;
+    const isVideo = payload?.mode === "video";
+    const [accepted, setAccepted] = useState(false);
+    const [secs, setSecs] = useState(0);
+    const [muted, setMuted] = useState(false);
+    const [camOff, setCamOff] = useState(false);
+    const [camError, setCamError] = useState(null);
+    const [mediaReady, setMediaReady] = useState(false);
+    const localRef = useRef(null);
+    const streamRef = useRef(null);
+    const ringTimer = useRef(null);
+
+    useEffect(() => {
+      const delay = 2800 + Math.random() * 3200;
+      const t = setTimeout(() => { setAccepted(true); sfx.success(); }, delay);
+      return () => clearTimeout(t);
+    }, []);
+
+    useEffect(() => {
+      if (accepted) return;
+      sfx.ring();
+      ringTimer.current = setInterval(() => sfx.ring(), 2400);
+      return () => { if (ringTimer.current) clearInterval(ringTimer.current); };
+    }, [accepted]);
+
+    useEffect(() => {
+      if (!accepted) return;
+      const iv = setInterval(() => setSecs((s) => s + 1), 1000);
+      return () => clearInterval(iv);
+    }, [accepted]);
+
+    useEffect(() => {
+      let cancelled = false;
+      setCamError(null);
+      setMediaReady(false);
+      (async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: isVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+            audio: true,
+          });
+          if (cancelled) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          streamRef.current = stream;
+          setMediaReady(true);
+        } catch {
+          if (!cancelled) setCamError(tr("call.camError"));
+        }
+      })();
+      return () => {
+        cancelled = true;
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        setMediaReady(false);
+      };
+    }, [isVideo, tr]);
+
+    useEffect(() => {
+      const video = localRef.current;
+      const stream = streamRef.current;
+      if (!video || !stream || !isVideo || !mediaReady) return;
+      video.srcObject = stream;
+      video.play().catch(() => {});
+    }, [mediaReady, isVideo]);
+
+    useEffect(() => {
+      const stream = streamRef.current;
+      if (!stream || !mediaReady) return;
+      stream.getVideoTracks().forEach((t) => { t.enabled = isVideo && !camOff; });
+    }, [camOff, mediaReady, isVideo]);
+
+    useEffect(() => {
+      const stream = streamRef.current;
+      if (!stream || !mediaReady) return;
+      stream.getAudioTracks().forEach((t) => { t.enabled = !muted; });
+    }, [muted, mediaReady]);
+
+    if (!c) return null;
+
+    const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    const statusLabel = !accepted ? tr("call.ringing") : fmt(secs);
+
+    const stopStream = () => {
+      if (ringTimer.current) clearInterval(ringTimer.current);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      if (localRef.current) localRef.current.srcObject = null;
+    };
+
+    const finishCall = async () => {
+      stopStream();
+      sfx.tap();
+      if (!accepted || secs < 1) {
+        dispatch({ type: "CLOSE_MODAL" });
+        return;
+      }
+      if (state.liveData) {
+        try {
+          const r = await api.canRate(c.id, "call");
+          if (!r.canRate) {
+            dispatch({ type: "CLOSE_MODAL" });
+            return;
+          }
+        } catch {
+          dispatch({ type: "CLOSE_MODAL" });
+          return;
+        }
+      }
+      dispatch({ type: "OPEN_MODAL", modal: "rate", payload: { id: c.id, forced: true, afterCall: true, callAccepted: true } });
+    };
+
+    const hangUp = () => {
+      stopStream();
+      sfx.tap();
+      dispatch({ type: "CLOSE_MODAL" });
+    };
+
+    const renderCtrl = (key, btnClass, icon, label, onClick) => (
+      <div key={key} className="call-ctrl-wrap">
+        <button type="button" className={btnClass} onClick={onClick} aria-label={label}>
+          {icon}
+        </button>
+        <span className="call-ctrl-label">{label}</span>
+      </div>
+    );
+
+    if (isVideo) {
+      return (
+        <div className={"call-screen call-screen--video" + (accepted ? " live" : " ringing")}>
+          <div className="call-video-stage">
+            <div className={"call-video-remote" + (!accepted ? " pulsing" : "")} style={{ background: grad([c.color, "#fff"]) }}>
+              {c.avatarUrl
+                ? <img src={mediaUrl(c.avatarUrl)} alt="" className="call-video-remote-img" referrerPolicy="no-referrer" />
+                : <span className="call-video-remote-emoji">{c.emoji}</span>}
+              <div className="call-video-remote-shade" />
+              {!accepted && (
+                <div className="call-ring-indicator" aria-hidden>
+                  <span /><span /><span />
+                </div>
+              )}
+            </div>
+            {isVideo && mediaReady && (
+              <video ref={localRef} className={"call-video-local" + (camOff ? " off" : "") + (!accepted ? " waiting" : "")} autoPlay playsInline muted />
+            )}
+            {camError && (
+              <div className="call-video-error">
+                <Video size={18} />
+                <span>{camError}</span>
+              </div>
+            )}
+            <div className="call-video-top">
+              <button type="button" className="call-back" onClick={hangUp} aria-label={tr("call.endCall")}>
+                <ChevronDown size={22} />
+              </button>
+              <TierPill score={c.score} small />
+            </div>
+            <div className="call-video-remote-meta">
+              <b>{c.name}</b>
+              <span className={!accepted ? "call-status-ringing" : ""}>{statusLabel}</span>
+            </div>
+          </div>
+          <div className="call-controls call-controls--video">
+            {renderCtrl("cam", "call-ctrl" + (camOff ? " on" : ""), camOff ? <EyeOff size={22} /> : <Video size={22} />, camOff ? tr("call.camOn") : tr("call.camOff"), () => { sfx.tap(); setCamOff((v) => !v); })}
+            {renderCtrl("mic", "call-ctrl" + (muted ? " on" : ""), muted ? <MicOff size={22} /> : <Mic size={22} />, muted ? tr("call.unmute") : tr("call.mute"), () => { sfx.tap(); setMuted((m) => !m); })}
+            {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), finishCall)}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className={"call-screen" + (!accepted ? " ringing" : "")}>
+        <div className="call-top">
+          <button type="button" className="call-back" onClick={hangUp} aria-label={tr("call.endCall")}>
+            <ChevronDown size={22} />
+          </button>
+        </div>
+        <div className="call-body">
+          <div className={"call-avatar-ring" + (!accepted ? " pulsing" : "")}>
+            <Avatar c={c} size={96} showScore={false} ring={false} />
+            {!accepted && (
+              <div className="call-ring-indicator call-ring-indicator--voice" aria-hidden>
+                <span /><span /><span />
+              </div>
+            )}
+          </div>
+          <h2 className="call-name">{c.name}</h2>
+          <p className={"call-status" + (!accepted ? " call-status-ringing" : "")}>{statusLabel}</p>
+          <TierPill score={c.score} small />
+        </div>
+        <div className="call-controls">
+          {renderCtrl("mic", "call-ctrl" + (muted ? " on" : ""), muted ? <MicOff size={22} /> : <Mic size={22} />, muted ? tr("call.unmute") : tr("call.mute"), () => { sfx.tap(); setMuted((m) => !m); })}
+          {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), finishCall)}
+        </div>
+      </div>
+    );
+  }
+  
+  function FeatureLockModal({ payload }) {
+    const { dispatch, state } = useStore();
+    const f = payload.feature;
+    const [now] = useTick();
+    const { effective } = useDerived(state, now);
+    const Icon = f.icon;
+    return (
+      <Sheet>
+        <div style={{ textAlign: "center" }}>
+          <div className="lock-hero shimmer"><Icon size={26} color="#fff" /></div>
+          <h3 style={{ margin: "14px 0 2px", color: "#5A4A60" }}>{f.label}</h3>
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, padding: "0 10px" }}>{f.copy}</p>
+        </div>
+        <div className="lock-meter">
+          <div className="lock-fill" style={{ width: `${Math.min(100, (effective / f.req) * 100)}%` }} />
+        </div>
+        <p style={{ textAlign: "center", fontSize: 13, margin: "10px 0 0", color: "#B07E7E" }}>
+          You're at <b>{effective.toFixed(2)}</b> · this opens at <b>{f.req.toFixed(1)}</b>
+        </p>
+        <p className="muted" style={{ textAlign: "center", fontSize: 11.5, marginTop: 6 }}>
+          You're so close. A few more radiant interactions and the door opens. ✨
+        </p>
+        <button className="btn soft" style={{ marginTop: 16 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>Maybe soon</button>
+      </Sheet>
+    );
+  }
+  
+  function PerkOkModal({ payload }) {
+    const { dispatch } = useStore();
+    const f = payload.feature;
+    return (
+      <Sheet>
+        <div style={{ textAlign: "center", padding: "8px 0" }}>
+          <div style={{ fontSize: 46 }}>🎉</div>
+          <h3 style={{ margin: "10px 0 4px", color: "#5A4A60" }}>{f.label}: unlocked</h3>
+          <p className="muted" style={{ fontSize: 13, padding: "0 12px" }}>Reserved & confirmed. Your tier opens this door automatically. Enjoy, radiant one. ✨</p>
+          <button className="btn primary" style={{ marginTop: 18 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>Lovely</button>
+        </div>
+      </Sheet>
+    );
+  }
+  
+  function FriendWarnModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const c = byId[payload.id];
+    return (
+      <Sheet>
+        <div style={{ textAlign: "center" }}>
+          <div className="warn-hero pulse-soft"><ShieldAlert size={26} color="#fff" /></div>
+          <h3 style={{ margin: "12px 0 2px", color: "#5A4A60" }}>Add a Low-tier friend?</h3>
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, padding: "0 10px" }}>
+            <b>{c.name}</b> sits at <b>{c.score.toFixed(1)}</b>. Connecting will lower your network reach and dim your feed visibility. Many radiant members quietly avoid this.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <button className="btn soft" style={{ flex: 1 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>Reconsider</button>
+          <button className="btn danger" style={{ flex: 1 }} onClick={() => { sendFriendRequest(dispatch, state, c.id); dispatch({ type: "CLOSE_MODAL" }); }}>Request anyway</button>
+        </div>
+      </Sheet>
+    );
+  }
+
+  function DeleteChatModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const c = byId[payload?.id];
+    const [busy, setBusy] = useState(false);
+    if (!c) return null;
+
+    const confirm = () => {
+      if (busy) return;
+      setBusy(true);
+      sfx.tap();
+      const run = () => {
+        dispatch({ type: "DELETE_CHAT", id: c.id });
+        dispatch({ type: "CLOSE_MODAL" });
+      };
+      if (state.liveData) {
+        api.deleteChat(c.id).then(run).catch(() => setBusy(false));
+        return;
+      }
+      run();
+    };
+
+    return (
+      <Sheet>
+        <div style={{ textAlign: "center" }}>
+          <div className="warn-hero pulse-soft"><Trash2 size={26} color="#fff" /></div>
+          <h3 style={{ margin: "12px 0 2px", color: "#5A4A60" }}>{tr("messages.deleteTitle")}</h3>
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, padding: "0 10px" }}>
+            {tr("messages.deleteConfirm")}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <button type="button" className="btn soft" style={{ flex: 1 }} disabled={busy} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("messages.deleteCancel")}</button>
+          <button type="button" className="btn danger" style={{ flex: 1 }} disabled={busy} onClick={confirm}>{busy ? tr("messages.deleteBusy") : tr("messages.deleteConfirmBtn")}</button>
+        </div>
+      </Sheet>
+    );
+  }
+
+  function RemoveFriendModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const c = byId[payload.id];
+    const [busy, setBusy] = useState(false);
+
+    const confirm = () => {
+      if (busy) return;
+      setBusy(true);
+      sfx.tap();
+      if (state.liveData) {
+        api.removeFriend(c.id).then((res) => {
+          dispatch({
+            type: "REMOVE_FRIEND_RESULT",
+            id: c.id,
+            yourScore: res.yourScore,
+            theirScore: res.theirScore,
+            penalty: res.penalty ?? FRIEND_REMOVE_PENALTY,
+          });
+        }).catch(() => setBusy(false));
+        return;
+      }
+      const penalty = FRIEND_REMOVE_PENALTY;
+      dispatch({
+        type: "REMOVE_FRIEND_RESULT",
+        id: c.id,
+        yourScore: round2(clampScore(state.user.score + penalty)),
+        theirScore: round2(clampScore(c.score + penalty)),
+        penalty,
+      });
+    };
+
+    return (
+      <Sheet>
+        <div style={{ textAlign: "center" }}>
+          <div className="warn-hero pulse-soft"><UserMinus size={26} color="#fff" /></div>
+          <h3 style={{ margin: "12px 0 2px", color: "#5A4A60" }}>{tr("friends.removeTitle")}</h3>
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, padding: "0 10px" }}>
+            {tr("friends.removeBody", { name: c.name, penalty: Math.abs(FRIEND_REMOVE_PENALTY).toFixed(2) })}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+          <button className="btn soft" style={{ flex: 1 }} disabled={busy} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("friends.removeCancel")}</button>
+          <button className="btn danger" style={{ flex: 1 }} disabled={busy} onClick={confirm}>{busy ? tr("friends.removeBusy") : tr("friends.removeConfirm")}</button>
+        </div>
+      </Sheet>
+    );
+  }
+  
+  const mergeLayoutPhotosStatic = async (files, slots = 2) => {
+    const imgs = await Promise.all(files.map((f) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.src = URL.createObjectURL(f);
+    })));
+    const cols = slots >= 6 ? 3 : slots >= 4 ? 2 : slots;
+    const rows = Math.ceil(slots / cols);
+    const cell = 640;
+    const canvas = document.createElement("canvas");
+    canvas.width = cell * cols;
+    canvas.height = cell * rows;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    imgs.forEach((img, i) => {
+      const c = i % cols;
+      const r = Math.floor(i / cols);
+      const scale = Math.max(cell / img.width, cell / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      ctx.drawImage(img, c * cell + (cell - w) / 2, r * cell + (cell - h) / 2, w, h);
+    });
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        resolve(blob ? new File([blob], `layout_${Date.now()}.jpg`, { type: "image/jpeg" }) : null);
+      }, "image/jpeg", 0.92);
+    });
+  };
+
+  const layoutGridShape = (slots) => {
+    const cols = slots >= 6 ? 3 : slots >= 4 ? 2 : slots;
+    const rows = Math.ceil(slots / cols);
+    return { cols, rows };
+  };
+
+  function LayoutSlotPreview({ slots, size = 34 }) {
+    const { cols, rows } = layoutGridShape(slots);
+    return (
+      <span
+        className="compose-layout-preview"
+        style={{ width: size, height: size, gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}
+      >
+        {Array.from({ length: slots }).map((_, i) => <em key={i} />)}
+      </span>
+    );
+  }
+
+  const CAMERA_MODES = ["story", "post", "live"];
+
+  function ComposeCameraView({ onCapture, onGallery, onClose, captureMode = "story", fullscreen = false, onTextTool, openTextOnCapture = false, onStartLive, onEndLive }) {
+    const tr = useT();
+    const videoRef = useRef(null);
+    const streamRef = useRef(null);
+    const recorderRef = useRef(null);
+    const chunksRef = useRef([]);
+    const holdTimerRef = useRef(null);
+    const boomerangDownAt = useRef(null);
+    const shutterPressedRef = useRef(false);
+    const recordingRef = useRef(false);
+    const layoutRef = useRef([]);
+    const [recording, setRecording] = useState(false);
+    const [ready, setReady] = useState(false);
+    const [error, setError] = useState(false);
+    const [facing, setFacing] = useState("environment");
+    const [flashOn, setFlashOn] = useState(false);
+    const [torchOk, setTorchOk] = useState(false);
+    const [mode, setMode] = useState(CAMERA_MODES.includes(captureMode) ? captureMode : "story");
+
+    useEffect(() => {
+      if (CAMERA_MODES.includes(captureMode)) setMode(captureMode);
+    }, [captureMode]);
+    const [timerSec, setTimerSec] = useState(0);
+    const [countdown, setCountdown] = useState(null);
+    const [tool, setTool] = useState(null);
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [layoutCount, setLayoutCount] = useState(0);
+    const [layoutSlots, setLayoutSlots] = useState(2);
+    const [cameraText, setCameraText] = useState("");
+    const [cameraTextPos, setCameraTextPos] = useState({ x: 50, y: 42 });
+    const cameraStageRef = useRef(null);
+    const [textEditOpen, setTextEditOpen] = useState(false);
+    const [handsFreeActive, setHandsFreeActive] = useState(false);
+    const [broadcasting, setBroadcasting] = useState(false);
+    const [galleryThumb, setGalleryThumb] = useState(null);
+
+    useEffect(() => {
+      const recents = loadRecentMedia();
+      if (recents[0]?.dataUrl) setGalleryThumb(recents[0].dataUrl);
+    }, []);
+
+    useEffect(() => {
+      let stream;
+      let cancelled = false;
+      (async () => {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setError(true);
+          return;
+        }
+        try {
+          streamRef.current?.getTracks().forEach((t) => t.stop());
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: true,
+          });
+          if (cancelled) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+          streamRef.current = stream;
+          const v = videoRef.current;
+          if (v) {
+            v.srcObject = stream;
+            await v.play().catch(() => {});
+          }
+          setReady(true);
+          const track = stream.getVideoTracks()[0];
+          const caps = track?.getCapabilities?.();
+          setTorchOk(!!caps?.torch);
+        } catch {
+          setError(true);
+        }
+      })();
+      return () => {
+        cancelled = true;
+        clearTimeout(holdTimerRef.current);
+        recorderRef.current?.state === "recording" && recorderRef.current.stop();
+        stream?.getTracks().forEach((t) => t.stop());
+      };
+    }, [facing]);
+
+    useEffect(() => {
+      const track = streamRef.current?.getVideoTracks?.()[0];
+      if (!track || !torchOk || facing !== "environment") return;
+      track.applyConstraints({ advanced: [{ torch: flashOn }] }).catch(() => {});
+    }, [flashOn, torchOk, facing, ready]);
+
+    const pickMime = () => {
+      const types = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
+      return types.find((t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) || "";
+    };
+
+    const captureMeta = () => ({
+      openText: !cameraText.trim() && (openTextOnCapture || textEditOpen),
+      cameraText: cameraText.trim(),
+      cameraTextX: cameraTextPos.x,
+      cameraTextY: cameraTextPos.y,
+      captureMode: mode,
+    });
+
+    const startCameraTextDrag = (e) => {
+      if (!cameraText.trim() || textEditOpen) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const rect = cameraStageRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      e.currentTarget?.setPointerCapture?.(e.pointerId);
+      const orig = { ...cameraTextPos };
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const move = (ev) => {
+        ev.preventDefault();
+        const dx = ((ev.clientX - startX) / rect.width) * 100;
+        const dy = ((ev.clientY - startY) / rect.height) * 100;
+        setCameraTextPos({ x: clampPct(orig.x + dx), y: clampPct(orig.y + dy) });
+      };
+      const up = (ev) => {
+        try { e.currentTarget?.releasePointerCapture?.(ev.pointerId); } catch { /* ignore */ }
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+      };
+      window.addEventListener("pointermove", move, { passive: false });
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    };
+
+    const takePhoto = (withFlashPulse = false) => {
+      const v = videoRef.current;
+      if (!v?.videoWidth) return;
+      sfx.tap();
+      const snap = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = v.videoWidth;
+        canvas.height = v.videoHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(v, 0, 0);
+        if (withFlashPulse && !torchOk) {
+          ctx.fillStyle = "rgba(255,255,255,0.35)";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        canvas.toBlob((blob) => {
+          if (!blob) return;
+          const file = new File([blob], `photo_${Date.now()}.jpg`, { type: "image/jpeg" });
+          if (tool === "layout") {
+            layoutRef.current = [...layoutRef.current, file].slice(-layoutSlots);
+            setLayoutCount(layoutRef.current.length);
+            if (layoutRef.current.length >= layoutSlots) {
+              mergeLayoutPhotos(layoutRef.current, layoutSlots).then((merged) => {
+                if (merged) onCapture(merged, captureMeta());
+                layoutRef.current = [];
+                setLayoutCount(0);
+                setTool(null);
+              });
+            }
+            return;
+          }
+          onCapture(file, captureMeta());
+        }, "image/jpeg", 0.92);
+      };
+      if (withFlashPulse && torchOk && facing === "environment") {
+        const track = streamRef.current?.getVideoTracks?.()[0];
+        track?.applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
+        setTimeout(() => {
+          snap();
+          track?.applyConstraints({ advanced: [{ torch: flashOn }] }).catch(() => {});
+        }, 120);
+        return;
+      }
+      snap();
+    };
+
+    const mergeLayoutPhotos = async (files, slots = 2) => {
+      const imgs = await Promise.all(files.map((f) => new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.src = URL.createObjectURL(f);
+      })));
+      const cols = slots >= 6 ? 3 : slots >= 4 ? 2 : slots;
+      const rows = Math.ceil(slots / cols);
+      const cell = 640;
+      const canvas = document.createElement("canvas");
+      canvas.width = cell * cols;
+      canvas.height = cell * rows;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#111";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      imgs.forEach((img, i) => {
+        const c = i % cols;
+        const r = Math.floor(i / cols);
+        const scale = Math.max(cell / img.width, cell / img.height);
+        const w = img.width * scale;
+        const h = img.height * scale;
+        ctx.drawImage(img, c * cell + (cell - w) / 2, r * cell + (cell - h) / 2, w, h);
+      });
+      return new Promise((resolve) => {
+        canvas.toBlob((blob) => {
+          resolve(blob ? new File([blob], `layout_${Date.now()}.jpg`, { type: "image/jpeg" }) : null);
+        }, "image/jpeg", 0.92);
+      });
+    };
+
+    const startRecord = () => {
+      if (!streamRef.current || recordingRef.current) return;
+      chunksRef.current = [];
+      const mime = pickMime();
+      let mr;
+      try {
+        mr = mime ? new MediaRecorder(streamRef.current, { mimeType: mime }) : new MediaRecorder(streamRef.current);
+      } catch {
+        return;
+      }
+      recorderRef.current = mr;
+      mr.ondataavailable = (e) => { if (e.data?.size) chunksRef.current.push(e.data); };
+      mr.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType || "video/webm" });
+        const ext = (mr.mimeType || "").includes("mp4") ? "mp4" : "webm";
+        if (broadcasting) {
+          setBroadcasting(false);
+          onEndLive?.();
+        } else {
+          onCapture(new File([blob], `video_${Date.now()}.${ext}`, { type: blob.type || "video/webm" }), captureMeta());
+        }
+        recordingRef.current = false;
+        setRecording(false);
+        setHandsFreeActive(false);
+      };
+      mr.start(200);
+      recordingRef.current = true;
+      setRecording(true);
+      sfx.tap();
+    };
+
+    const stopRecord = () => {
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+    };
+
+    const runCapture = () => {
+      if (mode === "live") {
+        if (!broadcasting) {
+          setBroadcasting(true);
+          onStartLive?.();
+          startRecord();
+        }
+        return;
+      }
+      if (mode === "post" && tool !== "layout") {
+        takePhoto(flashOn);
+        return;
+      }
+      takePhoto(flashOn);
+    };
+
+    const startCountdown = () => {
+      if (!timerSec) {
+        runCapture();
+        return;
+      }
+      let left = timerSec;
+      setCountdown(left);
+      const tick = () => {
+        left -= 1;
+        if (left <= 0) {
+          setCountdown(null);
+          runCapture();
+          return;
+        }
+        setCountdown(left);
+        setTimeout(tick, 1000);
+      };
+      setTimeout(tick, 1000);
+    };
+
+    const onShutterDown = (e) => {
+      e.preventDefault();
+      if (e.button !== 0 || !ready || countdown != null) return;
+      shutterPressedRef.current = true;
+      if (tool === "handsfree") {
+        if (recordingRef.current) stopRecord();
+        else startCountdown();
+        return;
+      }
+      if (mode === "live") {
+        startCountdown();
+        return;
+      }
+      if (tool === "boomerang") {
+        boomerangDownAt.current = Date.now();
+        if (!recordingRef.current) startRecord();
+        return;
+      }
+      holdTimerRef.current = setTimeout(() => { if (!tool) startRecord(); }, 320);
+    };
+
+    const onShutterUp = () => {
+      clearTimeout(holdTimerRef.current);
+      if (!shutterPressedRef.current) return;
+      shutterPressedRef.current = false;
+      if (tool === "handsfree") return;
+      if (tool === "boomerang") {
+        const held = Date.now() - (boomerangDownAt.current || 0);
+        boomerangDownAt.current = null;
+        if (recordingRef.current && held >= 280) stopRecord();
+        return;
+      }
+      if (recordingRef.current) stopRecord();
+      else if (ready && !recordingRef.current && mode !== "live") startCountdown();
+    };
+
+    const onShutterLeave = () => {
+      clearTimeout(holdTimerRef.current);
+      if (!shutterPressedRef.current) return;
+      shutterPressedRef.current = false;
+      if (recordingRef.current) stopRecord();
+    };
+
+    const endBoomerang = () => {
+      sfx.tap();
+      boomerangDownAt.current = null;
+      stopRecord();
+    };
+
+    const endLive = () => {
+      sfx.tap();
+      stopRecord();
+      setBroadcasting(false);
+      onEndLive?.();
+    };
+
+    if (error) return null;
+
+    const modeLabel = (m) => {
+      if (m === "story") return tr("feed.cameraModeStory");
+      if (m === "post") return tr("feed.cameraModePost");
+      return tr("feed.cameraModeLive");
+    };
+
+    const flipCamera = () => {
+      sfx.tap();
+      setFacing((f) => (f === "environment" ? "user" : "environment"));
+    };
+
+    return (
+      <div className={"compose-camera" + (fullscreen ? " compose-camera--fullscreen" : "")}>
+        <div className="compose-camera-top">
+          {onClose && (
+            <button type="button" className="compose-camera-topbtn" aria-label={tr("legal.close")} onClick={onClose}>
+              <X size={26} strokeWidth={2} />
+            </button>
+          )}
+          <button type="button" className="compose-camera-topbtn" aria-label="Flash" onClick={() => { sfx.tap(); setFlashOn((v) => !v); }}>
+            <Zap size={22} fill={flashOn ? "#fff" : "none"} stroke={flashOn ? "#fff" : "currentColor"} />
+          </button>
+          <button type="button" className="compose-camera-topbtn" aria-label={tr("settings.title")} onClick={() => { sfx.tap(); setSettingsOpen((v) => !v); }}>
+            <Settings size={22} />
+          </button>
+        </div>
+        {settingsOpen && (
+          <div className="compose-camera-settings">
+            <button type="button" className={timerSec === 0 ? "on" : ""} onClick={() => setTimerSec(0)}>{tr("feed.timerOff")}</button>
+            <button type="button" className={timerSec === 3 ? "on" : ""} onClick={() => setTimerSec(3)}>3s</button>
+            <button type="button" className={timerSec === 10 ? "on" : ""} onClick={() => setTimerSec(10)}>10s</button>
+            <span className="compose-camera-settings-hint">{torchOk ? tr("feed.flashTorch") : tr("feed.flashScreen")}</span>
+          </div>
+        )}
+        <div className="compose-camera-tools">
+          <button type="button" className={"compose-camera-tool compose-camera-aa" + (textEditOpen ? " on" : "")} aria-label={tr("feed.storyToolText")} onClick={() => { sfx.tap(); setTextEditOpen((v) => !v); }}>Aa</button>
+          <button type="button" className={"compose-camera-tool" + (tool === "boomerang" ? " on" : "")} aria-label="Boomerang" onClick={() => { sfx.tap(); setTool((t) => t === "boomerang" ? null : "boomerang"); }}><Infinity size={22} /></button>
+          <button type="button" className={"compose-camera-tool" + (tool === "layout" ? " on" : "")} aria-label="Layout" onClick={() => { sfx.tap(); layoutRef.current = []; setLayoutCount(0); setTool((t) => t === "layout" ? null : "layout"); }}><LayoutGrid size={22} /></button>
+          <button type="button" className={"compose-camera-tool compose-camera-handsfree" + (tool === "handsfree" ? " on" : "")} aria-label={tr("feed.handsFree")} onClick={() => { sfx.tap(); setTool((t) => t === "handsfree" ? null : "handsfree"); setTimerSec(3); }}><span className="compose-handsfree-box"><Circle size={14} /></span></button>
+        </div>
+        {textEditOpen && (
+          <input className="compose-camera-text-input" value={cameraText} onChange={(e) => setCameraText(e.target.value)} placeholder={tr("feed.storyToolText")} autoFocus />
+        )}
+        {tool === "layout" && (
+          <div className="compose-layout-picker" onPointerDown={(e) => e.stopPropagation()}>
+            {[2, 3, 4, 6].map((n) => (
+              <button key={n} type="button" className={layoutSlots === n ? "on" : ""} onClick={(e) => { e.stopPropagation(); sfx.tap(); setLayoutSlots(n); layoutRef.current = []; setLayoutCount(0); }}>
+                <LayoutSlotPreview slots={n} />
+              </button>
+            ))}
+          </div>
+        )}
+        <div ref={cameraStageRef} className="compose-camera-stage">
+        <video ref={videoRef} className="compose-camera-video" playsInline muted autoPlay />
+        {tool === "layout" && (() => {
+          const { cols, rows } = layoutGridShape(layoutSlots);
+          return (
+            <div className="compose-layout-overlay" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}>
+              {Array.from({ length: layoutSlots }).map((_, i) => (
+                <div key={i} className={"compose-layout-cell" + (i < layoutCount ? " filled" : "") + (i === layoutCount && layoutCount < layoutSlots ? " active" : "")} />
+              ))}
+            </div>
+          );
+        })()}
+        {countdown != null && <div className="compose-camera-countdown">{countdown}</div>}
+        {tool === "layout" && <div className="compose-camera-layout-hint">{layoutCount}/{layoutSlots}</div>}
+        {broadcasting && (
+          <div className="compose-camera-live-overlay">
+            <span className="compose-camera-live-pill"><Radio size={12} /> {tr("feed.live")}</span>
+            <button type="button" className="compose-camera-live-end" onClick={endLive}>{tr("feed.endLive")}</button>
+          </div>
+        )}
+        {recording && !broadcasting && (
+          <div className="compose-camera-rec-overlay">
+            <div className="compose-camera-rec-badge">{tool === "boomerang" ? tr("feed.boomerang") : tr("feed.recording")}</div>
+            {tool === "boomerang" && (
+              <button type="button" className="compose-camera-boomerang-end" onClick={endBoomerang}>{tr("feed.endRecording")}</button>
+            )}
+          </div>
+        )}
+        {cameraText && !textEditOpen && (
+          <div
+            className="compose-camera-text-preview"
+            style={{ left: `${cameraTextPos.x}%`, top: `${cameraTextPos.y}%`, transform: "translate(-50%, -50%)" }}
+            onPointerDown={startCameraTextDrag}
+          >
+            {cameraText}
+          </div>
+        )}
+        </div>
+        <div className="compose-camera-bottom">
+          <div className="compose-camera-controls">
+            {onGallery && (
+              <button type="button" className="compose-camera-gallery" aria-label={tr("feed.pickUpload")} onClick={onGallery}>
+                {galleryThumb ? <img src={galleryThumb} alt="" className="compose-camera-gallery-thumb" /> : <ImageIcon size={24} />}
+              </button>
+            )}
+            <button
+              type="button"
+              className={"compose-shutter" + (recording ? " recording" : "")}
+              aria-label={tr("feed.pickCamera")}
+              onPointerDown={onShutterDown}
+              onPointerUp={onShutterUp}
+              onPointerLeave={onShutterLeave}
+              onPointerCancel={onShutterLeave}
+            />
+            <div className="compose-camera-filters" aria-hidden>
+              <span className="compose-camera-filter-dot" />
+              <span className="compose-camera-filter-dot" />
+            </div>
+          </div>
+          <div className="compose-camera-modes">
+            {CAMERA_MODES.map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={"compose-camera-mode" + (mode === m ? " on" : "")}
+                onClick={() => { sfx.tap(); setMode(m); }}
+              >
+                {modeLabel(m)}
+              </button>
+            ))}
+            <button type="button" className="compose-camera-flip" aria-label="Flip camera" onClick={flipCamera}>
+              <RotateCcw size={24} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function StoryGalleryModal({ onPicked, onClose }) {
+    const { dispatch } = useStore();
+    const tr = useT();
+    const uploadRef = useRef(null);
+    const multiRef = useRef(null);
+    const collageRef = useRef(null);
+    const [recents, setRecents] = useState(() => loadRecentMedia());
+    const [selectMode, setSelectMode] = useState(false);
+    const [selected, setSelected] = useState([]);
+    const [cameraOpen, setCameraOpen] = useState(false);
+    const [albumOpen, setAlbumOpen] = useState(false);
+    const [musicPick, setMusicPick] = useState(false);
+
+    const pickFile = (f, meta) => {
+      if (!f) return;
+      pushRecentMedia(f);
+      setRecents(loadRecentMedia());
+      onPicked(f, { ...meta, openMusic: meta?.openMusic ?? musicPick });
+      setMusicPick(false);
+    };
+
+    const pickDataUrl = async (item) => {
+      if (!item?.dataUrl) return;
+      const res = await fetch(item.dataUrl);
+      const blob = await res.blob();
+      pickFile(new File([blob], item.name || `media_${Date.now()}`, { type: item.type || blob.type }));
+    };
+
+    if (cameraOpen) {
+      return createPortal(
+        <div className="compose-camera-portal">
+          <ComposeCameraView
+            fullscreen
+            captureMode="story"
+            onCapture={(f, meta) => { setCameraOpen(false); pickFile(f, meta); }}
+            onGallery={() => uploadRef.current?.click()}
+            onClose={() => setCameraOpen(false)}
+            onStartLive={() => dispatch({ type: "START_LIVE", keepModal: true })}
+            onEndLive={() => { dispatch({ type: "END_LIVE" }); setCameraOpen(false); }}
+            openTextOnCapture
+          />
+          <input ref={uploadRef} type="file" accept="image/*,video/*" onChange={(e) => pickFile(e.target.files?.[0])} style={{ display: "none" }} />
+        </div>,
+        document.body
+      );
+    }
+
+    return createPortal(
+      <div className="story-gallery">
+        <header className="story-gallery-head">
+          <button type="button" className="story-gallery-x" onClick={onClose}><X size={26} /></button>
+          <h1>{tr("feed.addToStory")}</h1>
+          <button type="button" className="story-gallery-settings" onClick={() => dispatch({ type: "SCREEN", screen: "settings" })}><Settings size={22} /></button>
+        </header>
+        <div className="story-gallery-features">
+          <button type="button" className="story-gallery-feature" onClick={() => {
+            sfx.tap();
+            onClose();
+            dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story", cameraOnly: true, addYours: true } });
+          }}>
+            <span className="story-gallery-feature-ic story-gallery-feature-ic--svg"><UserRound size={28} strokeWidth={1.5} /></span>
+            <small>{tr("feed.storyAddYours")}</small>
+          </button>
+          <button type="button" className="story-gallery-feature" onClick={() => {
+            sfx.tap();
+            setMusicPick(true);
+            uploadRef.current?.click();
+          }}>
+            <span className="story-gallery-feature-ic story-gallery-feature-ic--svg"><Disc3 size={28} strokeWidth={1.5} /></span>
+            <small>{tr("feed.storyToolAudio")}</small>
+          </button>
+          <button type="button" className="story-gallery-feature" onClick={() => {
+            sfx.tap();
+            setSelectMode(true);
+            collageRef.current?.click();
+          }}>
+            <span className="story-gallery-feature-ic story-gallery-feature-ic--svg"><LayoutGrid size={28} strokeWidth={1.5} /></span>
+            <small>{tr("feed.storyCollage")}</small>
+          </button>
+        </div>
+        <div className="story-gallery-bar">
+          <button type="button" className="story-gallery-recents" onClick={() => { sfx.tap(); setAlbumOpen((v) => !v); }}>
+            <span>{albumOpen ? tr("feed.favorites") : tr("feed.recents")}</span>
+            <ChevronDown size={16} />
+          </button>
+          <div className="story-gallery-bar-actions">
+            {selectMode && selected.length > 0 && (
+              <button type="button" className="story-gallery-delete-selected" onClick={() => {
+                sfx.tap();
+                setRecents(removeRecentMediaAt(selected));
+                setSelected([]);
+                setSelectMode(false);
+              }}>
+                {tr("feed.deleteSelected")}
+              </button>
+            )}
+            <button type="button" className={"story-gallery-select" + (selectMode ? " on" : "")} onClick={() => { sfx.tap(); setSelectMode((v) => !v); setSelected([]); }}>{tr("feed.select")}</button>
+          </div>
+        </div>
+        {selectMode && selected.length > 1 && (
+          <button type="button" className="story-gallery-collage-btn" onClick={async () => {
+            sfx.tap();
+            const blobs = await Promise.all(selected.map(async (i) => {
+              const item = recents[i];
+              if (!item?.dataUrl) return null;
+              const res = await fetch(item.dataUrl);
+              return res.blob();
+            }));
+            const files = blobs.filter(Boolean).map((b, i) => new File([b], `col_${i}.jpg`, { type: b.type || "image/jpeg" }));
+            if (files.length < 2) return;
+            const merged = await mergeLayoutPhotosStatic(files, Math.min(files.length, 4));
+            if (merged) pickFile(merged, { openMusic: false, collage: true });
+            setSelectMode(false);
+            setSelected([]);
+          }}>
+            {tr("feed.createCollage")}
+          </button>
+        )}
+        <div className="story-gallery-grid">
+          <button type="button" className="story-gallery-tile story-gallery-tile--camera" onClick={() => setCameraOpen(true)}>
+            <Camera size={32} />
+          </button>
+          {recents.map((item, i) => (
+            <div key={`${item.ts}-${i}`} className={"story-gallery-tile-wrap" + (selectMode && selected.includes(i) ? " selected" : "")}>
+              <button type="button" className="story-gallery-tile" onClick={() => {
+                if (selectMode) {
+                  setSelected((s) => s.includes(i) ? s.filter((x) => x !== i) : [...s, i]);
+                  return;
+                }
+                pickDataUrl(item);
+              }}>
+                {item.type?.startsWith("video") ? <video src={item.dataUrl} muted playsInline /> : <img src={item.dataUrl} alt="" />}
+                {item.type?.startsWith("video") && <em className="story-gallery-dur">0:15</em>}
+              </button>
+              {!selectMode && (
+                <button type="button" className="story-gallery-trash" aria-label={tr("feed.deleteSelected")} onClick={(e) => {
+                  e.stopPropagation();
+                  sfx.tap();
+                  setRecents(removeRecentMediaAt([i]));
+                }}>
+                  <Trash2 size={14} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+        <input ref={uploadRef} type="file" accept="image/*,video/*,audio/*,.mov,.mp4,.webm,.m4v" onChange={(e) => pickFile(e.target.files?.[0])} style={{ display: "none" }} />
+        <input ref={multiRef} type="file" accept="image/*" multiple onChange={(e) => pickFile(e.target.files?.[0])} style={{ display: "none" }} />
+        <input ref={collageRef} type="file" accept="image/*" multiple onChange={(e) => {
+          const files = [...(e.target.files || [])];
+          if (files.length >= 2) {
+            mergeLayoutPhotosStatic(files, Math.min(files.length, 4)).then((merged) => { if (merged) pickFile(merged, { collage: true }); });
+          } else if (files[0]) pickFile(files[0]);
+        }} style={{ display: "none" }} />
+      </div>,
+      document.body
+    );
+  }
+
+  async function publishCapturedMedia(dispatch, state, file, opts = {}) {
+    if (!file) return;
+    const mode = opts.mode || "post";
+    const isVideo = file.type.startsWith("video/");
+    const mediaUrl = URL.createObjectURL(file);
+    const mediaType = isVideo ? "video" : "image";
+    const tempId = `tmp_${Date.now()}`;
+    const overlays = [];
+    if (opts.cameraText?.trim()) {
+      overlays.push({
+        id: overlayId(),
+        type: "text",
+        text: opts.cameraText.trim(),
+        x: opts.cameraTextX ?? 50,
+        y: opts.cameraTextY ?? 42,
+        color: "#fff",
+        align: "center",
+        scale: 1,
+      });
+    }
+    if (opts.addYours) {
+      overlays.push({ id: overlayId(), type: "text", text: translate(state.lang || "en", "feed.addYoursPrompt"), x: 50, y: 72, color: "#fff", align: "center", scale: 0.95 });
+    }
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        const label = await reverseGeocodeLabel(pos.coords.latitude, pos.coords.longitude);
+        if (label) {
+          dispatch({
+            type: "PATCH_FEED_POST",
+            postId: tempId,
+            patch: { captionStyle: { overlays: [...overlays, { id: overlayId(), type: "location", text: label, x: 50, y: 55, color: "#fff", align: "center" }] } },
+          });
+        }
+      }, () => {}, { timeout: 8000, maximumAge: 120000 });
+    }
+    const captionStyle = { overlays, color: "#fff", align: "center" };
+    const filter = COMPOSE_FILTERS[0];
+    const localBody = {
+      id: tempId,
+      author: ME_ID,
+      mediaUrl,
+      mediaType,
+      caption: opts.cameraText?.trim() || "",
+      captionStyle,
+      scene: filter.scene,
+      emoji: COMPOSE_STICKERS[0],
+      ts: Date.now(),
+      likes: 0,
+      pending: true,
+      source: "echelon",
+    };
+
+    if (mode === "story") {
+      const dur = isVideo ? await getVideoDuration(mediaUrl) : 0;
+      const storyItems = [{
+        id: `si_${tempId}`,
+        mediaUrl,
+        mediaType,
+        caption: localBody.caption,
+        captionStyle: isVideo ? { ...captionStyle, videoDuration: dur || undefined } : captionStyle,
+        ts: Date.now(),
+      }];
+      dispatch({
+        type: "STORY_PUBLISHED",
+        story: { id: `ss_${tempId}`, author: ME_ID, items: storyItems, ts: Date.now(), expiresAt: Date.now() + 86400000 },
+      });
+    } else if (mode === "reel") {
+      const dur = isVideo ? Math.min(await getVideoDuration(mediaUrl), REEL_MAX_SEC) : 30;
+      dispatch({ type: "ADD_FEED_POST", post: { ...localBody, kind: "reel", isReel: true, durationSec: dur } });
+    } else {
+      dispatch({ type: "ADD_FEED_POST", post: { ...localBody, kind: "post" } });
+    }
+    dispatch({ type: "CLOSE_MODAL" });
+    dispatch({ type: "SET_SHARE_SUCCESS", message: translate(state.lang || "en", "feed.sharedSuccess"), composeMode: mode });
+    sfx.success();
+
+    if (!state.liveData) return;
+    try {
+      const up = await api.upload(file);
+      const body = { mediaUrl: up.url, mediaType, caption: localBody.caption, captionStyle, scene: filter.scene, emoji: COMPOSE_STICKERS[0] };
+      if (mode === "story") {
+        const res = await api.createStory(body);
+        if (res?.story) dispatch({ type: "STORY_PUBLISHED", story: res.story });
+      } else {
+        const res = await api.createPost({ ...body, fromStory: false, source: "echelon", kind: mode === "reel" ? "reel" : "post" });
+        dispatch({ type: "UPDATE_FEED_POST", postId: tempId, patch: { ...res, mediaUrl: mediaUrl(res.mediaUrl) || up.url, pending: false } });
+      }
+    } catch {
+      sfx.penalty();
+    }
+  }
+
+  function MediaPickModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const uploadRef = useRef(null);
+    const pickMode = payload?.mode || "post";
+    const cameraOnly = payload?.cameraOnly || pickMode === "post";
+    const storyGallery = payload?.gallery || pickMode === "story";
+
+    const onPicked = (f, meta) => {
+      if (!f) return;
+      pushRecentMedia(f);
+      sfx.tap();
+      const capMode = meta?.captureMode || pickMode;
+      if (capMode === "live") return;
+      const publishMode = capMode === "story" ? "story" : capMode === "reel" || pickMode === "reel" ? "reel" : "post";
+      dispatch({
+        type: "OPEN_MODAL",
+        modal: "createcontent",
+        payload: {
+          mode: publishMode,
+          initialFile: f,
+          cameraText: meta?.cameraText,
+          cameraTextX: meta?.cameraTextX,
+          cameraTextY: meta?.cameraTextY,
+          openText: meta?.openText,
+          addYours: payload?.addYours || meta?.addYours,
+          openMusic: meta?.openMusic || payload?.openMusic,
+        },
+      });
+    };
+
+    const onStartLive = () => {
+      sfx.tap();
+      dispatch({ type: "START_LIVE", keepModal: true });
+    };
+
+    const onEndLive = () => {
+      sfx.tap();
+      dispatch({ type: "END_LIVE" });
+      dispatch({ type: "CLOSE_MODAL" });
+    };
+
+    const canLiveCamera = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+
+    if (storyGallery && pickMode === "story") {
+      return (
+        <StoryGalleryModal
+          onPicked={onPicked}
+          onClose={() => dispatch({ type: "CLOSE_MODAL" })}
+        />
+      );
+    }
+
+    if (canLiveCamera && cameraOnly) {
+      return createPortal(
+        <div className="compose-camera-portal">
+          <ComposeCameraView
+            fullscreen
+            captureMode={pickMode}
+            onCapture={onPicked}
+            onGallery={() => uploadRef.current?.click()}
+            onClose={() => dispatch({ type: "CLOSE_MODAL" })}
+            onStartLive={onStartLive}
+            onEndLive={onEndLive}
+            openTextOnCapture
+          />
+          <input ref={uploadRef} type="file" accept="image/*,video/*,.mov,.mp4,.webm,.m4v" onChange={(e) => onPicked(e.target.files?.[0])} style={{ display: "none" }} />
+        </div>,
+        document.body
+      );
+    }
+
+    return (
+      <Sheet dismissable className="sheet--mediapick">
+        <p className="muted" style={{ textAlign: "center", fontSize: 13, margin: "0 0 16px" }}>{tr("feed.pickMedia")}</p>
+        <div className="media-pick-row">
+          <button type="button" className="media-pick-opt" onClick={() => dispatch({ type: "CLOSE_MODAL", modal: null })}>
+            <Camera size={30} />
+            <span>{tr("feed.pickCamera")}</span>
+          </button>
+          <button type="button" className="media-pick-opt" onClick={() => uploadRef.current?.click()}>
+            <ImageIcon size={30} />
+            <span>{tr("feed.pickUpload")}</span>
+          </button>
+        </div>
+        <input ref={uploadRef} type="file" accept="image/*,video/*,.mov,.mp4,.webm,.m4v" onChange={(e) => onPicked(e.target.files?.[0])} style={{ display: "none" }} />
+      </Sheet>
+    );
+  }
+
+  function CreateContentModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [mode, setMode] = useState(payload?.mode || "post");
+    useEffect(() => {
+      if (payload?.mode) setMode(payload.mode);
+    }, [payload?.mode]);
+    const [description, setDescription] = useState("");
+    const [overlays, setOverlays] = useState([]);
+    const [selectedOverlay, setSelectedOverlay] = useState(null);
+    const [editingOverlay, setEditingOverlay] = useState(null);
+    const [mediaUrl, setMediaUrl] = useState(null);
+    const [mediaType, setMediaType] = useState(null);
+    const [mediaFile, setMediaFile] = useState(null);
+    const [filterIdx, setFilterIdx] = useState(0);
+    const [adjust, setAdjust] = useState({ ...COMPOSE_ADJUST_DEFAULT });
+    const [toolTab, setToolTab] = useState("filters");
+    const [captionColor, setCaptionColor] = useState("#ffffff");
+    const [captionAlign, setCaptionAlign] = useState("center");
+    const [busy, setBusy] = useState(false);
+    const [tagOpen, setTagOpen] = useState(false);
+    const [tagQuery, setTagQuery] = useState("");
+    const [tagResults, setTagResults] = useState([]);
+    const [mentionOpen, setMentionOpen] = useState(false);
+    const [mentionQuery, setMentionQuery] = useState("");
+    const [cameraOpen, setCameraOpen] = useState(false);
+    const [storyTool, setStoryTool] = useState(null);
+    const [storyRailOpen, setStoryRailOpen] = useState(false);
+    const [musicTrack, setMusicTrack] = useState(null);
+    const [musicPending, setMusicPending] = useState(null);
+    const [musicQuery, setMusicQuery] = useState("");
+    const [musicResults, setMusicResults] = useState(ECHELON_TRACKS);
+    const [musicBusy, setMusicBusy] = useState(false);
+    const [videoMuted, setVideoMuted] = useState(true);
+    const [videoDuration, setVideoDuration] = useState(0);
+    const [clipStart, setClipStart] = useState(0);
+    const [clipEnd, setClipEnd] = useState(0);
+    const [closeFriendsOnly, setCloseFriendsOnly] = useState(false);
+    const [drawPaths, setDrawPaths] = useState([]);
+    const [drawColor, setDrawColor] = useState("#ffffff");
+    const [drawActive, setDrawActive] = useState(false);
+    const drawRef = useRef(null);
+    const audioRef = useRef(null);
+    const musicPreviewRef = useRef(null);
+    const fileRef = useRef(null);
+    const cameraRef = useRef(null);
+    const canvasRef = useRef(null);
+    const descRef = useRef(null);
+    const geoAddedRef = useRef(false);
+    const payloadBootRef = useRef("");
+
+    const FILTERS = COMPOSE_FILTERS;
+    const filter = FILTERS[filterIdx] || FILTERS[0];
+    const activeOverlay = overlays.find((o) => o.id === selectedOverlay);
+    const expMul = 1 + (adjust.exposure || 0) / 120;
+    const mediaFilterCss = [
+      filter.css,
+      `brightness(${(adjust.brightness * expMul).toFixed(1)}%)`,
+      `contrast(${(adjust.contrast * (1 + (adjust.sharpen || 0) / 180)).toFixed(1)}%)`,
+      `saturate(${adjust.saturate}%)`,
+      adjust.warmth ? `sepia(${Math.min(0.55, adjust.warmth / 100)})` : "",
+      adjust.tint ? `hue-rotate(${adjust.tint}deg)` : "",
+      adjust.fade ? `opacity(${Math.max(0.55, 1 - adjust.fade / 200)})` : "",
+      adjust.blur ? `blur(${(adjust.blur / 20).toFixed(2)}px)` : "",
+    ].filter(Boolean).join(" ");
+
+    const patchOverlay = (id, patch) => {
+      setOverlays((list) => list.map((o) => (o.id === id ? { ...o, ...patch } : o)));
+    };
+
+    const removeOverlay = (id) => {
+      setOverlays((list) => list.filter((o) => o.id !== id));
+      if (selectedOverlay === id) setSelectedOverlay(null);
+      sfx.tap();
+    };
+
+    const scaleOverlay = (delta) => {
+      if (!selectedOverlay) return;
+      setOverlays((list) => list.map((o) => {
+        if (o.id !== selectedOverlay) return o;
+        const next = Math.max(0.6, Math.min(2.2, (o.scale ?? 1) + delta));
+        return { ...o, scale: next };
+      }));
+    };
+
+    const addOverlay = (ov) => {
+      const id = overlayId();
+      setOverlays((list) => [...list, { id, x: 50, y: 45, color: captionColor, align: captionAlign, ...ov }]);
+      setSelectedOverlay(id);
+      const autoEdit = (ov.type === "text" && !ov.text)
+        || ["hashtag", "location", "poll", "question", "quiz", "countdown", "link"].includes(ov.type);
+      if (autoEdit) setEditingOverlay(id);
+      sfx.tap();
+      return id;
+    };
+
+    useEffect(() => {
+      if (!mediaUrl || geoAddedRef.current) return;
+      if (!navigator.geolocation) return;
+      geoAddedRef.current = true;
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        const label = await reverseGeocodeLabel(pos.coords.latitude, pos.coords.longitude);
+        if (!label) return;
+        setOverlays((list) => {
+          if (list.some((o) => o.type === "location")) return list;
+          return [...list, {
+            id: overlayId(),
+            type: "location",
+            text: label,
+            x: 50,
+            y: 42,
+            color: captionColor,
+            align: "center",
+          }];
+        });
+      }, () => {}, { timeout: 9000, maximumAge: 120000 });
+    }, [mediaUrl, captionColor]);
+
+    useEffect(() => {
+      if (!tagOpen && !mentionOpen) return;
+      const q = (tagOpen ? tagQuery : mentionQuery).trim();
+      if (tagOpen && storyTool === "mention" && q.length < 2) {
+        const friends = (state.friends || []).map((fid) => byId[fid]).filter(Boolean);
+        setTagResults(friends.slice(0, 20));
+        return;
+      }
+      if (q.length < 2) { setTagResults([]); return; }
+      const t = setTimeout(() => {
+        api.searchUsers(q).then((res) => {
+          const rows = res?.users || res || [];
+          setTagResults(Array.isArray(rows) ? rows : []);
+        }).catch(() => setTagResults([]));
+      }, 280);
+      return () => clearTimeout(t);
+    }, [tagOpen, mentionOpen, tagQuery, mentionQuery, storyTool, state.friends]);
+
+    const onFile = (f) => {
+      if (!f) return;
+      const isVideo = f.type.startsWith("video/");
+      if (mediaUrl) URL.revokeObjectURL(mediaUrl);
+      geoAddedRef.current = false;
+      setOverlays([]);
+      setSelectedOverlay(null);
+      setEditingOverlay(null);
+      setMediaFile(f);
+      const url = URL.createObjectURL(f);
+      setMediaUrl(url);
+      setMediaType(isVideo ? "video" : "image");
+      setClipStart(0);
+      setClipEnd(0);
+      if (isVideo) {
+        getVideoDuration(url).then((dur) => {
+          const d = dur || 15;
+          setVideoDuration(d);
+          setClipEnd(Math.min(d, REEL_MAX_SEC));
+        });
+      } else {
+        setVideoDuration(0);
+      }
+      sfx.tap();
+    };
+
+    useEffect(() => {
+      if (storyTool !== "audio") return;
+      let cancelled = false;
+      setMusicBusy(true);
+      const t = setTimeout(() => {
+        searchFreeMusic(musicQuery, 24).then((rows) => {
+          if (!cancelled) setMusicResults(rows);
+        }).finally(() => { if (!cancelled) setMusicBusy(false); });
+      }, 280);
+      return () => { cancelled = true; clearTimeout(t); };
+    }, [musicQuery, storyTool]);
+
+    useEffect(() => {
+      if (!payload?.initialFile) return;
+      const bootKey = `${payload.initialFile.name}-${payload.initialFile.size}-${payload.initialFile.lastModified}-${payload?.cameraText || ""}`;
+      if (payloadBootRef.current === bootKey) return;
+      payloadBootRef.current = bootKey;
+      onFile(payload.initialFile);
+      const seedOverlays = [];
+      if (payload?.cameraText?.trim()) {
+        const id = overlayId();
+        seedOverlays.push({
+          id,
+          type: "text",
+          text: payload.cameraText.trim(),
+          x: payload.cameraTextX ?? 50,
+          y: payload.cameraTextY ?? 42,
+          color: "#fff",
+          align: "center",
+          scale: 1,
+        });
+        setSelectedOverlay(id);
+      }
+      if (payload?.addYours) {
+        seedOverlays.push({ id: overlayId(), type: "text", text: tr("feed.addYoursPrompt"), x: 50, y: 72, scale: 0.95, color: "#fff" });
+      }
+      if (seedOverlays.length) queueMicrotask(() => setOverlays(seedOverlays));
+      if (payload?.openText && !payload?.cameraText?.trim()) { setStoryTool("text"); setStoryRailOpen(true); }
+      if (payload?.openMusic) { setStoryTool("audio"); setStoryRailOpen(true); }
+      if (payload?.addYours && !payload?.cameraText?.trim()) { setStoryTool("text"); setStoryRailOpen(true); }
+    }, [payload?.initialFile, payload?.cameraText, payload?.cameraTextX, payload?.cameraTextY, payload?.openText, payload?.openMusic, payload?.addYours]);
+
+    const clearMedia = () => {
+      if (mediaUrl) URL.revokeObjectURL(mediaUrl);
+      setMediaUrl(null);
+      setMediaType(null);
+      setMediaFile(null);
+      setOverlays([]);
+      setSelectedOverlay(null);
+      setEditingOverlay(null);
+      geoAddedRef.current = false;
+      if (fileRef.current) fileRef.current.value = "";
+    };
+
+    const [stickerItems, setStickerItems] = useState(STORY_STICKER_PACK);
+    const [customStickers, setCustomStickers] = useState(() => loadCustomStickers());
+    const [stickerQuery, setStickerQuery] = useState("");
+    const [stickerBusy, setStickerBusy] = useState(false);
+    const stickerUploadRef = useRef(null);
+    const giphyKey = (typeof import.meta !== "undefined" && import.meta.env?.VITE_GIPHY_API_KEY) || "dc6zaTOxFJmzC";
+
+    const displayStickers = useMemo(() => {
+      const q = stickerQuery.trim();
+      const base = q ? stickerItems : [...customStickers, ...stickerItems];
+      return [...new Set(base)];
+    }, [customStickers, stickerItems, stickerQuery]);
+
+    const onStickerUpload = (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        if (typeof dataUrl !== "string") return;
+        const next = addCustomSticker(dataUrl);
+        setCustomStickers(next);
+        sfx.success();
+      };
+      reader.readAsDataURL(f);
+      e.target.value = "";
+    };
+
+    useEffect(() => {
+      if (storyTool !== "stickers" && toolTab !== "stickers") return;
+      const q = stickerQuery.trim();
+      if (!q) {
+        setStickerItems(STORY_STICKER_PACK);
+        setStickerBusy(false);
+        return;
+      }
+      let cancelled = false;
+      setStickerBusy(true);
+      const t = setTimeout(() => {
+        const path = `https://api.giphy.com/v1/stickers/search?api_key=${giphyKey}&q=${encodeURIComponent(q)}&limit=24&rating=g`;
+        fetch(path)
+          .then((r) => r.json())
+          .then((data) => {
+            if (cancelled) return;
+            const urls = (data.data || []).map((item) => {
+              const img = item.images?.fixed_height_small || item.images?.downsized || item.images?.original;
+              return img?.url || null;
+            }).filter(Boolean);
+            setStickerItems(urls.length ? urls : STORY_STICKER_PACK);
+          })
+          .catch(() => { if (!cancelled) setStickerItems(STORY_STICKER_PACK); })
+          .finally(() => { if (!cancelled) setStickerBusy(false); });
+      }, 450);
+      return () => { cancelled = true; clearTimeout(t); };
+    }, [storyTool, toolTab, stickerQuery, giphyKey]);
+
+    const addSticker = (payload) => {
+      if (typeof payload === "string" && (payload.startsWith("http") || payload.startsWith("data:") || payload.startsWith("blob:"))) {
+        addOverlay({ type: "sticker", imageUrl: payload, scale: 1.15 });
+        return;
+      }
+      addOverlay({ type: "text", text: payload });
+    };
+
+    const insertMention = (user, asOverlay = false) => {
+      const handle = normalizeHandle(user.handle || user.name);
+      if (asOverlay) {
+        addOverlay({ type: "tag", userId: user.id, name: user.name, handle });
+        setTagOpen(false);
+        setTagQuery("");
+        return;
+      }
+      const el = descRef.current;
+      const val = description;
+      const at = val.lastIndexOf("@");
+      const next = at >= 0 ? `${val.slice(0, at)}@${handle} ` : `${val}@${handle} `.trimStart();
+      setDescription(next);
+      setMentionOpen(false);
+      setMentionQuery("");
+      el?.focus();
+    };
+
+    const onDescriptionChange = (e) => {
+      const val = e.target.value;
+      setDescription(val);
+      const m = val.match(/@([a-zA-Z0-9_.]*)$/);
+      if (m) {
+        setMentionOpen(true);
+        setMentionQuery(m[1]);
+      } else {
+        setMentionOpen(false);
+        setMentionQuery("");
+      }
+    };
+
+    const collectTags = () => {
+      const tags = [];
+      const seen = new Set();
+      const push = (userId, name, handle) => {
+        const key = userId || normalizeHandle(handle);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        tags.push({ userId, name, handle: normalizeHandle(handle) });
+      };
+      overlays.filter((o) => o.type === "tag").forEach((o) => push(o.userId, o.name, o.handle));
+      const handles = [...description.matchAll(/@([a-zA-Z0-9_.]+)/g)].map((m) => m[1]);
+      handles.forEach((h) => {
+        const fromOverlay = overlays.find((o) => o.type === "tag" && normalizeHandle(o.handle) === normalizeHandle(h));
+        if (fromOverlay) push(fromOverlay.userId, fromOverlay.name, h);
+        else {
+          const friend = [...(state.friends || []), ...Object.keys(state.chatInbox || {})]
+            .map((id) => getAuthor(state, id))
+            .find((u) => normalizeHandle(u?.handle) === normalizeHandle(h));
+          if (friend) push(friend.id, friend.name, h);
+        }
+      });
+      return tags;
+    };
+
+    const publish = async () => {
+      if (!mediaUrl || busy) return;
+      setBusy(true);
+      try {
+      const tempId = `tmp_${Date.now()}`;
+      const tags = collectTags();
+      const captionStyle = {
+        color: captionColor,
+        align: captionAlign,
+        filterIdx,
+        filterCss: mediaFilterCss,
+        filterOverlay: filter.overlay !== "none" ? filter.overlay : null,
+        adjust: { ...adjust },
+        overlays: overlays.map(({ id, type, text, x, y, color, align, scale, userId, name, handle, imageUrl }) => ({
+          id, type, text, x, y, color, align, scale, userId, name, handle, imageUrl,
+        })),
+        drawPaths,
+        closeFriendsOnly,
+        clipStart: mediaType === "video" && clipEnd > clipStart ? clipStart : undefined,
+        clipEnd: mediaType === "video" && clipEnd > clipStart ? clipEnd : undefined,
+        videoDuration: mediaType === "video" ? videoDuration || undefined : undefined,
+        musicUrl: musicTrack?.preview || null,
+        musicTitle: musicTrack ? `${musicTrack.artist} · ${musicTrack.title}` : null,
+      };
+      const localBody = {
+        id: tempId,
+        author: ME_ID,
+        mediaUrl,
+        mediaType,
+        caption: description.trim(),
+        captionStyle,
+        tags,
+        scene: filter.scene,
+        emoji: COMPOSE_STICKERS[filterIdx % COMPOSE_STICKERS.length],
+        ts: Date.now(),
+        likes: 0,
+        pending: true,
+        source: "echelon",
+        musicUrl: musicTrack?.preview || null,
+        musicTitle: musicTrack ? `${musicTrack.artist} · ${musicTrack.title}` : null,
+      };
+
+      if (mode === "story") {
+        const dur = mediaType === "video" ? await getVideoDuration(mediaUrl) : 0;
+        const storyItems = [];
+        if (mediaType === "video" && dur > STORY_VIDEO_CHUNK_SEC) {
+          const total = Math.min(dur, STORY_VIDEO_MAX_SEC);
+          for (let start = 0; start < total; start += STORY_VIDEO_CHUNK_SEC) {
+            const end = Math.min(start + STORY_VIDEO_CHUNK_SEC, total);
+            storyItems.push({
+              id: `si_${tempId}_${start}`,
+              mediaUrl,
+              mediaType,
+              caption: description.trim(),
+              captionStyle: { ...captionStyle, clipStart: start, clipEnd: end, videoDuration: dur },
+              ts: Date.now(),
+            });
+          }
+        } else {
+          storyItems.push({
+            id: `si_${tempId}`,
+            mediaUrl,
+            mediaType,
+            caption: description.trim(),
+            captionStyle: mediaType === "video" ? { ...captionStyle, videoDuration: dur || undefined } : captionStyle,
+            ts: Date.now(),
+          });
+        }
+        dispatch({
+          type: "STORY_PUBLISHED",
+          story: {
+            id: `ss_${tempId}`,
+            author: ME_ID,
+            items: storyItems,
+            ts: Date.now(),
+            expiresAt: Date.now() + 86400000,
+          },
+        });
+      } else if (mode === "reel") {
+        const dur = mediaType === "video" ? Math.min(await getVideoDuration(mediaUrl), REEL_MAX_SEC) : 30;
+        dispatch({ type: "ADD_FEED_POST", post: { ...localBody, kind: "reel", isReel: true, durationSec: dur } });
+      } else {
+        dispatch({ type: "ADD_FEED_POST", post: { ...localBody, kind: "post" } });
+      }
+      tags.filter((t) => t.userId && t.userId !== ME_ID).forEach((tag) => {
+        const mentionId = `men_${tempId}_${tag.userId}`;
+        dispatch({
+          type: "RECORD_MENTION",
+          mention: {
+            id: mentionId,
+            userId: tag.userId,
+            authorId: ME_ID,
+            authorName: state.user.name,
+            authorHandle: state.user.handle,
+            postId: tempId,
+            contentType: mode,
+            mediaUrl,
+            mediaType,
+            handle: tag.handle,
+            name: tag.name,
+            ts: Date.now(),
+          },
+        });
+        dispatch({
+          type: "PUSH_NOTIF",
+          notif: {
+            id: `n_${mentionId}`,
+            kind: "mention",
+            rater: ME_ID,
+            mentionId,
+            postId: tempId,
+            mediaUrl,
+            title: tr("alerts.mentionedYou", { name: state.user.name.split(" ")[0] }),
+            body: mode === "story" ? tr("alerts.mentionedStory") : tr("alerts.mentionedPost"),
+            ts: Date.now(),
+          },
+        });
+      });
+
+      dispatch({ type: "CLOSE_MODAL" });
+      dispatch({ type: "SET_SHARE_SUCCESS", message: tr("feed.sharedSuccess"), composeMode: mode });
+      sfx.success();
+      setBusy(false);
+
+      if (!state.liveData || !mediaFile) return;
+      try {
+        const up = await api.upload(mediaFile);
+        const body = {
+          mediaUrl: up.url,
+          mediaType,
+          caption: description.trim(),
+          captionStyle,
+          tags,
+          scene: filter.scene,
+          emoji: COMPOSE_STICKERS[filterIdx % COMPOSE_STICKERS.length],
+        };
+        if (mode === "story") {
+          const dur = mediaType === "video" ? await getVideoDuration(up.url) : 0;
+          let lastStory = null;
+          if (mediaType === "video" && dur > STORY_VIDEO_CHUNK_SEC) {
+            const total = Math.min(dur, STORY_VIDEO_MAX_SEC);
+            for (let start = 0; start < total; start += STORY_VIDEO_CHUNK_SEC) {
+              const end = Math.min(start + STORY_VIDEO_CHUNK_SEC, total);
+              const segStyle = { ...body.captionStyle, clipStart: start, clipEnd: end, videoDuration: dur };
+              lastStory = (await api.createStory({ ...body, captionStyle: segStyle })).story;
+            }
+          } else {
+            const style = mediaType === "video" ? { ...body.captionStyle, videoDuration: dur || undefined } : body.captionStyle;
+            lastStory = (await api.createStory({ ...body, captionStyle: style })).story;
+          }
+          if (lastStory) dispatch({ type: "STORY_PUBLISHED", story: lastStory });
+        } else {
+          const res = await api.createPost({ ...body, fromStory: false, source: "echelon" });
+          dispatch({
+            type: "UPDATE_FEED_POST",
+            postId: tempId,
+            patch: { ...res, mediaUrl: mediaUrl(res.mediaUrl) || up.url, pending: false },
+          });
+        }
+      } catch {
+        sfx.penalty();
+      }
+      } catch {
+        sfx.penalty();
+        setBusy(false);
+      }
+    };
+
+    const applyColor = (c) => {
+      setCaptionColor(c);
+      if (selectedOverlay) patchOverlay(selectedOverlay, { color: c });
+    };
+
+    const applyAlign = (a) => {
+      setCaptionAlign(a);
+      if (selectedOverlay) patchOverlay(selectedOverlay, { align: a });
+    };
+
+    const storyMoreTools = [
+      { id: "poll", icon: BarChart2, label: tr("feed.storyPoll"), run: () => { addOverlay(createStorySticker("poll", tr)); setStoryTool("poll"); setStoryRailOpen(true); } },
+      { id: "quiz", icon: Check, label: tr("stickers.quiz"), run: () => { addOverlay(createStorySticker("quiz", tr)); setStoryTool("quiz"); setStoryRailOpen(true); } },
+      { id: "countdown", icon: Timer, label: tr("stickers.countdown"), run: () => { addOverlay(createStorySticker("countdown", tr)); setStoryTool("countdown"); setStoryRailOpen(true); } },
+      { id: "link", icon: Link2, label: tr("stickers.link"), run: () => { addOverlay(createStorySticker("link", tr)); setStoryTool("link"); setStoryRailOpen(true); } },
+      { id: "hashtag", icon: Hash, label: tr("stickers.hashtag"), run: () => { addOverlay(createStorySticker("hashtag", tr)); setStoryTool("hashtag"); setStoryRailOpen(true); } },
+    ];
+    const storyTools = [
+      { id: "text", icon: Type, label: tr("feed.storyToolText"), run: () => {
+        const id = overlayId();
+        setOverlays((list) => [...list, { id, type: "text", text: "", x: 50, y: 45, color: captionColor, align: captionAlign }]);
+        setSelectedOverlay(id);
+        setEditingOverlay(id);
+        setStoryTool("text");
+        setStoryRailOpen(true);
+        sfx.tap();
+      } },
+      { id: "stickers", icon: Smile, label: tr("feed.storyToolStickers"), run: () => { setStickerItems(STORY_STICKER_PACK); setToolTab("stickers"); setStoryTool("stickers"); setStoryRailOpen(true); } },
+      { id: "audio", icon: Music2, label: tr("feed.storyToolAudio"), run: () => { setStoryTool("audio"); setStoryRailOpen(true); sfx.tap(); } },
+      { id: "effects", icon: Sparkles, label: tr("feed.storyToolEffects"), run: () => { setToolTab("filters"); setStoryTool((t) => t === "effects" ? null : "effects"); setStoryRailOpen(true); } },
+      { id: "sound", icon: videoMuted ? VolumeX : Volume2, label: tr("feed.storyToolSound"), run: () => { setVideoMuted((v) => !v); sfx.tap(); } },
+      { id: "mention", icon: AtSign, label: tr("feed.storyToolMention"), run: () => { setTagQuery(""); setTagOpen(true); setStoryTool("mention"); setStoryRailOpen(true); const friends = (state.friends || []).map((fid) => byId[fid]).filter(Boolean); setTagResults(friends.slice(0, 20)); } },
+      { id: "draw", icon: Pencil, label: tr("feed.storyToolDraw"), run: () => { setDrawActive(true); setStoryTool("draw"); setStoryRailOpen(true); } },
+      ...(mediaType === "video" ? [{ id: "trim", icon: Scissors, label: tr("feed.trimVideo"), run: () => { setStoryTool("trim"); setStoryRailOpen(true); sfx.tap(); } }] : []),
+      { id: "save", icon: Download, label: tr("feed.storyToolSave"), run: () => {
+        if (!mediaUrl) return;
+        const a = document.createElement("a");
+        a.href = mediaUrl;
+        a.download = `echelon_${Date.now()}`;
+        a.click();
+        sfx.tap();
+      } },
+      { id: "more", icon: MoreHorizontal, label: tr("feed.storyToolMore"), run: () => { setStoryTool((t) => t === "more" ? null : "more"); setStoryRailOpen(true); sfx.tap(); } },
+    ];
+
+    if (mediaUrl) {
+      const activeTool = storyTools.find((t) => t.id === storyTool);
+      return createPortal(
+        <div className="story-editor">
+          <button type="button" className="story-editor-close" aria-label={tr("legal.close")} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+            <X size={22} strokeWidth={2} />
+          </button>
+          <div className="story-editor-stage" ref={canvasRef} onClick={(e) => {
+            if (e.target.closest(".media-overlay--edit")) return;
+            setSelectedOverlay(null);
+            setEditingOverlay(null);
+          }}>
+            <div className="story-editor-bg" style={{ backgroundImage: `url(${mediaUrl})` }} aria-hidden />
+            {mediaType === "video"
+              ? <video src={mediaUrl} className="story-editor-media story-editor-media--contain" muted={videoMuted} playsInline autoPlay loop style={{ filter: mediaFilterCss || undefined }} />
+              : <img src={mediaUrl} alt="" className="story-editor-media story-editor-media--contain" style={{ filter: mediaFilterCss || undefined }} draggable={false} />}
+            <div className="compose-canvas-filter" style={{ background: filter.overlay !== "none" ? filter.overlay : undefined }} aria-hidden />
+            {drawPaths.length > 0 && (
+              <svg className="story-editor-draw" viewBox="0 0 100 100" preserveAspectRatio="none">
+                {drawPaths.map((path, i) => (
+                  <polyline key={i} fill="none" stroke={path.color} strokeWidth="0.8" strokeLinecap="round" points={path.points.map((p) => `${p.x},${p.y}`).join(" ")} />
+                ))}
+              </svg>
+            )}
+            {drawActive && (
+              <canvas
+                ref={drawRef}
+                className="story-editor-draw-canvas"
+                onPointerDown={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const pt = { x: ((e.clientX - rect.left) / rect.width) * 100, y: ((e.clientY - rect.top) / rect.height) * 100 };
+                  setDrawPaths((paths) => [...paths, { color: drawColor, points: [pt] }]);
+                }}
+                onPointerMove={(e) => {
+                  if (e.buttons !== 1) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const pt = { x: ((e.clientX - rect.left) / rect.width) * 100, y: ((e.clientY - rect.top) / rect.height) * 100 };
+                  setDrawPaths((paths) => {
+                    if (!paths.length) return paths;
+                    const next = [...paths];
+                    const last = { ...next[next.length - 1], points: [...next[next.length - 1].points, pt] };
+                    next[next.length - 1] = last;
+                    return next;
+                  });
+                }}
+              />
+            )}
+            <MediaOverlaysView
+              overlays={overlays}
+              captionStyle={{ color: captionColor, align: captionAlign }}
+              editable
+              selectedId={selectedOverlay}
+              editingId={editingOverlay}
+              onSelect={(id) => { setSelectedOverlay(id); setEditingOverlay(null); }}
+              onEdit={setEditingOverlay}
+              onChange={patchOverlay}
+              onRemove={removeOverlay}
+              canvasRef={canvasRef}
+            />
+            <aside className="story-editor-rail" aria-label="Edit tools">
+              {storyTools.map((tool) => {
+                const Icon = tool.icon;
+                return (
+                  <button key={tool.id} type="button" className={"story-editor-rail-btn" + (storyTool === tool.id ? " on" : "")} aria-label={tool.label} title={tool.label} onClick={tool.run}>
+                    <span className="story-editor-rail-icon"><Icon size={18} strokeWidth={1.75} /></span>
+                  </button>
+                );
+              })}
+            </aside>
+          </div>
+          <input ref={audioRef} type="file" accept="audio/*" style={{ display: "none" }} onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            const url = URL.createObjectURL(f);
+            addOverlay({ type: "text", text: `♪ ${f.name.replace(/\.[^.]+$/, "").slice(0, 24)}`, scale: 0.9 });
+            sfx.tap();
+            e.target.value = "";
+          }} />
+          {storyTool && (
+            <div className="story-editor-panel">
+              <div className="story-editor-panel-head">
+                <b>{activeTool?.label || tr("feed.storyToolText")}</b>
+                <button type="button" className="story-editor-panel-close" aria-label={tr("legal.close")} onClick={() => { setStoryTool(null); setDrawActive(false); setTagOpen(false); }}>
+                  <X size={16} strokeWidth={2} />
+                </button>
+              </div>
+              {storyTool === "more" && (
+                <div className="story-more-tools">
+                  {storyMoreTools.map((tool) => {
+                    const Icon = tool.icon;
+                    return (
+                      <button key={tool.id} type="button" className="story-more-tool" onClick={tool.run}>
+                        <Icon size={16} />
+                        <span>{tool.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {storyTool === "stickers" && (
+                <>
+                  <input className="compose-sticker-search" value={stickerQuery} onChange={(e) => setStickerQuery(e.target.value)} placeholder={tr("compose.stickerSearch")} />
+                  <div className="compose-tool-row compose-stickers compose-stickers--grid">
+                    <button type="button" className="compose-sticker-upload" onClick={() => { sfx.tap(); stickerUploadRef.current?.click(); }}>
+                      <Plus size={22} />
+                      <span>{tr("feed.uploadSticker")}</span>
+                    </button>
+                    {stickerBusy && <div className="compose-sticker-loading"><Loader size={20} className="spin" color="#fff" /></div>}
+                    {!stickerBusy && displayStickers.map((url, i) => (
+                      <button key={`${url.slice(0, 48)}-${i}`} type="button" className="compose-sticker-img" onClick={() => { sfx.tap(); addSticker(url); }}>
+                        <img src={url} alt="" loading="lazy" onError={(ev) => { ev.currentTarget.parentElement.style.display = "none"; }} />
+                      </button>
+                    ))}
+                  </div>
+                  <input ref={stickerUploadRef} type="file" accept="image/*,.gif,.webp,.png,.jpg,.jpeg" onChange={onStickerUpload} style={{ display: "none" }} />
+                </>
+              )}
+              {storyTool === "effects" && (
+                <div className="compose-tool-row compose-filters-scroll">
+                  {FILTERS.map((f, i) => (
+                    <button key={f.label} type="button" className={"compose-filter-chip" + (filterIdx === i ? " on" : "")} onClick={() => { setFilterIdx(i); sfx.tap(); }}>
+                      <span style={{ background: grad(f.scene) }} />
+                      <small>{f.label}</small>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {storyTool === "text" && (
+                <div className="compose-tool-row compose-tool-icons">
+                  {["#ffffff", "#FFE9A8", "#FFD1E1", "#8C6BD8", "#FF3B7A"].map((c) => (
+                    <button key={c} type="button" className={"compose-color-dot" + (captionColor === c ? " on" : "")} style={{ background: c }} onClick={() => applyColor(c)} />
+                  ))}
+                </div>
+              )}
+              {storyTool === "audio" && (
+                <>
+                  <input className="compose-sticker-search" value={musicQuery} onChange={(e) => setMusicQuery(e.target.value)} placeholder={tr("feed.musicSearch")} />
+                  <div className="story-music-picker">
+                    {musicBusy && <Loader size={18} className="spin" color="#fff" />}
+                    {!musicBusy && musicResults.map((track) => (
+                      <button key={track.id} type="button" className={"story-music-track" + (musicPending?.id === track.id ? " on" : "")} onClick={() => { setMusicPending(track); sfx.tap(); }}>
+                        <Music2 size={16} />
+                        <span><b>{track.title}</b><small>{track.artist}{track.license ? ` · ${track.license}` : ""}</small></span>
+                      </button>
+                    ))}
+                  </div>
+                  {musicPending && (
+                    <button type="button" className="story-music-add-btn" onClick={() => {
+                      sfx.success();
+                      setMusicTrack(musicPending);
+                      setMusicPending(null);
+                      setStoryTool(null);
+                      if (musicPending.preview) {
+                        try {
+                          if (musicPreviewRef.current) {
+                            musicPreviewRef.current.pause();
+                            musicPreviewRef.current = null;
+                          }
+                          const a = new Audio(musicPending.preview);
+                          a.volume = 0.55;
+                          musicPreviewRef.current = a;
+                          a.play().catch(() => {});
+                        } catch { /* ignore */ }
+                      }
+                    }}>
+                      {tr("feed.addMusic")}
+                    </button>
+                  )}
+                  {musicTrack && (
+                    <p className="story-music-applied"><Music2 size={14} /> {musicTrack.title}</p>
+                  )}
+                </>
+              )}
+              {storyTool === "trim" && mediaType === "video" && (
+                <div className="story-editor-trim">
+                  <label className="story-editor-trim-label">{tr("feed.trimStart")} {clipStart.toFixed(1)}s</label>
+                  <input type="range" min={0} max={Math.max(0, (clipEnd || videoDuration) - 0.5)} step={0.1} value={clipStart} onChange={(e) => setClipStart(Math.min(Number(e.target.value), clipEnd - 0.5))} />
+                  <label className="story-editor-trim-label">{tr("feed.trimEnd")} {clipEnd.toFixed(1)}s</label>
+                  <input type="range" min={clipStart + 0.5} max={videoDuration || 30} step={0.1} value={clipEnd || videoDuration} onChange={(e) => setClipEnd(Number(e.target.value))} />
+                </div>
+              )}
+              {storyTool === "draw" && (
+                <div className="compose-tool-row compose-tool-icons">
+                  {["#ffffff", "#FF3B7A", "#FFD56B", "#00C9A7", "#8C6BD8", "#262626"].map((c) => (
+                    <button key={c} type="button" className={"compose-color-dot" + (drawColor === c ? " on" : "")} style={{ background: c }} onClick={() => setDrawColor(c)} />
+                  ))}
+                </div>
+              )}
+              {storyTool === "mention" && (
+                <>
+                  <input className="compose-sticker-search" value={tagQuery} onChange={(e) => setTagQuery(e.target.value)} placeholder={tr("compose.mentionSearch")} />
+                  <div className="compose-tag-results">
+                    {tagResults.map((u) => (
+                      <button key={u.id} type="button" className="compose-tag-row" onClick={() => insertMention(u, true)}>
+                        <Avatar c={u} size={28} showScore={false} />
+                        <span>{u.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          {selectedOverlay && (
+            <div className="story-editor-overlay-bar">
+              <span className="compose-overlay-bar-hint">{tr("compose.pinchHint")}</span>
+              <button type="button" className="compose-icon-btn" aria-label="Smaller" onClick={() => scaleOverlay(-0.1)}><Minus size={16} /></button>
+              <button type="button" className="compose-icon-btn" aria-label="Larger" onClick={() => scaleOverlay(0.1)}><PlusCircle size={16} /></button>
+              <button type="button" className="compose-icon-btn" aria-label="Edit" onClick={() => setEditingOverlay(selectedOverlay)}><Type size={16} /></button>
+              <button type="button" className="compose-icon-btn danger-soft" aria-label="Delete" onClick={() => removeOverlay(selectedOverlay)}><Trash2 size={16} /></button>
+            </div>
+          )}
+          <footer className="story-editor-foot">
+            <input
+              className="story-editor-caption"
+              value={description}
+              onChange={onDescriptionChange}
+              placeholder={mode === "story" ? tr("feed.storyCaption") : tr("feed.captionPlaceholder")}
+              maxLength={mode === "story" ? 220 : 500}
+            />
+            <div className="story-editor-share-row">
+              {mode === "story" && (
+                <>
+                  <button type="button" className={"story-editor-pill" + (!closeFriendsOnly ? " on" : "")} onClick={() => setCloseFriendsOnly(false)}>
+                    <Avatar c={state.user} size={28} showScore={false} />
+                    <span>{tr("feed.storyYour")}</span>
+                  </button>
+                  <button type="button" className={"story-editor-pill story-editor-pill--cf" + (closeFriendsOnly ? " on" : "")} onClick={() => setCloseFriendsOnly(true)}>
+                    <span className="story-editor-cf-icon">★</span>
+                    <span>{tr("feed.storyCloseFriends")}</span>
+                  </button>
+                </>
+              )}
+              <button type="button" className="story-editor-next" disabled={busy} onClick={publish} aria-label={mode === "story" ? tr("feed.publishStory") : tr("feed.publishPost")}>
+                {busy ? <Loader size={22} className="spin" color="#fff" /> : <ChevronRight size={28} color="#fff" />}
+              </button>
+            </div>
+          </footer>
+          <input ref={fileRef} type="file" accept="image/*,video/*,.mov,.mp4,.webm,.m4v" onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} style={{ display: "none" }} />
+        </div>,
+        document.body
+      );
+    }
+
+    return (
+      <Sheet dismissable={!busy}>
+        <div className="compose-top-bar">
+          <button type="button" className="compose-top-btn" aria-label="Remove" disabled={!mediaUrl} onClick={clearMedia}>
+            <Trash2 size={18} />
+          </button>
+          <button type="button" className="compose-top-btn" aria-label="Gallery" onClick={() => fileRef.current?.click()}>
+            <ImageIcon size={18} />
+          </button>
+          <button type="button" className="compose-top-btn" aria-label="Camera" onClick={() => setCameraOpen(true)}>
+            <Camera size={18} />
+          </button>
+          <button
+            type="button"
+            className="compose-top-btn publish"
+            disabled={!mediaUrl || busy}
+            onClick={publish}
+            aria-label={mode === "story" ? tr("feed.publishStory") : tr("feed.publishPost")}
+          >
+            {busy ? <Loader size={18} className="spin" /> : <Check size={20} />}
+          </button>
+        </div>
+        {cameraOpen && (
+          <div className="compose-camera-overlay">
+            <ComposeCameraView
+              onCapture={(f) => { onFile(f); setCameraOpen(false); }}
+              onGallery={() => { fileRef.current?.click(); setCameraOpen(false); }}
+              onClose={() => setCameraOpen(false)}
+            />
+          </div>
+        )}
+        <input ref={fileRef} type="file" accept="image/*,video/*,.mov,.mp4,.webm,.m4v" onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} style={{ display: "none" }} />
+        <input ref={cameraRef} type="file" accept="image/*,video/*" capture="environment" onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ""; }} style={{ display: "none" }} />
+        <div className="compose-canvas-wrap">
+          <div
+            ref={canvasRef}
+            className="compose-canvas"
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              if (e.target.closest(".media-overlay--edit")) return;
+              if (!mediaUrl) dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode } });
+              else setSelectedOverlay(null);
+            }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !mediaUrl) dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode } }); }}
+          >
+            {mediaUrl ? (
+              <>
+                {mediaType === "video"
+                  ? <video src={mediaUrl} className="compose-canvas-media" muted playsInline autoPlay loop style={{ filter: mediaFilterCss || undefined }} />
+                  : <img src={mediaUrl} alt="" className="compose-canvas-media" style={{ filter: mediaFilterCss || undefined }} draggable={false} />}
+                <div className="compose-canvas-filter" style={{ background: filter.overlay !== "none" ? filter.overlay : undefined }} aria-hidden />
+                {adjust.vignette > 0 && <div className="compose-fx compose-fx-vignette" style={{ opacity: adjust.vignette / 100 }} aria-hidden />}
+                {adjust.grain > 0 && <div className="compose-fx compose-fx-grain" style={{ opacity: adjust.grain / 100 }} aria-hidden />}
+                {(adjust.highlights > 0 || adjust.shadows > 0) && (
+                  <div
+                    className="compose-fx compose-fx-tone"
+                    style={{
+                      background: adjust.highlights > 0
+                        ? `linear-gradient(180deg,rgba(255,255,255,${adjust.highlights / 200}) 0%,transparent 45%)`
+                        : `linear-gradient(0deg,rgba(0,0,0,${adjust.shadows / 180}) 0%,transparent 50%)`,
+                    }}
+                    aria-hidden
+                  />
+                )}
+                <MediaOverlaysView
+                  overlays={overlays}
+                  captionStyle={{ color: captionColor, align: captionAlign }}
+                  editable
+                  selectedId={selectedOverlay}
+                  editingId={editingOverlay}
+                  onSelect={(id) => { setSelectedOverlay(id); setEditingOverlay(null); }}
+                  onEdit={setEditingOverlay}
+                  onChange={patchOverlay}
+                  onRemove={removeOverlay}
+                  canvasRef={canvasRef}
+                />
+              </>
+            ) : (
+              <div className="compose-canvas-empty">
+                <Camera size={36} color="#B79CF0" />
+              </div>
+            )}
+          </div>
+        </div>
+        {mediaUrl && selectedOverlay && (
+          <div className="compose-overlay-bar">
+            <span className="compose-overlay-bar-hint">{tr("compose.pinchHint")}</span>
+            <button type="button" className="compose-icon-btn" aria-label="Smaller" onClick={() => scaleOverlay(-0.1)}><Minus size={16} /></button>
+            <button type="button" className="compose-icon-btn" aria-label="Larger" onClick={() => scaleOverlay(0.1)}><PlusCircle size={16} /></button>
+            <button type="button" className="compose-icon-btn" aria-label="Edit" onClick={() => setEditingOverlay(selectedOverlay)}><Type size={16} /></button>
+            <button type="button" className="compose-icon-btn danger-soft" aria-label="Delete" onClick={() => removeOverlay(selectedOverlay)}><Trash2 size={16} /></button>
+          </div>
+        )}
+        {mediaUrl && (
+          <div className="compose-enhance-panel">
+            <div className="compose-enhance-head">
+              <Sparkles size={14} color="#B79CF0" />
+              <b>{tr("compose.enhanceTitle")}</b>
+            </div>
+            {[
+              { title: tr("compose.groupLight"), rows: [
+                ["brightness", tr("compose.brightness"), 70, 130],
+                ["contrast", tr("compose.contrast"), 70, 140],
+                ["exposure", tr("compose.exposure"), -40, 40],
+                ["highlights", tr("compose.highlights"), 0, 80],
+              ]},
+              { title: tr("compose.groupColor"), rows: [
+                ["saturate", tr("compose.saturate"), 0, 180],
+                ["warmth", tr("compose.warmth"), 0, 50],
+                ["tint", tr("compose.tint"), -30, 30],
+                ["shadows", tr("compose.shadows"), 0, 80],
+              ]},
+              { title: tr("compose.groupFx"), rows: [
+                ["fade", tr("compose.fade"), 0, 60],
+                ["sharpen", tr("compose.sharpen"), 0, 50],
+                ["vignette", tr("compose.vignette"), 0, 100],
+                ["grain", tr("compose.grain"), 0, 100],
+                ["blur", tr("compose.blur"), 0, 40],
+              ]},
+            ].map((group) => (
+              <div key={group.title} className="compose-enhance-group">
+                <span className="compose-enhance-group-label">{group.title}</span>
+                <div className="compose-enhance-grid">
+                  {group.rows.map(([key, label, min, max]) => (
+                    <label key={key} className="compose-enhance-cell">
+                      <span>{label}</span>
+                      <input
+                        type="range"
+                        min={min}
+                        max={max}
+                        value={adjust[key]}
+                        onChange={(e) => {
+                          const v = +e.target.value;
+                          setAdjust((a) => ({
+                            ...a,
+                            [key]: v,
+                            ...(key === "highlights" && v > 0 ? { shadows: 0 } : {}),
+                            ...(key === "shadows" && v > 0 ? { highlights: 0 } : {}),
+                          }));
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {mediaUrl && (
+          <div className="compose-tools">
+            <div className="compose-tool-tabs">
+              {["filters", "stickers", "text"].map((tab) => (
+                <button key={tab} type="button" className={"compose-tool-tab" + (toolTab === tab ? " on" : "")} onClick={() => { setToolTab(tab); sfx.tap(); }}>
+                  {tr(`compose.tab.${tab}`)}
+                </button>
+              ))}
+              <button type="button" className="compose-tool-tab compose-tool-tab-reset" onClick={() => { setAdjust({ ...COMPOSE_ADJUST_DEFAULT }); setFilterIdx(0); sfx.tap(); }}>
+                {tr("compose.reset")}
+              </button>
+            </div>
+            {toolTab === "filters" && (
+              <div className="compose-tool-row compose-filters-scroll">
+                {FILTERS.map((f, i) => (
+                  <button key={f.label} type="button" className={"compose-filter-chip" + (filterIdx === i ? " on" : "")} aria-label={f.label} title={f.label} onClick={() => { setFilterIdx(i); sfx.tap(); }}>
+                    <span style={{ background: grad(f.scene) }} />
+                    <small>{f.label}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+            {toolTab === "stickers" && (
+              <div className="compose-stickers-panel">
+                <input
+                  className="compose-sticker-search"
+                  value={stickerQuery}
+                  onChange={(e) => setStickerQuery(e.target.value)}
+                  placeholder={tr("compose.stickerSearch")}
+                />
+                <div className="compose-tool-row compose-stickers compose-stickers--grid">
+                  <button type="button" className="compose-sticker-upload" onClick={() => { sfx.tap(); stickerUploadRef.current?.click(); }}>
+                    <Plus size={22} />
+                    <span>{tr("feed.uploadSticker")}</span>
+                  </button>
+                  {stickerBusy && <div className="compose-sticker-loading"><Loader size={20} className="spin" color="#B79CF0" /></div>}
+                  {!stickerBusy && displayStickers.map((url, i) => (
+                    <button key={`${url.slice(0, 48)}-${i}`} type="button" className="compose-sticker-img" onClick={() => { sfx.tap(); addSticker(url); }}>
+                      <img src={url} alt="" loading="lazy" onError={(ev) => { ev.currentTarget.parentElement.style.display = "none"; }} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {toolTab === "text" && (
+              <div className="compose-tool-row compose-tool-icons">
+                <button type="button" className="compose-icon-btn" aria-label="Add text" onClick={() => addOverlay({ type: "text", text: "" })}><Type size={17} /></button>
+                <button type="button" className="compose-icon-btn" aria-label="Add location" onClick={() => {
+                  const loc = overlays.find((o) => o.type === "location");
+                  if (loc) { setSelectedOverlay(loc.id); return; }
+                  addOverlay({ type: "location", text: "" });
+                }}><MapPin size={17} /></button>
+                <button type="button" className={"compose-icon-btn" + (tagOpen ? " on" : "")} aria-label="Tag person" onClick={() => { setTagOpen((v) => !v); setMentionOpen(false); }}><AtSign size={17} /></button>
+                <span className="compose-tool-sep" />
+                {["#ffffff", "#FFE9A8", "#FFD1E1", "#8C6BD8", "#262626", "#FF3B7A", "#00C9A7"].map((c) => (
+                  <button key={c} type="button" className={"compose-color-dot" + (captionColor === c ? " on" : "")} style={{ background: c }} onClick={() => applyColor(c)} aria-label="Color" />
+                ))}
+                <span className="compose-tool-sep" />
+                <button type="button" className={"compose-icon-btn" + (captionAlign === "left" ? " on" : "")} onClick={() => applyAlign("left")} aria-label="Align left"><AlignLeft size={16} /></button>
+                <button type="button" className={"compose-icon-btn" + (captionAlign === "center" ? " on" : "")} onClick={() => applyAlign("center")} aria-label="Align center"><AlignCenter size={16} /></button>
+                <button type="button" className={"compose-icon-btn" + (captionAlign === "right" ? " on" : "")} onClick={() => applyAlign("right")} aria-label="Align right"><AlignRight size={16} /></button>
+              </div>
+            )}
+          </div>
+        )}
+        {tagOpen && (
+          <div className="compose-tag-picker">
+            <input
+              className="compose-tag-search"
+              value={tagQuery}
+              onChange={(e) => setTagQuery(e.target.value)}
+              placeholder="@"
+              autoFocus
+            />
+            <div className="compose-tag-results">
+              {tagResults.map((u) => (
+                <button key={u.id} type="button" className="compose-tag-row" onClick={() => insertMention(u, true)}>
+                  <Avatar c={u} size={32} showScore={false} />
+                  <span><b>{u.name}</b> <span className="muted">@{normalizeHandle(u.handle)}</span></span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="compose-desc-wrap">
+          <input
+            ref={descRef}
+            className="compose-caption-input"
+            value={description}
+            onChange={onDescriptionChange}
+            maxLength={220}
+          />
+          {mentionOpen && tagResults.length > 0 && (
+            <div className="compose-mention-drop">
+              {tagResults.map((u) => (
+                <button key={u.id} type="button" className="compose-tag-row" onClick={() => insertMention(u, false)}>
+                  <Avatar c={u} size={28} showScore={false} />
+                  <span>{u.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </Sheet>
+    );
+  }
+
+  function SharePostModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const post = payload?.post;
+    const [extMsg, setExtMsg] = useState(null);
+    const [q, setQ] = useState("");
+    if (!post) return null;
+
+    const author = getAuthor(state, post.author);
+    const shareUrl = `${window.location.origin}${window.location.pathname.replace(/\/?$/, "/")}?post=${encodeURIComponent(post.id)}`;
+    const shareText = (post.caption || "").trim()
+      ? `${author.name}: ${post.caption.trim()}`
+      : `${author.name} on Echelon`;
+
+    const recipientIds = useMemo(() => {
+      const ids = new Set([...(state.friends || []), ...Object.keys(state.chatInbox || {})]);
+      return [...ids];
+    }, [state.friends, state.chatInbox]);
+
+    const recipients = useMemo(() => {
+      return recipientIds
+        .map((id) => getAuthor(state, id))
+        .filter((f) => f && f.id !== ME_ID)
+        .sort((a, b) => {
+          const ta = state.chatInbox?.[a.id]?.lastTs || 0;
+          const tb = state.chatInbox?.[b.id]?.lastTs || 0;
+          if (tb !== ta) return tb - ta;
+          return a.name.localeCompare(b.name);
+        });
+    }, [recipientIds, state]);
+
+    const qn = q.trim().toLowerCase();
+    const filtered = qn
+      ? recipients.filter((f) =>
+        f.name.toLowerCase().includes(qn)
+        || (f.handle || "").toLowerCase().includes(qn))
+      : recipients;
+
+    const sendTo = (friendId) => {
+      sfx.tap();
+      dispatch({ type: "CLOSE_MODAL" });
+      dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: friendId, sharePost: post } });
+    };
+
+    const copyLink = async () => {
+      sfx.tap();
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        setExtMsg(tr("feed.linkCopied"));
+      } catch { /* ignore */ }
+    };
+
+    const openWhatsApp = () => {
+      sfx.tap();
+      window.open(`https://wa.me/?text=${encodeURIComponent(`${shareText}\n${shareUrl}`)}`, "_blank", "noopener");
+    };
+
+    const openFacebook = () => {
+      sfx.tap();
+      window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, "_blank", "noopener");
+    };
+
+    const openInstagram = async () => {
+      sfx.tap();
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        setExtMsg(tr("feed.shareInstagramHint"));
+      } catch {
+        setExtMsg(tr("feed.linkCopied"));
+      }
+    };
+
+    const openTelegram = () => {
+      sfx.tap();
+      window.open(`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`, "_blank", "noopener");
+    };
+
+    const openX = () => {
+      sfx.tap();
+      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`, "_blank", "noopener");
+    };
+
+    const shareMore = async () => {
+      const msg = await sharePost(post, author, tr);
+      if (msg) setExtMsg(msg);
+    };
+
+    const shareActions = [
+      { key: "story", label: tr("feed.shareAddStory"), onClick: () => { sfx.tap(); dispatch({ type: "CLOSE_MODAL" }); dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story" } }); }, icon: "story" },
+      { key: "wa", label: tr("feed.shareWhatsApp"), onClick: openWhatsApp, icon: "whatsapp" },
+      { key: "ig", label: tr("feed.shareInstagram"), onClick: openInstagram, icon: "instagram" },
+      { key: "tg", label: tr("feed.shareTelegram"), onClick: openTelegram, icon: "telegram" },
+      { key: "fb", label: tr("feed.shareFacebook"), onClick: openFacebook, icon: "facebook" },
+      { key: "x", label: tr("feed.shareX"), onClick: openX, icon: "x" },
+      { key: "link", label: tr("feed.shareCopyLink"), onClick: copyLink, icon: "link" },
+      { key: "more", label: tr("feed.shareMore"), onClick: shareMore, icon: "more" },
+    ];
+
+    const shareLogo = (name) => `${import.meta.env.BASE_URL || "/"}share-icons/${name}.png`;
+    const renderShareIcon = (icon) => {
+      if (icon === "story") return <span className="ech-share-icon ech-share-icon--story"><Plus size={24} strokeWidth={2.2} /></span>;
+      if (icon === "whatsapp") return <span className="ech-share-icon"><img src={shareLogo("whatsapp")} alt="" width={52} height={52} /></span>;
+      if (icon === "instagram") return <span className="ech-share-icon"><img src={shareLogo("instagram")} alt="" width={52} height={52} /></span>;
+      if (icon === "telegram") return <span className="ech-share-icon"><img src={shareLogo("telegram")} alt="" width={52} height={52} /></span>;
+      if (icon === "facebook") return <span className="ech-share-icon"><img src={shareLogo("facebook")} alt="" width={52} height={52} /></span>;
+      if (icon === "x") return <span className="ech-share-icon"><img src={shareLogo("x")} alt="" width={52} height={52} /></span>;
+      if (icon === "link") return <span className="ech-share-icon ech-share-icon--neutral"><Link2 size={24} strokeWidth={2} /></span>;
+      return <span className="ech-share-icon ech-share-icon--neutral"><Share2 size={24} strokeWidth={2} /></span>;
+    };
+
+    const previewSrc = post.mediaUrl ? mediaUrl(post.mediaUrl) : null;
+
+    return createPortal(
+      <div className="ig-sheet-backdrop ech-share-backdrop" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="ech-share-sheet" onClick={(e) => e.stopPropagation()}>
+          <div className="ig-sheet-grab" aria-hidden />
+          <header className="ech-share-head">
+            <h3>{tr("feed.share")}</h3>
+            <button type="button" className="ech-share-close" aria-label={tr("legal.close")} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+              <X size={20} />
+            </button>
+          </header>
+          <div className="ech-share-preview">
+            <div className="ech-share-preview-media">
+              {previewSrc ? (
+                post.mediaType === "video"
+                  ? <video src={previewSrc} muted playsInline preload="metadata" />
+                  : <img src={previewSrc} alt="" />
+              ) : (
+                <span className="ech-share-preview-fallback">{post.emoji || "✨"}</span>
+              )}
+            </div>
+            <div className="ech-share-preview-meta">
+              <b>{author.name}</b>
+              <p>{(post.caption || shareText).slice(0, 96)}{(post.caption || "").length > 96 ? "…" : ""}</p>
+            </div>
+          </div>
+          <div className="ech-share-search-row">
+            <div className="ech-share-search">
+              <Search size={17} color="#8C6BD8" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("feed.shareSearch")} />
+            </div>
+            <button type="button" className="ech-share-add-person" aria-label={tr("friends.add")} onClick={() => dispatch({ type: "SCREEN", screen: "friends" })}>
+              <UserPlus size={20} />
+            </button>
+          </div>
+          <div className="ech-share-contacts">
+            {filtered.length === 0 ? (
+              <p className="ech-share-empty">{qn ? tr("messages.noMatch") : tr("feed.shareNoFriends")}</p>
+            ) : (
+              filtered.map((f) => (
+                <button key={f.id} type="button" className="ech-share-contact" onClick={() => sendTo(f.id)}>
+                  <Avatar c={f} size={58} showScore={false} ring />
+                  <span>{f.name.split(" ")[0]}</span>
+                </button>
+              ))
+            )}
+          </div>
+          <p className="ech-share-section-label">{tr("feed.shareExternal")}</p>
+          <div className="ech-share-actions">
+            {shareActions.map((action) => (
+              <button key={action.key} type="button" className="ech-share-action" onClick={action.onClick}>
+                {renderShareIcon(action.icon)}
+                <span>{action.label}</span>
+              </button>
+            ))}
+          </div>
+          {extMsg && <p className="ech-share-toast" role="status">{extMsg}</p>}
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  function StoryVideoSlide({ item, onDone }) {
+    const ref = useRef(null);
+    const cs = item.captionStyle || {};
+    const clipStart = cs.clipStart ?? 0;
+    const clipEnd = cs.clipEnd ?? null;
+    const src = mediaUrl(item.mediaUrl);
+
+    useEffect(() => {
+      const v = ref.current;
+      if (!v || !src) return;
+      let done = false;
+      const finish = () => { if (!done) { done = true; onDone?.(); } };
+      const onMeta = () => {
+        v.currentTime = clipStart;
+        v.play().catch(() => {});
+      };
+      const onTime = () => {
+        const end = clipEnd ?? v.duration;
+        if (end && v.currentTime >= end - 0.05) finish();
+      };
+      v.addEventListener("loadedmetadata", onMeta);
+      v.addEventListener("timeupdate", onTime);
+      v.addEventListener("ended", finish);
+      if (v.readyState >= 1) onMeta();
+      return () => {
+        v.removeEventListener("loadedmetadata", onMeta);
+        v.removeEventListener("timeupdate", onTime);
+        v.removeEventListener("ended", finish);
+      };
+    }, [src, clipStart, clipEnd, onDone]);
+
+    return <video ref={ref} src={src} className="story-slide-media" playsInline muted />;
+  }
+
+  function StoryViewerModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const queue = payload?.queue?.length
+      ? payload.queue
+      : [payload?.authorId || ME_ID].filter(Boolean);
+    const [idx, setIdx] = useState(0);
+    const [qIdx, setQIdx] = useState(() => Math.max(0, queue.indexOf(payload?.authorId || ME_ID)));
+    const authorId = queue[qIdx];
+    const story = activeStories(state.stories, now).find((s) => s.author === authorId);
+    const a = getAuthor(state, authorId);
+    const item = story?.items[idx];
+    const advanceRef = useRef(null);
+    const mediaWrapRef = useRef(null);
+    const [ratedStories, setRatedStories] = useState(() => new Set(loadFeedIx().ratedStories || []));
+
+    useEffect(() => {
+      const start = payload?.authorId || ME_ID;
+      const q = payload?.queue?.length ? payload.queue : [start];
+      setQIdx(Math.max(0, q.indexOf(start)));
+      setIdx(0);
+    }, [payload?.authorId, payload?.queue?.join(",")]);
+
+    useEffect(() => {
+      if (story && item) return;
+      if (qIdx >= queue.length - 1) return;
+      setQIdx((q) => q + 1);
+      setIdx(0);
+    }, [story, item, qIdx, queue.length]);
+
+    useEffect(() => {
+      if (!story) return;
+      dispatch({ type: "MARK_STORY_VIEWED", id: story.id });
+    }, [story?.id, dispatch]);
+
+    const goNext = () => {
+      if (!story) {
+        if (qIdx < queue.length - 1) {
+          setQIdx((q) => q + 1);
+          setIdx(0);
+        } else dispatch({ type: "CLOSE_MODAL" });
+        return;
+      }
+      if (idx < story.items.length - 1) setIdx((i) => i + 1);
+      else if (qIdx < queue.length - 1) {
+        setQIdx((q) => q + 1);
+        setIdx(0);
+      } else dispatch({ type: "CLOSE_MODAL" });
+    };
+
+    const goPrev = () => {
+      if (idx > 0) setIdx((i) => i - 1);
+      else if (qIdx > 0) {
+        const prevAuthor = queue[qIdx - 1];
+        const prevStory = activeStories(state.stories, now).find((s) => s.author === prevAuthor);
+        setQIdx((q) => q - 1);
+        setIdx(Math.max(0, (prevStory?.items.length || 1) - 1));
+      }
+    };
+
+    advanceRef.current = goNext;
+    const slideMs = storyItemDurationMs(item);
+
+    useEffect(() => {
+      if (!item || item.mediaType === "video") return;
+      const t = setTimeout(() => advanceRef.current?.(), STORY_PHOTO_MS);
+      return () => clearTimeout(t);
+    }, [idx, qIdx, item?.id, story?.items.length]);
+
+    if (!story) {
+      if (qIdx < queue.length - 1) return null;
+      return (
+        <div className="story-viewer" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+          <div className="story-viewer-empty"><p>{tr("feed.storyExpired")}</p></div>
+        </div>
+      );
+    }
+
+    if (story.isLive) {
+      const isMe = authorId === ME_ID;
+      return createPortal(
+        <div className="story-viewer story-viewer--live" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+          <div className="story-live-stage" onClick={(e) => e.stopPropagation()}>
+            <header className="story-live-head">
+              <Avatar c={a} size={36} showScore={false} ring={false} />
+              <span className="story-live-name">{a.name}</span>
+              <span className="story-live-pill"><Radio size={10} /> {tr("feed.live")}</span>
+              <button type="button" className="story-live-close" onClick={() => dispatch({ type: "CLOSE_MODAL" })}><X size={22} /></button>
+            </header>
+            <div className="story-live-body">
+              <div className="story-live-pulse" aria-hidden />
+              <p>{isMe ? tr("feed.liveYou") : tr("feed.liveWatching", { name: a.name.split(" ")[0] })}</p>
+              <b>{story.liveViewers || 1} {tr("feed.liveViewers")}</b>
+            </div>
+            {isMe && (
+              <button type="button" className="story-live-end" onClick={() => { sfx.tap(); dispatch({ type: "END_LIVE" }); dispatch({ type: "CLOSE_MODAL" }); }}>
+                {tr("feed.endLive")}
+              </button>
+            )}
+          </div>
+        </div>,
+        document.body
+      );
+    }
+
+    if (!item) {
+      if (qIdx < queue.length - 1) return null;
+      return (
+        <div className="story-viewer" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+          <div className="story-viewer-empty"><p>{tr("feed.storyExpired")}</p></div>
+        </div>
+      );
+    }
+
+    const content = item.mediaUrl ? (
+      item.mediaType === "video"
+        ? <StoryVideoSlide item={item} onDone={() => advanceRef.current?.()} />
+        : <img src={mediaUrl(item.mediaUrl)} alt="" className="story-slide-media" />
+    ) : (
+      <div className="story-slide-fallback" style={{ background: grad(item.scene || [a.color, "#fff"]) }}>
+        <span style={{ fontSize: 72 }}>{item.emoji || a.emoji}</span>
+      </div>
+    );
+    const slideCaption = item.caption || "";
+    const capStyle = item.captionStyle || { color: "#fff", align: "center" };
+
+    const storyRated = item ? ratedStories.has(item.id) : false;
+    const storyStars = storyRated ? getRatedStoryScore(item.id) : null;
+    const canRateStory = authorId !== ME_ID && canRateFeed(state, a) && !storyRated;
+
+    const commitStoryRating = (stars) => {
+      if (!item || storyRated || !canRateFeed(state, a)) return;
+      sfx.rateCommit(stars);
+      setRatedStories((prev) => {
+        const next = new Set(prev);
+        next.add(item.id);
+        return next;
+      });
+      saveRatedStoryScore(item.id, stars);
+      if (state.liveData) {
+        api.rate(a.id, stars, null, "story", item.id).catch(() => {});
+      }
+    };
+
+    return (
+      <div className="story-viewer" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="story-viewer-inner" key={`${authorId}-${item.id}`} onClick={(e) => e.stopPropagation()}>
+          <div className="story-progress">
+            {story.items.map((it, i) => (
+              <span key={i} className={"story-progress-seg" + (i < idx ? " done" : i === idx ? " on" : "")}>
+                {i === idx && (
+                  <span
+                    className="story-progress-fill"
+                    style={{ animationDuration: `${slideMs}ms` }}
+                    key={`${authorId}-${item.id}-prog`}
+                  />
+                )}
+              </span>
+            ))}
+          </div>
+          <div className="story-viewer-head">
+            <Avatar c={a} size={32} showScore={false} />
+            <b>{a.name}</b>
+            {queue.length > 1 && (
+              <span className="story-queue-pill">{qIdx + 1}/{queue.length}</span>
+            )}
+            <span className="muted" style={{ fontSize: 11, marginLeft: "auto" }}>{formatPostAge(item.ts, now)}</span>
+            <button type="button" className="icbtn" onClick={() => dispatch({ type: "CLOSE_MODAL" })}><X size={16} /></button>
+          </div>
+          <div ref={mediaWrapRef} className="story-slide">
+            {content}
+            <MediaOverlaysView
+              overlays={capStyle.overlays}
+              captionStyle={capStyle}
+              legacyCaption={slideCaption}
+              dispatch={dispatch}
+            />
+            {authorId !== ME_ID && (canRateStory || storyRated) && (
+              <EchRateOverlay
+                canRate={canRateStory}
+                alreadyRated={storyRated}
+                myStars={storyStars}
+                onPick={commitStoryRating}
+                size="md"
+              />
+            )}
+          </div>
+          <button type="button" className="story-tap-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); goPrev(); }} />
+          <button type="button" className="story-tap-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); goNext(); }} />
+        </div>
+      </div>
+    );
+  }
+
+  function ComposeRedirectModal({ payload }) {
+    const { dispatch } = useStore();
+    useEffect(() => {
+      const mode = payload?.mode || "post";
+      dispatch({ type: "CLOSE_MODAL" });
+      if (mode === "story") {
+        dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story", gallery: true } });
+      } else {
+        dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode, cameraOnly: true } });
+      }
+    }, [dispatch, payload?.mode]);
+    return null;
+  }
+
+  const DOC_TIP_KEYS = ["docs.tip1", "docs.tip2", "docs.tip3", "docs.tip4", "docs.tip5"];
+
+  function EchelonGuideModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { effective, tier } = useDerived(state, now);
+    const [expanded, setExpanded] = useState({ rating: true, score: true });
+    const [tipIdx, setTipIdx] = useState(0);
+    const [quizPick, setQuizPick] = useState(null);
+    const [tierPick, setTierPick] = useState(tier.key);
+    const pickedTier = TIERS.find((t) => t.key === tierPick) || tier;
+    const sections = [
+      { k: "rating", icon: Scale, tint: "#F3EEFF", accent: "#8C6BD8", core: true, screen: null },
+      { k: "score", icon: Gauge, tint: "#FFF8E6", accent: "#E8B84A", core: true, screen: "profile" },
+      { k: "feed", icon: Home, tint: "#FFF0F6", accent: "#FF8FB1", screen: "feed" },
+      { k: "spark", icon: Flame, tint: "#FFF5EE", accent: "#FF9A6C", screen: "spark" },
+      { k: "lens", icon: Eye, tint: "#EEFAF4", accent: "#2ECC71", screen: "lens" },
+      { k: "messages", icon: MessageCircle, tint: "#F0F8FF", accent: "#6B9FD4", screen: "messages" },
+      { k: "friends", icon: Users, tint: "#F3EEFF", accent: "#B79CF0", screen: "friends" },
+      { k: "profile", icon: User, tint: "#FFF8FC", accent: "#C9A0DC", screen: "profile" },
+      { k: "events", icon: CalendarHeart, tint: "#FFF4F8", accent: "#FF9DC0", screen: "explore" },
+      { k: "parties", icon: Ticket, tint: "#F5EEFF", accent: "#9B7FD4", screen: "explore" },
+      { k: "perks", icon: Award, tint: "#EEFAF4", accent: "#4FA98C", screen: "perks" },
+    ];
+    const toggleSection = (k) => {
+      sfx.tap();
+      setExpanded((prev) => ({ ...prev, [k]: !prev[k] }));
+    };
+    const tryScreen = (screen) => {
+      if (!screen) return;
+      sfx.tap();
+      dispatch({ type: "CLOSE_MODAL" });
+      dispatch({ type: "SCREEN", screen });
+    };
+    const openLegal = (doc) => {
+      sfx.tap();
+      dispatch({ type: "OPEN_MODAL", modal: "legal", payload: { doc } });
+    };
+    const nextTip = () => {
+      sfx.tap();
+      setTipIdx((i) => (i + 1) % DOC_TIP_KEYS.length);
+    };
+    return (
+      <div className="sheet-overlay" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="sheet echelon-guide" onClick={(e) => e.stopPropagation()}>
+          <EchModalClose className="echelon-guide-close" onClick={() => dispatch({ type: "CLOSE_MODAL" })} />
+          <div className="echelon-guide-hero">
+            <div className="echelon-guide-hero-icon"><BookOpen size={22} color="#fff" /></div>
+            <div>
+              <h3>{tr("docs.title")}</h3>
+              <p>{tr("docs.lead")}</p>
+            </div>
+          </div>
+          <Scroll className="echelon-guide-scroll">
+            <button type="button" className="echelon-guide-tipcard" onClick={nextTip}>
+              <SparklesIcon size={16} color="#8C6BD8" />
+              <div>
+                <span className="echelon-guide-tipcard-label">{tr("docs.tipTitle")}</span>
+                <p>{tr(DOC_TIP_KEYS[tipIdx])}</p>
+              </div>
+              <ChevronRight size={14} color="#9B7FD4" />
+            </button>
+
+            <div className="echelon-guide-scorecard">
+              <div className="echelon-guide-scorecard-main">
+                <span className="echelon-guide-scorecard-label">{tr("docs.yourScore")}</span>
+                <b style={{ color: tier.ink }}>{effective.toFixed(2)}</b>
+                <span className="echelon-guide-tier-pill" style={{ background: tier.soft, color: tier.ink }}>{tier.label}</span>
+              </div>
+              <p>{tr("docs.scoreCore")}</p>
+            </div>
+
+            <div className="echelon-guide-tiers">
+              <span className="echelon-guide-block-label">{tr("docs.tierLadder")}</span>
+              <div className="echelon-guide-tier-row">
+                {TIERS.map((t) => {
+                  const Icon = t.icon;
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      className={"echelon-guide-tier-btn" + (tierPick === t.key ? " on" : "")}
+                      style={{ "--tier-soft": t.soft, "--tier-ink": t.ink }}
+                      onClick={() => { sfx.tap(); setTierPick(t.key); }}
+                    >
+                      <Icon size={14} color={t.accent} />
+                      <span>{t.min.toFixed(1)}+</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="echelon-guide-tier-blurb">{pickedTier.blurb}</p>
+            </div>
+
+            <div className="echelon-guide-quiz">
+              <b>{tr("docs.quizQ")}</b>
+              <div className="echelon-guide-quiz-row">
+                <button type="button" className={"echelon-guide-quiz-btn" + (quizPick === "yes" ? " picked" : "")} onClick={() => { sfx.tap(); setQuizPick("yes"); }}>{tr("docs.quizYes")}</button>
+                <button type="button" className={"echelon-guide-quiz-btn" + (quizPick === "no" ? " picked" : "")} onClick={() => { sfx.tap(); setQuizPick("no"); }}>{tr("docs.quizNo")}</button>
+              </div>
+              {quizPick && (
+                <p className={"echelon-guide-quiz-result" + (quizPick === "no" ? " right" : " wrong")}>
+                  {quizPick === "no" ? tr("docs.quizRight") : tr("docs.quizWrong")}
+                </p>
+              )}
+            </div>
+
+            {sections.map(({ k, icon: Icon, tint, accent, core, screen }) => {
+              const open = expanded[k] ?? false;
+              return (
+                <div key={k} className={"echelon-guide-section" + (core ? " echelon-guide-section--core" : "") + (open ? " open" : "")} style={{ "--guide-tint": tint, "--guide-accent": accent }}>
+                  <button type="button" className="echelon-guide-section-head" onClick={() => toggleSection(k)}>
+                    <span className="echelon-guide-icon"><Icon size={18} color={accent} /></span>
+                    <b>{tr(`docs.${k}Title`)}</b>
+                    {core && <span className="echelon-guide-core-pill">{tr("docs.corePill")}</span>}
+                    <ChevronDown size={16} className={"echelon-guide-chevron" + (open ? " open" : "")} />
+                  </button>
+                  {open && (
+                    <div className="echelon-guide-section-body">
+                      <p>{tr(`docs.${k}Body`)}</p>
+                      {tr(`docs.${k}Extra`) !== `docs.${k}Extra` && (
+                        <p className="echelon-guide-extra">{tr(`docs.${k}Extra`)}</p>
+                      )}
+                      {screen && (
+                        <button type="button" className="echelon-guide-try" onClick={() => tryScreen(screen)}>
+                          {tr("docs.tryIt")} <ChevronRight size={14} />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            <div className="echelon-guide-gates">
+              <span className="echelon-guide-block-label">{tr("docs.gatesTitle")}</span>
+              {FEATURE_GATES.slice(0, 4).map((g) => {
+                const unlocked = effective >= g.req;
+                const GateIcon = g.icon;
+                return (
+                  <div key={g.id} className={"echelon-guide-gate" + (unlocked ? " on" : "")}>
+                    <span className="echelon-guide-gate-ic" style={{ background: unlocked ? getTier(g.req).soft : "#F5F0F8" }}>
+                      <GateIcon size={14} color={unlocked ? getTier(g.req).accent : "#C9B8C6"} />
+                    </span>
+                    <div>
+                      <b>{g.label}</b>
+                      <span>{g.req.toFixed(1)}+ · {unlocked ? tr("docs.gateOpen") : tr("docs.gateLocked")}</span>
+                    </div>
+                    {unlocked ? <Check size={14} color="#2ECC71" /> : <Lock size={14} color="#C9A0DC" />}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="echelon-guide-footer">
+              <span className="echelon-guide-footer-label">{tr("docs.moreTitle")}</span>
+              <div className="echelon-guide-footer-links">
+                <a href="/app/docs.html" target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{tr("docs.fullPage")}</a>
+                <button type="button" onClick={() => openLegal("privacy")}>{tr("legal.privacy")}</button>
+                <button type="button" onClick={() => openLegal("terms")}>{tr("legal.terms")}</button>
+                <button type="button" onClick={() => openLegal("cookies")}>{tr("legal.cookies")}</button>
+              </div>
+            </div>
+            <div className="scroll-pad" />
+          </Scroll>
+        </div>
+      </div>
+    );
+  }
+  
+  /* ============================================================================
+     8. CHROME: status bar, lens layer, tab bar, sheet & scroll helpers
+  ============================================================================ */
+  
+  function StatusBar() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { effective, tier } = useDerived(state, now);
+    const unread = state.notifs.length + state.friendRequestsIncoming.length;
+    const [pwa, setPwa] = useState({ installed: true, native: false, ios: false, kind: "installed", inApp: false });
+    const { open: openInstallCoach } = useInstallHelp();
+
+    useEffect(() => initPwaInstall(setPwa), []);
+
+    const handleInstall = () => runInstallFlow(pwa, openInstallCoach);
+
+    return (
+      <div className="statusbar">
+        <div className="statusbar-left">
+          <div className="wordmark sm statusbar-wordmark">echelon</div>
+          <button
+            type="button"
+            className="statusbar-docs"
+            onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "guide" }); }}
+            title={tr("docs.title")}
+            aria-label={tr("docs.title")}
+          >
+            <BookOpen size={15} />
+          </button>
+          <button
+            type="button"
+            className="statusbar-profile"
+            onClick={() => { sfx.tap(); dispatch({ type: "CLOSE_MODAL" }); dispatch({ type: "SCREEN", screen: "profile" }); }}
+            title={tr("feed.myProfile")}
+            aria-label={tr("feed.myProfile")}
+          >
+            <User size={15} />
+          </button>
+        </div>
+        <div className="statusbar-right">
+        {!pwa.installed && (
+          <button type="button" className="statusbar-install" onClick={handleInstall} title={tr("pwa.addToHome")}>
+            <Smartphone size={14} />
+            <span>{tr("pwa.addShort")}</span>
+          </button>
+        )}
+        {state.live && <span className="livedot" title="Live evaluation on" />}
+          <button className="lensbtn hasbadge" onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "alerts" }); }} title="Pulse">
+            <Bell size={16} />
+            {unread > 0 && <span className="bell-badge">{unread > 9 ? "9+" : unread}</span>}
+          </button>
+          <button
+            className={state.lens ? "lensbtn on" : "lensbtn"}
+            onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_LENS" }); }}
+            title={state.lens ? "Turn Lens off" : "Turn Lens on"}
+            aria-pressed={state.lens}
+          >
+            {state.lens ? <Eye size={16} /> : <EyeOff size={16} />}
+          </button>
+          <span className="mini-score" style={{ background: tier.soft, color: tier.ink }}>
+            <Star size={11} fill={tier.accent} stroke="none" /> {effective.toFixed(2)}
+          </span>
+        </div>
+      </div>
+    );
+  }
+  
+  function TabBar() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const tabs = [
+      ["feed", "tabs.feed", Home],
+      ["spark", "tabs.spark", Flame],
+      ["lens", "tabs.lens", Eye],
+      ["parties", "tabs.parties", Ticket],
+      ["messages", "tabs.messages", MessageCircle],
+      ["friends", "tabs.friends", Users],
+      ["profile", "tabs.me", User],
+    ];
+    const active = state.screen === "settings" ? "profile" : state.screen;
+    return (
+      <div className="tabbar tabbar-7">
+        {tabs.map(([id, labelKey, Icon]) => {
+          const on = active === id;
+          const reqBadge = id === "friends" ? state.friendRequestsIncoming.length : id === "spark" ? (state.sparkLikesReceived || 0) : 0;
+          return (
+            <button key={id} className={on ? "tab on" : "tab"} onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: id }); }}>
+              <span className="tab-icon-wrap">
+                <Icon size={20} />
+                {reqBadge > 0 && <span className="tab-badge">{reqBadge > 9 ? "9+" : reqBadge}</span>}
+              </span>
+              <span>{tr(labelKey)}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+  
+  function Sheet({ children, dismissable = true }) {
+    const { dispatch } = useStore();
+    return (
+      <div className="backdrop" onClick={() => dismissable && dispatch({ type: "CLOSE_MODAL" })}>
+        <div className="sheet" onClick={(e) => e.stopPropagation()}>
+          <div className="sheet-grab" />
+          {children}
+        </div>
+      </div>
+    );
+  }
+  
+  const Scroll = ({ children, className }) => (
+    <div className={"scroll" + (className ? ` ${className}` : "")}>{children}<div className="scroll-pad" /></div>
+  );
+  
+  const ScreenTitle = ({ title, icon: Icon, subtitle }) => (
+    <header className="ech-screen-head">
+      <div className="ech-screen-head-main">
+        {Icon && <Icon size={18} color="#8C6BD8" strokeWidth={2} />}
+        <div className="ech-screen-head-titles">
+          <h1>{title}</h1>
+          {subtitle ? <p>{subtitle}</p> : null}
+        </div>
+      </div>
+    </header>
+  );
+  
+  const SectionLabel = ({ children }) => <div className="sectionlabel">{children}</div>;
+  
+  function FloatingSparkles() {
+    const items = useMemo(() => Array.from({ length: 9 }).map((_, i) => ({
+      id: i, left: Math.random() * 100, delay: Math.random() * 6, dur: 7 + Math.random() * 6, e: ["✨", "🤍", "💫", "🌸"][i % 4], size: 12 + Math.random() * 12,
+    })), []);
+    return (
+      <div className="sparkles">
+        {items.map((s) => (
+          <span key={s.id} className="spk" style={{ left: `${s.left}%`, fontSize: s.size, animationDelay: `${s.delay}s`, animationDuration: `${s.dur}s` }}>{s.e}</span>
+        ))}
+      </div>
+    );
+  }
+  
+  /* ---- tiny hooks/helpers ---- */
+  function useTick() {
+    return [useContext(TickCtx)];
+  }
+  const dayPart = (lang) => {
+    const h = new Date().getHours();
+    const key = h < 12 ? "day.morning" : h < 18 ? "day.afternoon" : "day.evening";
+    return translate(lang || "en", key);
+  };
+  const boostCountdown = (until, now) => { const s = Math.max(0, Math.floor((until - now) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+  
+  /* ============================================================================
+     8b. PARTIES: user-hosted parties only (real data)
+  ============================================================================ */
+  
+  function PartiesScreen() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { effective } = useDerived(state, now);
+    const [range, setRange] = useState(25);
+    const [sort, setSort] = useState("near");
+    const [search, setSearch] = useState("");
+    const [debouncedQ, setDebouncedQ] = useState("");
+    const [busy, setBusy] = useState(false);
+    const canHost = canHostParties(state, effective);
+
+    useEffect(() => {
+      const t = setTimeout(() => setDebouncedQ(search.trim()), 280);
+      return () => clearTimeout(t);
+    }, [search]);
+
+    const loadParties = () => {
+      if (!state.liveData) return;
+      setBusy(true);
+      api.gatherings({ q: debouncedQ, sort, kind: "party", maxMiles: range }).then((list) => {
+        dispatch({ type: "SYNC_GATHERINGS", gatherings: list || [] });
+      }).catch(() => {}).finally(() => setBusy(false));
+    };
+
+    useEffect(() => {
+      if (state.screen === "parties") loadParties();
+    }, [state.screen, state.liveData, debouncedQ, sort, range]);
+
+    let list = (state.gatherings || []).filter((e) => e.kind === "party" && e.miles <= range);
+    list = [...list].sort((a, b) => {
+      if (sort === "rank" || sort === "rating") return b.req - a.req || a.miles - b.miles;
+      if (sort === "name") return a.name.localeCompare(b.name);
+      if (sort === "newest") return (b.ts || 0) - (a.ts || 0);
+      return a.miles - b.miles || b.req - a.req;
+    });
+
+    const tryRsvp = async (ev) => {
+      if (effective < ev.req) {
+        sfx.lock();
+        dispatch({
+          type: "OPEN_MODAL",
+          modal: "lock",
+          payload: {
+            feature: {
+              label: ev.name,
+              req: ev.req,
+              icon: Ticket,
+              copy: `${tr("parties.minScore")} ${ev.req.toFixed(1)} · ${tr("parties.yourScore")} ${effective.toFixed(2)}.`,
+            },
+          },
+        });
+        return;
+      }
+      try {
+        if (state.liveData) await api.rsvp(ev.id);
+        dispatch({ type: "RSVP", id: ev.id });
+        dispatch({ type: "OPEN_MODAL", modal: "party", payload: { id: ev.id, ev: { ...ev, hasRsvp: true } } });
+        sfx.success();
+        loadParties();
+      } catch {
+        sfx.penalty();
+      }
+    };
+
+    return (
+      <Scroll>
+        <ScreenTitle title={tr("parties.title")} icon={Ticket} />
+
+        {!state.liveData && (
+          <div className="card softnote"><Info size={16} color="#B79CF0" /><span>{tr("parties.liveOnly")}</span></div>
+        )}
+
+        <div className="card events-search-card">
+          <div className="events-search-row">
+            <Search size={16} color="#B79CF0" />
+            <input
+              className="events-search-input"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={tr("parties.searchPlaceholder")}
+              disabled={!state.liveData}
+            />
+            {busy && <Loader size={16} className="spin" color="#C9A0DC" />}
+          </div>
+          {canHost && (
+            <button
+              type="button"
+              className="btn primary events-host-btn"
+              onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "createparty" }); }}
+            >
+              <Plus size={16} /> {tr("parties.createParty")}
+            </button>
+          )}
+          {!canHost && (
+            <p className="muted events-host-hint">{tr("parties.hostGate")}</p>
+          )}
+        </div>
+
+        {state.liveData && (
+          <div className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <b style={{ fontSize: 13.5 }}>{tr("parties.withinMi", { range })}</b>
+              <span className="muted" style={{ fontSize: 12 }}>{list.length} {tr("parties.found")}</span>
+            </div>
+            <input className="range" type="range" min={1} max={50} value={range} onChange={(e) => setRange(+e.target.value)} />
+            <div className="sortpills">
+              <button className={sort === "near" ? "sortpill on" : "sortpill"} onClick={() => { setSort("near"); sfx.tap(); }}><MapPin size={12} /> {tr("parties.sortNear")}</button>
+              <button className={sort === "rank" ? "sortpill on" : "sortpill"} onClick={() => { setSort("rank"); sfx.tap(); }}><Crown size={12} /> {tr("parties.sortRating")}</button>
+              <button className={sort === "newest" ? "sortpill on" : "sortpill"} onClick={() => { setSort("newest"); sfx.tap(); }}><Clock size={12} /> {tr("parties.sortNew")}</button>
+            </div>
+          </div>
+        )}
+
+        {state.liveData && list.length === 0 && (
+          <div className="card softnote"><Info size={16} color="#B79CF0" /><span>{tr("parties.empty")}</span></div>
+        )}
+
+        {list.map((ev) => {
+          const open = effective >= ev.req;
+          const going = state.rsvps.includes(ev.id) || ev.hasRsvp;
+          const locLabel = ev.secretAddress && !going && !ev.isHost
+            ? `${formatCityLabel(ev.city, ev.countryCode) || ev.venue} · ${tr("parties.secretLoc")}`
+            : ev.venue;
+          const bannerSrc = ev.bannerUrl ? mediaUrl(ev.bannerUrl) : null;
+          return (
+            <button
+              key={ev.id}
+              type="button"
+              className="card party-card"
+              style={{ padding: 12, filter: open ? "none" : "saturate(.6)", width: "100%", textAlign: "left" }}
+              onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "party", payload: { id: ev.id, ev } }); }}
+            >
+              <div className="ev-img" style={bannerSrc ? { backgroundImage: `url(${bannerSrc})`, backgroundSize: "cover", backgroundPosition: "center" } : { background: grad(ev.scene) }}>
+                {!bannerSrc && <span style={{ fontSize: 40 }}>{ev.emoji || "🎉"}</span>}
+                <span className="dist-pill"><MapPin size={10} /> {ev.miles.toFixed(1)} mi</span>
+                {open
+                  ? <span className="rank-badge"><Check size={10} /> {ev.req.toFixed(1)}+</span>
+                  : <span className="rank-badge lock"><Lock size={10} /> {ev.req.toFixed(1)}+</span>}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <b style={{ fontSize: 14 }}>{ev.name}</b>
+                  <p className="muted" style={{ fontSize: 11.5 }}>{locLabel} · {ev.when}</p>
+                  {ev.price != null && ev.price > 0 && (
+                    <p className="muted" style={{ fontSize: 11 }}>{ev.price} {ev.currency || "EUR"}</p>
+                  )}
+                </div>
+                {going ? (
+                  <span className="badge-ok"><Check size={12} /> {tr("parties.going")}</span>
+                ) : open ? (
+                  <span className="ratebtn" onClick={(e) => { e.stopPropagation(); tryRsvp(ev); }}><Ticket size={12} /> RSVP</span>
+                ) : (
+                  <Lock size={14} color="#C9B8C6" />
+                )}
+              </div>
+            </button>
+          );
+        })}
+        <div style={{ height: 8 }} />
+      </Scroll>
+    );
+  }
+
+  function PartyDetailModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const [now] = useTick();
+    const { effective } = useDerived(state, now);
+    const [ev, setEv] = useState(payload?.ev || null);
+    const [busy, setBusy] = useState(false);
+    const [deleteBusy, setDeleteBusy] = useState(false);
+    const [guests, setGuests] = useState([]);
+    const [guestsBusy, setGuestsBusy] = useState(false);
+    const [guestsOpen, setGuestsOpen] = useState(false);
+
+    useEffect(() => {
+      if (payload?.ev) { setEv(payload.ev); return; }
+      if (!payload?.id || !state.liveData) return;
+      setBusy(true);
+      api.event(payload.id).then(setEv).catch(() => {}).finally(() => setBusy(false));
+    }, [payload?.id, payload?.ev, state.liveData]);
+
+    if (!ev && busy) {
+      return (
+        <Sheet dismissable>
+          <div style={{ textAlign: "center", padding: 24 }}><Loader size={28} className="spin" color="#C9A0DC" /></div>
+        </Sheet>
+      );
+    }
+    if (!ev) return null;
+
+    const going = state.rsvps.includes(ev.id) || ev.hasRsvp;
+    const open = effective >= ev.req;
+    const loc = (going || ev.isHost) && ev.fullLocation ? ev.fullLocation : ev.venue;
+    const bannerSrc = ev.bannerUrl ? mediaUrl(ev.bannerUrl) : null;
+    const mapVisible = ev.lat != null && ev.lng != null;
+    const secretMapPending = ev.secretAddress && !ev.isHost && ev.startsAt && now < ev.startsAt;
+
+    const rsvp = async () => {
+      if (!open) return;
+      try {
+        if (state.liveData) await api.rsvp(ev.id);
+        dispatch({ type: "RSVP", id: ev.id });
+        setEv({ ...ev, hasRsvp: true });
+        sfx.success();
+      } catch { sfx.penalty(); }
+    };
+
+    const editParty = () => {
+      sfx.tap();
+      dispatch({ type: "OPEN_MODAL", modal: "createparty", payload: { event: ev } });
+    };
+
+    const removeParty = async () => {
+      if (!window.confirm(tr("events.deleteConfirm"))) return;
+      setDeleteBusy(true);
+      try {
+        if (state.liveData) await api.deleteEvent(ev.id);
+        dispatch({ type: "REMOVE_GATHERING", id: ev.id });
+        dispatch({ type: "CLOSE_MODAL" });
+        sfx.success();
+      } catch {
+        sfx.penalty();
+      } finally {
+        setDeleteBusy(false);
+      }
+    };
+
+    const loadGuests = async () => {
+      if (!ev?.isHost || !state.liveData) return;
+      setGuestsBusy(true);
+      try {
+        const data = await api.eventGuests(ev.id);
+        setGuests(data.guests || []);
+        setGuestsOpen(true);
+      } catch {
+        sfx.penalty();
+      } finally {
+        setGuestsBusy(false);
+      }
+    };
+
+    const exportGuestsCsv = () => {
+      const rows = [
+        ["Echelon Party Guest List"],
+        [ev.name || "", new Date().toLocaleString()],
+        [],
+        ["Name", "Username", "Score"],
+        ...guests.map((g) => [g.name, g.handle, String(g.score)]),
+      ];
+      const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `echelon-guests-${ev.id}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      sfx.success();
+    };
+
+    const exportGuestsPdf = () => {
+      const w = window.open("", "_blank");
+      if (!w) return;
+      const rows = guests.map((g) => `<tr><td>${g.name}</td><td>${g.handle}</td><td>${g.score.toFixed(2)} ★</td></tr>`).join("");
+      w.document.write(`<!DOCTYPE html><html><head><title>Echelon · ${ev.name}</title>
+        <style>body{font-family:system-ui,sans-serif;padding:32px;color:#3a2848}
+        h1{font-size:22px;margin:0 0 4px} .brand{color:#8c6bd8;font-size:12px;letter-spacing:.12em;text-transform:uppercase}
+        table{width:100%;border-collapse:collapse;margin-top:20px} th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #f0e6f0}
+        th{font-size:11px;color:#8c6bd8;text-transform:uppercase}</style></head><body>
+        <div class="brand">Echelon</div><h1>${ev.name}</h1><p style="color:#8a7a92">Guest list · ${guests.length} RSVPs</p>
+        <table><thead><tr><th>Name</th><th>Username</th><th>Score</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+      w.document.close();
+      w.focus();
+      w.print();
+    };
+
+    return (
+      <Sheet dismissable>
+        <div className="party-detail">
+          <div className="ev-img party-detail-hero" style={bannerSrc ? { backgroundImage: `url(${bannerSrc})`, backgroundSize: "cover", backgroundPosition: "center" } : { background: grad(ev.scene) }}>
+            {!bannerSrc && <span style={{ fontSize: 48 }}>{ev.emoji || "🎉"}</span>}
+          </div>
+          <h3>{ev.name}</h3>
+          <p className="muted">{ev.when}</p>
+          <p><MapPin size={14} /> {loc}{ev.miles != null ? ` · ${ev.miles.toFixed(1)} mi` : ""}</p>
+          {ev.price != null && ev.price > 0 && (
+            <p className="party-price-tag">{ev.price} {ev.currency || "EUR"}</p>
+          )}
+          {ev.description && <p className="party-detail-desc">{ev.description}</p>}
+          {ev.secretAddress && !going && !ev.isHost && (
+            <p className="muted" style={{ fontSize: 12 }}>{tr("parties.secretHint")}</p>
+          )}
+          <p className="muted">{tr("parties.minScore")}: <b>{ev.req.toFixed(1)}+</b></p>
+          {going ? (
+            <span className="badge-ok"><Check size={12} /> {tr("parties.going")}</span>
+          ) : open ? (
+            <button type="button" className="btn primary" onClick={rsvp}><Ticket size={16} /> RSVP</button>
+          ) : (
+            <p className="muted">{tr("parties.scoreTooLow")}</p>
+          )}
+          {ev.isHost && (
+            <div className="party-host-actions">
+              <button type="button" className="btn soft" onClick={() => { sfx.tap(); loadGuests(); }} disabled={guestsBusy}>
+                {guestsBusy ? <Loader size={14} className="spin" /> : <Users size={14} />}
+                {tr("parties.guestList")}
+              </button>
+              <button type="button" className="btn soft" onClick={editParty}>{tr("events.editParty")}</button>
+              <button type="button" className="btn soft danger" disabled={deleteBusy} onClick={removeParty}>
+                {deleteBusy ? <Loader size={14} className="spin" /> : tr("events.deleteParty")}
+              </button>
+            </div>
+          )}
+          {ev.isHost && guestsOpen && (
+            <div className="party-guest-list card">
+              <div className="party-guest-list-head">
+                <b>{tr("parties.guestList")}</b>
+                <span className="muted">{guests.length}</span>
+              </div>
+              {guests.length === 0 ? (
+                <p className="muted" style={{ fontSize: 12 }}>{tr("parties.noGuests")}</p>
+              ) : (
+                <ul className="party-guest-rows">
+                  {guests.map((g, i) => (
+                    <li key={g.id}>
+                      <span className="party-guest-rank">{i + 1}</span>
+                      <Avatar c={g} size={36} showScore={false} />
+                      <div>
+                        <b>{g.name}</b>
+                        <span className="muted">{g.handle}</span>
+                      </div>
+                      <span className="party-guest-score">{g.score.toFixed(2)} ★</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="party-guest-export">
+                <button type="button" className="btn soft" onClick={exportGuestsCsv}>{tr("parties.exportExcel")}</button>
+                <button type="button" className="btn soft" onClick={exportGuestsPdf}>{tr("parties.exportPdf")}</button>
+              </div>
+            </div>
+          )}
+          {mapVisible ? (
+            <div className="party-map-wrap">
+              <label className="onb-label">{tr("events.mapLabel")}</label>
+              <PartyPinMap lat={ev.lat} lng={ev.lng} readOnly />
+            </div>
+          ) : secretMapPending ? (
+            <p className="muted party-map-pending">{tr("events.mapHiddenUntilStart")}</p>
+          ) : null}
+        </div>
+      </Sheet>
+    );
+  }
+
+  function CreatePartyModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const editEv = payload?.event;
+    const isEdit = !!editEv?.id;
+    const bannerRef = useRef(null);
+    const [title, setTitle] = useState(editEv?.name || "");
+    const [location, setLocation] = useState(editEv?.address || editEv?.fullLocation || "");
+    const [city, setCity] = useState(editEv?.city || "");
+    const [countryCode, setCountryCode] = useState(editEv?.countryCode || "");
+    const [cityQuery, setCityQuery] = useState(formatCityLabel(editEv?.city, editEv?.countryCode) || "");
+    const [cityOpts, setCityOpts] = useState([]);
+    const [cityOpen, setCityOpen] = useState(false);
+    const cityTimer = useRef(null);
+    const [addrOpen, setAddrOpen] = useState(false);
+    const [addrOpts, setAddrOpts] = useState([]);
+    const addrTimer = useRef(null);
+    const [minRating, setMinRating] = useState(String(editEv?.req ?? "3.0"));
+    const initWheels = editEv?.startsAt ? partyWheelsFromMs(editEv.startsAt) : null;
+    const [monthIdx, setMonthIdx] = useState(() => initWheels?.monthIdx ?? new Date().getMonth());
+    const [day, setDay] = useState(() => initWheels?.day ?? new Date().getDate());
+    const [hour12, setHour12] = useState(() => initWheels?.hour12 ?? 9);
+    const [minute, setMinute] = useState(() => initWheels?.minute ?? 0);
+    const [ampm, setAmpm] = useState(() => initWheels?.ampm ?? "PM");
+    const [description, setDescription] = useState(editEv?.description || "");
+    const [secretAddress, setSecretAddress] = useState(!!editEv?.secretAddress);
+    const [price, setPrice] = useState(editEv?.price != null ? String(editEv.price) : "10");
+    const [currency, setCurrency] = useState(editEv?.currency || "EUR");
+    const [bannerUrl, setBannerUrl] = useState(editEv?.bannerUrl || "");
+    const [bannerPreview, setBannerPreview] = useState(editEv?.bannerUrl ? mediaUrl(editEv.bannerUrl) : "");
+    const [bannerBusy, setBannerBusy] = useState(false);
+    const [pinLat, setPinLat] = useState(editEv?.lat ?? null);
+    const [pinLng, setPinLng] = useState(editEv?.lng ?? null);
+    const [mapCenter, setMapCenter] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const mapWrapRef = useRef(null);
+    const when = partyWhenLabel(monthIdx, day, hour12, minute, ampm);
+    const daysInMonth = new Date(new Date().getFullYear(), monthIdx + 1, 0).getDate();
+    const dayItems = useMemo(() => Array.from({ length: daysInMonth }, (_, i) => i + 1), [daysInMonth]);
+
+    useEffect(() => {
+      if (day > daysInMonth) setDay(daysInMonth);
+    }, [day, daysInMonth]);
+
+    useEffect(() => {
+      if (pinLat != null && pinLng != null) return;
+      if (!geoSupported()) return;
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setPinLat(pos.coords.latitude);
+          setPinLng(pos.coords.longitude);
+        },
+        () => {},
+        { timeout: 8000, maximumAge: 60000 },
+      );
+    }, []);
+
+    useEffect(() => {
+      const known = (state.gatherings || [])
+        .map((g) => ({
+          key: `${(g.city || "").toLowerCase()}|${(g.countryCode || "").toUpperCase()}`,
+          city: g.city,
+          countryCode: g.countryCode || "",
+          label: formatCityLabel(g.city, g.countryCode),
+        }))
+        .filter((c) => c.city);
+      if (!cityQuery.trim()) {
+        setCityOpts(known.slice(0, 8));
+        return;
+      }
+      if (cityTimer.current) clearTimeout(cityTimer.current);
+      cityTimer.current = setTimeout(async () => {
+        const remote = await searchCities(cityQuery);
+        const q = cityQuery.toLowerCase();
+        const merged = [];
+        const seen = new Set();
+        for (const opt of [...known, ...remote]) {
+          if (!opt.label.toLowerCase().includes(q)) continue;
+          if (seen.has(opt.key)) continue;
+          seen.add(opt.key);
+          merged.push(opt);
+          if (merged.length >= 10) break;
+        }
+        setCityOpts(merged);
+      }, 150);
+      return () => { if (cityTimer.current) clearTimeout(cityTimer.current); };
+    }, [cityQuery, state.gatherings]);
+
+    useEffect(() => {
+      if (secretAddress || location.trim().length < 3) {
+        setAddrOpts([]);
+        return;
+      }
+      if (addrTimer.current) clearTimeout(addrTimer.current);
+      addrTimer.current = setTimeout(async () => {
+        const cityLabel = city.trim() || cityQuery.split(",")[0]?.trim() || "";
+        const remote = await searchAddresses(location, cityLabel);
+        setAddrOpts(remote);
+      }, 200);
+      return () => { if (addrTimer.current) clearTimeout(addrTimer.current); };
+    }, [location, city, cityQuery, secretAddress]);
+
+    const pickCity = async (opt) => {
+      sfx.tap();
+      setCity(opt.city);
+      setCountryCode(opt.countryCode || "");
+      setCityQuery(opt.label);
+      setCityOpen(false);
+      const geo = await geocodePlace(opt.label);
+      if (geo) {
+        setMapCenter(geo);
+        setPinLat(geo.lat);
+        setPinLng(geo.lng);
+      }
+    };
+
+    const pickAddress = (opt) => {
+      sfx.tap();
+      if (!Number.isFinite(opt.lat) || !Number.isFinite(opt.lng)) return;
+      setLocation(opt.address || opt.label || "");
+      setAddrOpen(false);
+      setAddrOpts([]);
+      setPinLat(opt.lat);
+      setPinLng(opt.lng);
+      setMapCenter({ lat: opt.lat, lng: opt.lng });
+      requestAnimationFrame(() => {
+        mapWrapRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+        window.dispatchEvent(new Event("resize"));
+      });
+    };
+
+    const onBanner = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      setBannerBusy(true);
+      setErr("");
+      try {
+        const preview = URL.createObjectURL(f);
+        setBannerPreview(preview);
+        if (state.liveData) {
+          const { url } = await api.upload(f);
+          setBannerUrl(url);
+        }
+        sfx.shutter();
+      } catch {
+        setErr(tr("events.bannerError"));
+        setBannerPreview("");
+      } finally {
+        setBannerBusy(false);
+        e.target.value = "";
+      }
+    };
+
+    const submit = async () => {
+      sfx.tap();
+      setErr("");
+      if (state.user.score < 4.0) {
+        setErr(tr("events.hostGate"));
+        return;
+      }
+      const cityVal = city.trim() || cityQuery.trim().split(",")[0].trim();
+      if (!title.trim() || !cityVal || (!secretAddress && !location.trim())) {
+        setErr(tr("events.formError"));
+        return;
+      }
+      if (pinLat == null || pinLng == null) {
+        setErr(tr("events.mapRequired"));
+        return;
+      }
+      setBusy(true);
+      try {
+        const body = {
+          title: title.trim(),
+          location: location.trim(),
+          city: cityVal,
+          countryCode: countryCode || undefined,
+          minRating: parseFloat(minRating) || 3.0,
+          when: when.trim() || "TBD",
+          startsAt: partyStartsAtMs(monthIdx, day, hour12, minute, ampm),
+          description: description.trim() || undefined,
+          secretAddress,
+          lat: pinLat,
+          lng: pinLng,
+          bannerUrl: bannerUrl || undefined,
+          price: price !== "" ? parseFloat(price) || 0 : 0,
+          currency,
+        };
+        const event = isEdit
+          ? await api.updateEvent(editEv.id, body)
+          : await api.createEvent(body);
+        dispatch({ type: isEdit ? "UPDATE_GATHERING" : "ADD_GATHERING", event });
+        dispatch({ type: "CLOSE_MODAL" });
+        sfx.success();
+      } catch (e) {
+        setErr(e?.message || tr("events.createError"));
+        sfx.penalty();
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    return (
+      <Sheet>
+        <h3 style={{ margin: "0 0 4px", color: "#5A4A60" }}>{isEdit ? tr("events.editParty") : tr("events.createParty")}</h3>
+        <p className="muted" style={{ fontSize: 12, marginBottom: 14 }}>{tr("events.createSub")}</p>
+        <label className="onb-label">{tr("events.fieldBanner")}</label>
+        <button
+          type="button"
+          className="party-banner-upload"
+          onClick={() => bannerRef.current?.click()}
+          style={bannerPreview ? { backgroundImage: `url(${bannerPreview})`, backgroundSize: "cover", backgroundPosition: "center" } : undefined}
+        >
+          {!bannerPreview && <span>{bannerBusy ? <Loader size={20} className="spin" /> : tr("events.bannerTap")}</span>}
+        </button>
+        <input ref={bannerRef} type="file" accept="image/*" onChange={onBanner} style={{ display: "none" }} />
+        <label className="onb-label">{tr("events.fieldTitle")}</label>
+        <input className="onb-input" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <label className="onb-label">{tr("events.fieldCity")}</label>
+        <div className="city-autocomplete">
+          <input
+            className="onb-input"
+            value={cityQuery}
+            onChange={(e) => { setCityQuery(e.target.value); setCity(""); setCountryCode(""); setCityOpen(true); }}
+            onFocus={() => setCityOpen(true)}
+            placeholder="Lisboa, PT"
+            autoComplete="off"
+          />
+          {cityOpen && cityOpts.length > 0 && (
+            <div className="city-autocomplete-drop">
+              {cityOpts.map((c) => (
+                <button
+                  key={c.key}
+                  type="button"
+                  className={"city-autocomplete-opt" + (c.city === city && c.countryCode === countryCode ? " on" : "")}
+                  onClick={() => pickCity(c)}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <label className="onb-label">{tr("events.fieldLocation")}</label>
+        <div className="city-autocomplete">
+          <input
+            className="onb-input"
+            value={location}
+            onChange={(e) => { setLocation(e.target.value); setAddrOpen(true); }}
+            onFocus={() => setAddrOpen(true)}
+            placeholder={secretAddress ? tr("events.fieldLocationSecret") : "123 Ocean Drive"}
+            disabled={secretAddress}
+            autoComplete="off"
+          />
+          {addrOpen && !secretAddress && addrOpts.length > 0 && (
+            <div className="city-autocomplete-drop">
+              {addrOpts.map((a) => (
+                <button
+                  key={a.key}
+                  type="button"
+                  className="city-autocomplete-opt"
+                  onClick={() => pickAddress(a)}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <label className="onb-label">{tr("events.fieldPrice")}</label>
+        <div className="party-price-row">
+          <input className="onb-input party-price-input" type="number" min={0} step={1} value={price} onChange={(e) => setPrice(e.target.value)} />
+          <select className="onb-input party-currency-select" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+            {PARTY_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <p className="muted" style={{ fontSize: 11, margin: "0 0 10px" }}>{tr("events.priceHint")}</p>
+        <label className="onb-label">{tr("events.fieldMinRating")}</label>
+        <input className="onb-input" type="number" min={1} max={5} step={0.1} value={minRating} onChange={(e) => setMinRating(e.target.value)} />
+        <label className="onb-label">{tr("events.fieldWhen")}</label>
+        <div className="dt-wheels">
+          <ScrollWheel items={PARTY_MONTHS} value={PARTY_MONTHS[monthIdx]} onChange={(m) => setMonthIdx(PARTY_MONTHS.indexOf(m))} />
+          <ScrollWheel items={dayItems} value={day} onChange={setDay} />
+          <ScrollWheel items={PARTY_HOURS} value={hour12} onChange={setHour12} />
+          <ScrollWheel items={PARTY_MINUTES} value={minute} onChange={setMinute} format={(m) => String(m).padStart(2, "0")} />
+          <ScrollWheel items={PARTY_AMPM} value={ampm} onChange={setAmpm} />
+        </div>
+        <p className="dt-wheels-preview">{when}</p>
+        <label className="onb-label">{tr("parties.fieldDescription")}</label>
+        <textarea className="onb-input" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={tr("parties.descriptionPlaceholder")} />
+        <button type="button" className={"toggle-row" + (secretAddress ? " on" : "")} onClick={() => { sfx.tap(); setSecretAddress(!secretAddress); }}>
+          <span>{tr("events.secretAddress")}</span>
+          <span className="toggle-dot" />
+        </button>
+        {secretAddress && (
+          <>
+            <p className="muted" style={{ fontSize: 11, margin: "0 0 6px" }}>{tr("events.secretHint")}</p>
+            <p className="muted party-secret-map-note">{tr("events.secretMapHostNote")}</p>
+          </>
+        )}
+        <label className="onb-label">{tr("events.mapPinLabel")}</label>
+        <p className="muted" style={{ fontSize: 11, margin: "0 0 8px" }}>{tr("events.mapPinHint")}</p>
+        <div className="party-map-wrap" ref={mapWrapRef}>
+          <PartyPinMap
+            lat={pinLat}
+            lng={pinLng}
+            centerLat={mapCenter?.lat}
+            centerLng={mapCenter?.lng}
+            onChange={(lat, lng) => { setPinLat(lat); setPinLng(lng); }}
+          />
+        </div>
+        {err && <p className="onb-error">{err}</p>}
+        <button type="button" className="btn primary" style={{ marginTop: 12 }} disabled={busy} onClick={submit}>
+          {busy ? <Loader size={16} className="spin" /> : (isEdit ? tr("events.saveParty") : tr("events.publishParty"))}
+        </button>
+      </Sheet>
+    );
+  }
+
+  function RsvpModal({ payload }) {
+    const { dispatch } = useStore();
+    const tr = useT();
+    const ev = payload.ev;
+    const loc = ev.fullLocation || ev.address || ev.venue;
+    return (
+      <Sheet>
+        <div style={{ textAlign: "center", padding: "8px 0" }}>
+          <div style={{ fontSize: 46 }}>🎟️</div>
+          <h3 style={{ margin: "10px 0 4px", color: "#5A4A60" }}>{tr("events.rsvpTitle")}</h3>
+          <p className="muted" style={{ fontSize: 13 }}>{ev.name}<br />{loc}<br />{ev.when} · {ev.miles.toFixed(1)} mi</p>
+          {ev.secretAddress && ev.fullLocation && (
+            <p className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>{tr("events.addressRevealed")}</p>
+          )}
+          <p className="muted" style={{ fontSize: 11.5, marginTop: 8, padding: "0 16px" }}>{tr("events.rsvpBody")}</p>
+          <button className="btn primary" style={{ marginTop: 18 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("events.rsvpOk")}</button>
+        </div>
+      </Sheet>
+    );
+  }
+  
+  function InstagramModal() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const connected = !!state.user.instagram?.verified;
+    const [importMode, setImportMode] = useState("both");
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState(() => {
+      const reason = state.modal?.payload?.error;
+      const detail = state.modal?.payload?.detail || "";
+      if (!reason) return "";
+      if (detail) return detail;
+      if (reason === "config") return tr("ig.errorConfig");
+      if (reason === "oauth" || reason === "redirect") return tr("ig.errorPlatform");
+      return tr("ig.error");
+    });
+
+    const [redirectUri, setRedirectUri] = useState("");
+
+    useEffect(() => {
+      if (!state.liveData) return;
+      api.instagramAuthUrl()
+        .then(({ redirectUri: uri }) => { if (uri) setRedirectUri(uri); })
+        .catch(() => {});
+    }, [state.liveData, state.modal?.type]);
+
+    const connectLive = async () => {
+      setBusy(true);
+      setErr("");
+      sfx.tap();
+      try {
+        const { url, redirectUri: uri } = await api.instagramAuthUrl(importMode);
+        if (uri) setRedirectUri(uri);
+        openInstagramAuth(url);
+      } catch (e) {
+        setErr(e.message || tr("ig.error"));
+        setBusy(false);
+      }
+    };
+
+    const importOptions = [
+      ["past", tr("ig.importPast")],
+      ["future", tr("ig.importFuture")],
+      ["both", tr("ig.importBoth")],
+    ];
+
+    const syncFeed = async () => {
+      setBusy(true);
+      try {
+        const res = await api.instagramSync();
+        dispatch({
+          type: "INSTAGRAM_SYNC",
+          feed: res.feed,
+          stories: res.stories,
+        });
+        sfx.success();
+      } catch (e) {
+        setErr(e.message || tr("ig.error"));
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    return (
+      <Sheet dismissable={!busy}>
+        <div style={{ textAlign: "center" }}>
+          <div className="ig-hero">{connected ? <BadgeCheck size={28} color="#fff" /> : <Instagram size={28} color="#fff" />}</div>
+          <h3 style={{ margin: "12px 0 2px", color: "#5A4A60" }}>
+            {connected ? tr("ig.connectedTitle") : tr("ig.title")}
+          </h3>
+          <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.55, padding: "0 14px" }}>
+            {connected ? tr("ig.connectedSub", { handle: state.user.instagram?.handle || "" }) : tr("ig.sub")}
+          </p>
+          {err && (
+            <div style={{ marginTop: 8, padding: "0 14px" }}>
+              <p style={{ color: "#B07E7E", fontSize: 12, lineHeight: 1.55, margin: 0 }}>{err}</p>
+            </div>
+          )}
+        </div>
+        {connected ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+            <button className="btn igbtn" disabled={busy} onClick={syncFeed}><Instagram size={16} /> {tr("ig.sync")}</button>
+            <button className="btn soft" disabled={busy} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>{tr("ig.done")}</button>
+          </div>
+        ) : (
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            <p className="muted" style={{ fontSize: 11.5, textAlign: "center", margin: 0 }}>{tr("ig.importPrompt")}</p>
+            <div className="ig-import-options">
+              {importOptions.map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={"ig-import-opt" + (importMode === id ? " on" : "")}
+                  disabled={busy}
+                  onClick={() => { sfx.tap(); setImportMode(id); }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button className="btn igbtn" disabled={busy} onClick={connectLive}>
+              {busy ? <Loader size={16} className="spin" /> : <Instagram size={16} />}
+              {busy ? tr("ig.opening") : tr("ig.connect")}
+            </button>
+          </div>
+        )}
+      </Sheet>
+    );
+  }
+  
+  /* ============================================================================
+     9. ROOT APP: store provider, live firehose, lens layer, routing
+  ============================================================================ */
+  
+  export default function EchelonApp() {
+    const [state, dispatch] = useReducer(reducer, undefined, initialState);
+    const [tick, setTick] = useState(Date.now());
+    const [installCoachOpen, setInstallCoachOpen] = useState(false);
+    const [installCoachKind, setInstallCoachKind] = useState("ios-coach");
+    const installHelpApi = useMemo(
+      () => ({
+        open: (kind = "ios-coach") => { setInstallCoachKind(kind); setInstallCoachOpen(true); },
+        close: () => setInstallCoachOpen(false),
+      }),
+      []
+    );
+
+    useEffect(() => {
+      sfx.enabled = state.sound !== false;
+    }, [state.sound]);
+
+    useEffect(() => {
+      if (!state.sessionReady || !state.user?.id) return;
+      const token = getToken();
+      if (token) persistAccountSnapshot(state.user, token);
+    }, [state.sessionReady, state.user?.id, state.user?.handle, state.user?.name]);
+
+    useEffect(() => {
+      const unlock = () => sfx.unlock();
+      document.addEventListener("touchstart", unlock, { passive: true });
+      document.addEventListener("touchend", unlock, { passive: true });
+      document.addEventListener("click", unlock, { passive: true });
+      return () => {
+        document.removeEventListener("touchstart", unlock);
+        document.removeEventListener("touchend", unlock);
+        document.removeEventListener("click", unlock);
+      };
+    }, []);
+  
+    // Resolve language: saved preference, else IP (if functional cookies OK), else browser
+    useEffect(() => {
+      (async () => {
+        let lang = typeof localStorage !== "undefined" ? localStorage.getItem(LANG_KEY) : null;
+        if (!lang || !LANGS.some((l) => l.id === lang)) {
+          const consent = getCookieConsent();
+          const fromIp = consent?.functional ? await detectLangFromIp() : null;
+          lang = fromIp || langFromBrowser();
+          if (typeof localStorage !== "undefined") localStorage.setItem(LANG_KEY, lang);
+        }
+        dispatch({ type: "SET_LANG", lang, chosen: false });
+
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("screenshotDemo") === "1") {
+          try { localStorage.setItem("echelon-screenshot-demo", "1"); } catch { /* ignore */ }
+        }
+        if (isScreenshotDemoMode()) {
+          saveCookieConsent({ functional: true, analytics: false });
+          try { localStorage.setItem("echelon-install-dismiss", "1"); } catch { /* ignore */ }
+          const session = buildScreenshotDemoSession();
+          registerUsers(session.contacts);
+          setToken("echelon-screenshot-demo");
+          dispatch({ type: "HYDRATE", payload: session });
+          dispatch({ type: "ONBOARDED" });
+          dispatch({ type: "SESSION_READY" });
+          return;
+        }
+
+        const magic = params.get("magic");
+        if (magic) {
+          try {
+            const { token, user } = await api.authMagicVerify(magic);
+            setToken(token);
+            dispatch({
+              type: "HYDRATE",
+              payload: {
+                user,
+                contacts: [],
+                gatherings: [],
+                feed: [],
+                friends: [],
+                rsvps: [],
+                history: [],
+                notifications: [],
+                settings: {},
+              },
+            });
+            if (user.onboarded) {
+              const data = await api.bootstrap();
+              dispatch({ type: "HYDRATE", payload: data });
+              dispatch({ type: "ONBOARDED" });
+            }
+            window.history.replaceState({}, "", window.location.pathname);
+          } catch {
+            setToken(null);
+          } finally {
+            dispatch({ type: "SESSION_READY" });
+          }
+          return;
+        }
+
+        try {
+          if (!getToken() && shouldAutoSignInWithApple()) {
+            try {
+              const appleCfg = await fetchAppleConfig();
+              if (appleCfg.clientId) {
+                await initAppleAuth({ clientId: appleCfg.clientId, redirectUri: appleCfg.appleRedirectUri });
+                const apple = await tryAutoSignInWithApple();
+                if (apple?.idToken) {
+                  const { token, user } = await api.authApple({
+                    idToken: apple.idToken,
+                    name: apple.name,
+                    email: apple.email,
+                  });
+                  setToken(token);
+                  if (user.onboarded) {
+                    const data = await api.bootstrap();
+                    dispatch({ type: "HYDRATE", payload: data });
+                    dispatch({ type: "ONBOARDED" });
+                  } else {
+                    dispatch({
+                      type: "HYDRATE",
+                      payload: {
+                        user,
+                        contacts: [],
+                        gatherings: [],
+                        feed: [],
+                        friends: [],
+                        rsvps: [],
+                        history: [],
+                        notifications: [],
+                        settings: {},
+                      },
+                    });
+                  }
+                  dispatch({ type: "SESSION_READY" });
+                  return;
+                }
+              }
+            } catch { /* manual sign-in fallback */ }
+          }
+
+          const data = await tryBootstrap();
+          if (data) dispatch({ type: "HYDRATE", payload: data });
+        } catch {
+          setToken(null);
+        } finally {
+          dispatch({ type: "SESSION_READY" });
+        }
+
+        const ig = params.get("ig");
+        if (ig === "connected" && getToken()) {
+          try {
+            const [me, boot] = await Promise.all([api.me(), api.bootstrap()]);
+            dispatch({
+              type: "INSTAGRAM_CONNECTED",
+              instagram: me.instagram,
+              score: me.score,
+              feed: boot.feed,
+              stories: boot.stories,
+            });
+            sfx.success();
+          } catch { /* ignore */ }
+          window.history.replaceState({}, "", window.location.pathname);
+        } else if (ig === "error") {
+          dispatch({
+            type: "OPEN_MODAL",
+            modal: "instagram",
+            payload: {
+              error: params.get("reason") || "oauth",
+              detail: params.get("detail") || "",
+            },
+          });
+          window.history.replaceState({}, "", window.location.pathname);
+        }
+      })();
+    }, []);
+
+    // Poll for inbound ratings when using live API
+    const pollSince = useRef(Date.now() - 60000);
+    useEffect(() => {
+      if (!state.liveData || !state.onboarded) return;
+      const poll = async () => {
+        try {
+          const since = pollSince.current;
+          pollSince.current = Date.now();
+          const [ratings, me, notifs, fr, sparkSync] = await Promise.all([
+            api.ratingsReceived(since),
+            api.me(),
+            api.notifications(since),
+            api.friendRequests().catch(() => null),
+            api.sparkMatches().catch(() => null),
+          ]);
+          ratings.forEach((r) => dispatch({ type: "APPLY_INBOUND", payload: r }));
+          if (me && me.score !== state.user.score) dispatch({ type: "SYNC_USER", user: me });
+          if (notifs?.length) {
+            dispatch({
+              type: "APPEND_NOTIFS",
+              notifs: notifs.map((n) => ({
+                id: n.id,
+                kind: n.kind,
+                rater: n.rater,
+                peer: n.peer,
+                stars: n.stars,
+                delta: n.delta,
+                tag: n.tag,
+                title: n.title,
+                body: n.body,
+                ts: n.ts,
+                appeal: n.appeal,
+              })),
+            });
+          }
+          if (fr) dispatch({ type: "SYNC_FRIEND_REQUESTS", incoming: fr.incoming || [], outgoing: fr.outgoing || [] });
+          if (sparkSync?.matches) dispatch({ type: "SYNC_SPARK", matches: sparkSync.matches });
+        } catch { /* offline */ }
+      };
+      poll();
+      const iv = setInterval(poll, 8000);
+      return () => clearInterval(iv);
+    }, [state.liveData, state.onboarded]);
+
+    // Clock for relative timestamps & boost countdown (slow when idle).
+    useEffect(() => {
+      const fast = (state.boostUntil && state.boostUntil > Date.now())
+        || state.modal === "story"
+        || state.modal === "call";
+      const ms = fast ? 1000 : 45000;
+      setTick(Date.now());
+      const iv = setInterval(() => setTick(Date.now()), ms);
+      return () => clearInterval(iv);
+    }, [state.boostUntil, state.modal]);
+  
+    // Auto-scan when opening Rate tab (if enabled) or Lens tab (live mode)
+    useEffect(() => {
+      if (!state.onboarded) return;
+      const wantScan =
+        (state.proximityAutoScan && state.screen === "lens")
+        || (state.liveData && state.screen === "lens");
+      if (wantScan && !state.proximityScan) dispatch({ type: "START_PROXIMITY" });
+    }, [state.onboarded, state.proximityAutoScan, state.screen, state.liveData, state.proximityScan]);
+
+    // Live geolocation + nearby users (real devices within 1 mi)
+    useEffect(() => {
+      if (!state.liveData || !state.onboarded) return;
+      const scanning = state.proximityScan || state.screen === "lens";
+      if (!scanning) return;
+
+      if (!geoSupported()) {
+        dispatch({ type: "SET_GEO_ERROR", message: "Geolocation is not supported on this device." });
+        return;
+      }
+
+      let pos = null;
+      let pollIv;
+
+      const pushPresence = () => {
+        if (!pos) return;
+        api.updatePresence({
+          lat: state.hideMapLocation ? null : pos.lat,
+          lng: state.hideMapLocation ? null : pos.lng,
+          lensOn: state.lens,
+          hideMapLocation: state.hideMapLocation,
+        }).catch(() => {});
+      };
+
+      const fetchNearby = async () => {
+        try {
+          const data = await api.nearby(1, false);
+          if (data.needLocation) {
+            dispatch({ type: "SET_GEO_ERROR", message: "Getting your location… allow GPS if prompted." });
+            return;
+          }
+          dispatch({ type: "SYNC_NEARBY", nearby: data.nearby || [], geoError: null });
+        } catch (e) {
+          dispatch({ type: "SET_GEO_ERROR", message: e?.message || "Could not scan nearby users." });
+        }
+      };
+
+      const stopWatch = startGeoWatch(
+        (p) => {
+          pos = p;
+          dispatch({ type: "SET_GEO_POS", pos: { lat: p.lat, lng: p.lng } });
+          pushPresence();
+          if (!pollIv) fetchNearby();
+        },
+        (e) => dispatch({ type: "SET_GEO_ERROR", message: e?.message || "Location denied" })
+      );
+
+      fetchNearby();
+      pollIv = setInterval(() => {
+        pushPresence();
+        fetchNearby();
+      }, 4000);
+
+      return () => {
+        stopWatch();
+        clearInterval(pollIv);
+      };
+    }, [state.liveData, state.onboarded, state.proximityScan, state.screen, state.lens, state.hideMapLocation]);
+
+    // Sync Lens on/off to server for real proximity matching
+    useEffect(() => {
+      if (!state.liveData || !state.onboarded) return;
+      api.patchMe({ lensOn: state.lens }).catch(() => {});
+      api.patchSettings({ lens: state.lens }).catch(() => {});
+    }, [state.lens, state.liveData, state.onboarded]);
+
+    // Auto-sync Instagram posts & stories for rating (every 5 min when enabled)
+    useEffect(() => {
+      if (!state.liveData || !state.onboarded) return;
+      if (!state.user.instagram?.verified || !state.user.instagram?.syncFeed) return;
+      const run = () => {
+        api.instagramSync()
+          .then((res) => dispatch({ type: "INSTAGRAM_SYNC", feed: res.feed, stories: res.stories }))
+          .catch(() => {});
+      };
+      run();
+      const iv = setInterval(run, 5 * 60 * 1000);
+      return () => clearInterval(iv);
+    }, [state.liveData, state.onboarded, state.user.instagram?.verified, state.user.instagram?.syncFeed]);
+
+    // Alert when rateable users enter range
+    const proxAlerted = useRef(new Set());
+    useEffect(() => {
+      if (!state.onboarded || !state.proximityAlerts) return;
+      if (!state.proximityScan && state.screen !== "lens") return;
+      rateableNearby(state).forEach((c) => {
+        if (!proxAlerted.current.has(c.id)) {
+          proxAlerted.current.add(c.id);
+          dispatch({ type: "PROXIMITY_NEARBY", id: c.id });
+        }
+      });
+      proxAlerted.current.forEach((id) => {
+        const c = contactRegistry[id] || state.nearbyUsers?.find((u) => u.id === id);
+        if (!c || !canRateProximity(state, c)) proxAlerted.current.delete(id);
+      });
+    }, [state.onboarded, state.proximityAlerts, state.proximityScan, state.screen, state.contactMiles, state.lens, state.strangerRatings, state.friends, state.nearbyUsers, state.proximityCooldowns]);
+
+    // Sound + toast when a new rating notification lands.
+    const lastNo = useRef(null);
+    const ratingSoundsPlayed = useRef(new Set());
+    const notifsBootstrapped = useRef(false);
+    const [ratingToast, setRatingToast] = useState(null);
+    const toastTimer = useRef(null);
+
+    useEffect(() => { sfx.enabled = state.sound; }, [state.sound]);
+
+    useEffect(() => {
+      if (!state.onboarded || !state.liveData) return;
+      if (!notifsBootstrapped.current) {
+        notifsBootstrapped.current = true;
+        lastNo.current = state.notifs[0]?.id ?? null;
+        state.notifs.forEach((n) => ratingSoundsPlayed.current.add(n.id));
+        return;
+      }
+      const n = state.notifs[0];
+      if (!n || n.id === lastNo.current) return;
+      lastNo.current = n.id;
+
+      const isIgWelcome = /instagram/i.test(n.title || "") || /instagram/i.test(n.body || "");
+      if (isIgWelcome) return;
+
+      if (n.kind === "rating" || n.kind === "penalty") {
+        if (!ratingSoundsPlayed.current.has(n.id)) {
+          ratingSoundsPlayed.current.add(n.id);
+          playRatingAlertSound(n);
+        }
+        if (state.ratingNotifs !== false) {
+          setRatingToast(n);
+          if (toastTimer.current) clearTimeout(toastTimer.current);
+          toastTimer.current = setTimeout(() => setRatingToast(null), 6000);
+        }
+        return;
+      }
+      if (n.kind === "boost") sfx.boost();
+      else if (n.kind === "friend_request") sfx.notify();
+      else if (n.kind === "spark_match" || n.kind === "spark_super") sfx.success();
+    }, [state.notifs, state.onboarded, state.liveData, state.ratingNotifs]);
+
+    useEffect(() => () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    }, []);
+  
+    const screens = {
+      feed: <FeedScreen />, spark: <SparkScreen />, lens: <LensRateScreen />, explore: <ExploreScreen />,
+      messages: <MessagesScreen />, friends: <FriendsScreen />, parties: <PartiesScreen />, perks: <PerksScreen />,
+      alerts: <AlertsScreen />, profile: <ProfileScreen />, settings: <SettingsScreen />,
+    };
+  
+    const modals = {
+      rate: RatingModal, chat: ChatModal, deletechat: DeleteChatModal, call: CallModal, userprofile: UserProfileModal, lock: FeatureLockModal,
+      perkok: PerkOkModal, friendwarn: FriendWarnModal, removefriend: RemoveFriendModal, mediapick: MediaPickModal, createcontent: CreateContentModal, compose: ComposeRedirectModal, mentionsviewer: MentionsViewerModal,
+      story: StoryViewerModal, sharepost: SharePostModal, sparkmatch: SparkMatchModal,
+      rsvp: RsvpModal, instagram: InstagramModal, legal: LegalDocModal, cookies: CookiePrefsModal,
+      postcomments: PostCommentsModal, postviewer: PostViewerModal, createparty: CreatePartyModal, party: PartyDetailModal, guide: EchelonGuideModal,
+      addaccount: AddAccountModal, igfeatures: IgFeaturesModal,
+      profileedit: ProfileEditModal, collections: CollectionsModal, insights: InsightsModal,
+      creatordash: CreatorDashboardModal, broadcast: BroadcastChannelModal, privacytools: PrivacyToolsModal,
+      explore: ExploreModal, closefriends: CloseFriendsModal, postoptions: PostOptionsModal, aboutaccount: AboutAccountModal, algorithm: AlgorithmDashboardModal,
+      whypost: WhyPostModal, reportpost: ReportPostModal, albumeditor: AlbumEditorModal, albumviewer: AlbumViewerModal,
+    };
+    const ModalComp = state.modal ? modals[state.modal.type] : null;
+    const storeValue = useMemo(
+      () => ({ state, dispatch, t: (key, vars) => translate(state.lang || "en", key, vars) }),
+      [state, dispatch],
+    );
+  
+    return (
+      <Store.Provider value={storeValue}>
+        <TickCtx.Provider value={tick}>
+        <InstallHelpCtx.Provider value={installHelpApi}>
+        <Styles />
+        <div className="stage">
+          <div className={"phone" + (getTier(state.user.score).key === "low" ? " grim" : "") + (state.reduceMotion ? " calm" : "")}>
+            {!state.sessionReady ? (
+              <div className="onb" style={{ background: grad(["#FFF4F8", "#EEF4FF"], 160), display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100%" }}>
+                <Loader size={36} className="spin" color="#C9A0DC" />
+              </div>
+            ) : !state.onboarded ? (
+              <Onboarding />
+            ) : (
+              <>
+                {!["feed", "alerts", "spark", "lens", "explore", "messages", "profile", "friends", "settings"].includes(state.screen) && <StatusBar />}
+                <div className={"appbody" + (["feed", "alerts", "spark", "lens", "explore", "messages", "profile", "friends", "settings"].includes(state.screen) ? " appbody--ig" : "")}>
+                  {state.lens && state.screen !== "lens" && <LensFilm />}
+                  <div className="screen-stack">{screens[state.screen]}</div>
+                </div>
+                {(!state.modal || state.modal?.type === "userprofile") && <AppIgTabBar />}
+              </>
+            )}
+            {ModalComp && <ModalComp payload={state.modal.payload} />}
+            <CookieBanner />
+            <InstallCoachOverlay open={installCoachOpen} kind={installCoachKind} onClose={() => setInstallCoachOpen(false)} />
+            <InstallBanner />
+            <AppToast />
+            <ShareSuccessOverlay />
+            <RatingToast
+              toast={ratingToast}
+              onDismiss={() => { setRatingToast(null); if (toastTimer.current) clearTimeout(toastTimer.current); }}
+              onOpen={() => { sfx.tap(); setRatingToast(null); dispatch({ type: "SCREEN", screen: "alerts" }); }}
+            />
+          </div>
+          <p className="stage-note">Reputation as currency, by design.</p>
+        </div>
+        </InstallHelpCtx.Provider>
+        </TickCtx.Provider>
+      </Store.Provider>
+    );
+  }
+  
+  // Faint AR scanline + tint while Lens Overlay is on.
+  const LensFilm = () => (
+    <div className="lensfilm" aria-hidden>
+      <div className="lensscan" />
+    </div>
+  );
+  
+  /* ============================================================================
+     10. STYLES: the sweet, soft, slightly-wrong design system
+  ============================================================================ */
+  
+  function Styles() {
+    return (
+      <style>{`
+  :root{
+    --font-sans:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",Roboto,system-ui,sans-serif;
+    --font-display:"Plus Jakarta Sans",-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI Variable Display",system-ui,sans-serif;
+    --text-primary:#121212;
+    --text-secondary:#737373;
+    --text-tertiary:#a8a8a8;
+    --text-muted:#8e8e8e;
+    --border-subtle:#efefef;
+    --surface:#ffffff;
+    --surface-muted:#fafafa;
+  }
+
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{
+    -webkit-text-size-adjust:100%;text-size-adjust:100%;
+    -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+    text-rendering:optimizeLegibility;font-synthesis:none;
+  }
+  .stage{min-height:100dvh;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    font-family:var(--font-sans);color:var(--text-primary);font-size:15px;line-height:1.5;letter-spacing:-.018em;font-weight:500;
+    font-feature-settings:"kern" 1,"liga" 1,"calt" 1,"ss01" 1;font-variant-ligatures:common-ligatures;
+    background:
+      radial-gradient(1200px 500px at 20% -5%, #FFE3EE 0%, transparent 55%),
+      radial-gradient(1000px 500px at 100% 0%, #E4ECFF 0%, transparent 55%),
+      radial-gradient(900px 700px at 50% 110%, #FFF0DD 0%, transparent 55%),
+      linear-gradient(160deg,#FCF6FA,#F3F6FF);
+    padding:18px 0;}
+  .stage-note{font-size:12px;font-weight:500;color:var(--text-muted);max-width:360px;text-align:center;padding:0 20px;line-height:1.5;letter-spacing:-.01em}
+  
+  html,body,#root{margin:0;padding:0;width:100%;min-height:100%;height:100%;overscroll-behavior:none}
+  .phone{width:100%;max-width:100%;height:min(820px,90dvh);min-height:min(820px,90dvh);background:#FFFDFE;border-radius:0;overflow:hidden;
+    position:relative;display:flex;flex-direction:column;
+    font-family:var(--font-sans);font-size:15px;line-height:1.5;letter-spacing:-.018em;font-weight:500;
+    font-feature-settings:"kern" 1,"liga" 1,"calt" 1,"ss01" 1;font-variant-ligatures:common-ligatures;
+    -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;
+    box-shadow:0 40px 90px rgba(120,80,110,.30), 0 0 0 9px #fff, 0 0 0 11px #efe6ee;}
+  .phone.grim{filter:saturate(.62) brightness(.99);transition:filter 1.2s}
+
+  /* status bar fits inside phone frame (392px) even on wide desktop viewports */
+  .phone .statusbar{height:48px;padding:0 10px;gap:5px}
+  .phone .statusbar-wordmark{display:none}
+  .phone .statusbar-install span{display:none}
+  .phone .statusbar-install{padding:6px 8px}
+  .phone .langtabs-compact .langtab{width:23px;height:20px;font-size:8px}
+  .phone .mini-score{font-size:11px;padding:4px 8px}
+  .phone .lensbtn{width:30px;height:30px;border-radius:10px}
+  
+  .appbody{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;position:relative;background:#fff;font-family:var(--font-sans);font-size:15px;line-height:1.5;letter-spacing:-.018em;font-weight:500;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+  .screen-stack{position:relative;z-index:2;flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  .screen-stack > *{flex:1;min-height:0;display:flex;flex-direction:column;width:100%;overflow:hidden}
+  button,input,textarea,select{font-family:inherit;font-feature-settings:inherit;letter-spacing:inherit;font-size:inherit}
+  .muted{color:var(--text-secondary);font-weight:500;letter-spacing:-.012em}
+  .scroll{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px 16px 0;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;scrollbar-width:none;-ms-overflow-style:none}
+  .scroll::-webkit-scrollbar{display:none;width:0;height:0}
+  .scroll-pad{height:96px;flex-shrink:0}
+  .dm-thread,.dm-emoji-panel,.dm-sticker-grid,.ig-comments-scroll,.ig-features-scroll,.spark-filters-scroll,.story-gallery-grid,.album-editor-grid,.album-viewer-grid,.story-editor-rail,.story-editor-panel,.post-viewer-comments-scroll,.compose-stickers--grid,.mentions-viewer-grid,.ech-album-shelf,.ech-share-sheet,.sheet,.broadcast-feed,.explore-grid,.compose-tag-results,.compose-mention-drop,.post-comments-body,.party-guest-rows{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch}
+  .dm-thread::-webkit-scrollbar,.dm-emoji-panel::-webkit-scrollbar,.dm-sticker-grid::-webkit-scrollbar,.ig-comments-scroll::-webkit-scrollbar,.ig-features-scroll::-webkit-scrollbar,.spark-filters-scroll::-webkit-scrollbar,.story-gallery-grid::-webkit-scrollbar,.album-editor-grid::-webkit-scrollbar,.album-viewer-grid::-webkit-scrollbar,.story-editor-rail::-webkit-scrollbar,.story-editor-panel::-webkit-scrollbar,.post-viewer-comments-scroll::-webkit-scrollbar,.compose-stickers--grid::-webkit-scrollbar,.mentions-viewer-grid::-webkit-scrollbar,.ech-album-shelf::-webkit-scrollbar,.ech-share-sheet::-webkit-scrollbar,.sheet::-webkit-scrollbar,.broadcast-feed::-webkit-scrollbar,.explore-grid::-webkit-scrollbar,.compose-tag-results::-webkit-scrollbar,.compose-mention-drop::-webkit-scrollbar,.post-comments-body::-webkit-scrollbar,.party-guest-rows::-webkit-scrollbar{display:none;width:0;height:0}
+  .feed-scroll{background:#fff}
+  
+  /* feed masthead */
+  .feed-masthead{position:relative;border-radius:26px;padding:16px 14px 14px;margin-bottom:14px;overflow:hidden;border:1px solid rgba(255,255,255,.9);box-shadow:0 12px 36px rgba(150,110,150,.12)}
+  .feed-masthead-glow{position:absolute;inset:0;opacity:.55;pointer-events:none}
+  .feed-masthead-row{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;z-index:1}
+  .feed-brand{font-family:var(--font-display);font-weight:700;font-size:27px;margin:0;letter-spacing:-.045em;
+    background:linear-gradient(120deg,#FF7EB3,#B79CF0,#6BB5F0);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .feed-masthead-tag{font-size:12px;font-weight:500;color:var(--text-secondary);margin:4px 0 0;line-height:1.4;max-width:220px;letter-spacing:-.01em}
+  .feed-masthead-badge{flex-shrink:0;padding:4px;background:rgba(255,255,255,.75);border-radius:50%;box-shadow:0 8px 20px rgba(183,156,240,.25)}
+  .feed-masthead-greet{position:relative;display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.65);z-index:1}
+  .feed-masthead-greet b{font-size:14px;font-weight:600;color:var(--text-primary);letter-spacing:-.02em}
+  .feed-masthead-greet p{font-size:12px;font-weight:400;color:var(--text-secondary);letter-spacing:-.01em;margin:2px 0 0;line-height:1.45}
+  .feed-live-pill{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;letter-spacing:-.01em;color:#2D8A62;background:rgba(231,246,239,.95);padding:5px 10px;border-radius:999px;white-space:nowrap;border:1px solid rgba(95,214,160,.25)}
+  /* friend requests banner */
+  .friend-requests-banner{margin-bottom:14px;padding:12px 14px;border-radius:20px;background:linear-gradient(135deg,#FFF4F8,#EFE9FF);border:1.5px solid #E8DFF5;box-shadow:0 8px 24px rgba(183,156,240,.12)}
+  .friend-requests-banner-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:13px;font-weight:800;color:#6B5080}
+  .friend-requests-count{margin-left:auto;min-width:22px;height:22px;padding:0 7px;border-radius:999px;background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff;font-size:11px;font-weight:800;display:grid;place-items:center}
+  .friend-request-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid rgba(255,255,255,.7)}
+  .friend-request-row:first-of-type{border-top:none;padding-top:0}
+
+  /* install banner */
+  .install-banner{position:absolute;left:12px;right:12px;bottom:calc(62px + 10px);z-index:8;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:18px;background:rgba(255,255,255,.97);backdrop-filter:blur(14px);border:1px solid #F0E6F0;box-shadow:0 12px 32px rgba(140,100,130,.2);animation:slideUp .35s ease}
+  .install-banner-icon{border-radius:10px;flex-shrink:0;box-shadow:0 4px 12px rgba(183,156,240,.25)}
+  .install-banner-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;font-size:11px;color:#9B8FA8;line-height:1.35}
+  .install-banner-text b{font-size:12.5px;color:#5A4A60}
+  .install-banner-btn{flex-shrink:0;border:none;border-radius:999px;padding:8px 14px;font-family:var(--font-sans);font-size:11px;font-weight:800;color:#fff;background:linear-gradient(120deg,#FF9DC0,#C6A0F0);cursor:pointer;white-space:nowrap}
+  .install-banner-x{width:28px;height:28px;border:none;border-radius:50%;background:#F3ECF6;color:#9B8FA8;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  @keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+  /* rating toast alert */
+  .rating-toast{position:absolute;top:calc(54px + 8px);left:12px;right:12px;z-index:20;display:flex;align-items:stretch;gap:0;border-radius:18px;overflow:hidden;box-shadow:0 14px 40px rgba(120,80,110,.22);animation:ratingToastIn .4s cubic-bezier(.2,1,.3,1);border:1.5px solid rgba(255,255,255,.9)}
+  .rating-toast.up{background:linear-gradient(135deg,#FFF4F8 0%,#EFE9FF 100%)}
+  .rating-toast.down{background:linear-gradient(135deg,#FFF1F1 0%,#F5E8E8 100%)}
+  .rating-toast-main{flex:1;display:flex;align-items:center;gap:12px;padding:12px 14px;border:none;background:transparent;cursor:pointer;text-align:left;font:inherit;color:inherit;min-width:0}
+  .rating-toast-main:active{opacity:.9}
+  .rating-toast-ic{width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.7);display:grid;place-items:center;color:#B79CF0;flex-shrink:0}
+  .rating-toast.down .rating-toast-ic{color:#B07E7E}
+  .rating-toast-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .rating-toast-body b{font-size:13px;color:#5A4A60;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rating-toast-body span{font-size:12px;color:#9B8FA8;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .rating-toast-delta{font-weight:800;font-size:12px;padding:2px 7px;border-radius:999px}
+  .rating-toast-delta.pos{color:#4FA98C;background:rgba(79,169,140,.12)}
+  .rating-toast-delta.neg{color:#B07E7E;background:rgba(176,126,126,.12)}
+  .rating-toast-x{width:44px;border:none;background:rgba(255,255,255,.35);color:#9B8FA8;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  @keyframes ratingToastIn{from{opacity:0;transform:translateY(-16px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+  /* feed stories */
+  .feed-story-thumb{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}
+  .feed-top-bar{display:flex;justify-content:flex-end;padding:0 4px 8px;margin-top:-4px}
+  .feed-my-profile-btn{display:inline-flex;align-items:center;gap:6px;border:none;border-radius:999px;padding:8px 14px;background:linear-gradient(135deg,#FFF4F8,#EFE9FF);color:#6B5080;font-family:var(--font-sans);font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 4px 14px rgba(140,100,160,.12)}
+  .feed-my-profile-btn:active{transform:scale(.97)}
+  .install-coach-share-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:14px;padding:14px 18px}
+  .install-coach-card--action .install-coach-foot{margin-top:12px;font-size:12px;color:#8C6BD8}
+  .feed-post-media-wrap{position:relative;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:pan-y;-webkit-user-select:none;user-select:none}
+  .feed-post-media-wrap .post-media,.feed-post-media-wrap video{pointer-events:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  .feed-post-media-wrap .media-overlay{pointer-events:none!important}
+  .feed-post-media-wrap .media-overlay--tag{pointer-events:auto!important;z-index:9;cursor:pointer;touch-action:manipulation}
+  .feed-rating-overlay{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#000;touch-action:none;pointer-events:none;transition:opacity .18s ease}
+  .feed-rating-overlay.commit{background:#000}
+  .feed-drag-stars{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#000;touch-action:none;pointer-events:none}
+  .feed-drag-stars-row{display:flex;align-items:center;justify-content:center;gap:12px;padding:0 8px}
+  .feed-drag-stars-row svg{transition:transform .14s ease,color .14s ease,fill .14s ease}
+  .feed-drag-stars-row .lit{filter:drop-shadow(0 0 14px rgba(255,213,107,.7));transform:scale(1.08)}
+  .feed-drag-stars-label{font-size:15px;font-weight:800;color:#fff;letter-spacing:.04em;text-shadow:0 2px 8px rgba(0,0,0,.4)}
+  .appbody--ig{padding-bottom:58px}
+  .feed-scroll--ig{padding-bottom:58px;background:#fff}
+  .feed-scroll--ig .scroll-pad{height:72px}
+  .feed-ig-tabbar{position:fixed;left:50%;transform:translateX(-50%);bottom:0;width:min(100%,430px);display:flex;align-items:center;justify-content:space-around;padding:6px 2px max(8px,env(safe-area-inset-bottom));background:#fff;border-top:1px solid #DBDBDB;z-index:40}
+  .feed-ig-tab{width:44px;height:40px;border:none;background:transparent;display:grid;place-items:center;cursor:pointer;color:#262626}
+  .feed-ig-tab.on{color:#000}
+  .feed-ig-tab--spark.on{color:#FF4458}
+  .feed-ig-topbar-right{display:flex;align-items:center;gap:4px}
+  .ig-top-chrome{display:flex;align-items:center;gap:6px}
+  .ig-top-chrome--compact{gap:4px}
+  .ig-top-score{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:-.02em}
+  .ig-top-lens{width:30px;height:30px;border:none;border-radius:999px;background:#EFEFEF;color:#262626;display:grid;place-items:center;cursor:pointer}
+  .ig-top-lens.on{background:#0095F6;color:#fff}
+  .feed-ig-tab-avatar{display:block;border-radius:50%;overflow:hidden}
+  .feed-test-badge{position:absolute;top:10px;left:10px;z-index:4;font-size:10px;font-weight:800;padding:4px 8px;border-radius:6px;background:rgba(0,149,246,.92);color:#fff}
+  .ig-notif-screen{display:flex;flex-direction:column;height:100%;background:#fff}
+  .ig-notif-head{display:flex;align-items:center;padding:8px 12px;gap:8px}
+  .ig-notif-back{border:none;background:transparent;padding:6px;cursor:pointer;color:#262626}
+  .ig-notif-user{flex:1;display:inline-flex;align-items:center;justify-content:center;gap:4px;border:none;background:transparent;font-size:16px;font-weight:800;color:#262626;cursor:pointer}
+  .ig-notif-head-spacer{width:40px}
+  .ig-notif-filters{display:flex;gap:8px;padding:8px 12px 10px;overflow-x:auto}
+  .ig-notif-chip{border:none;border-radius:8px;padding:8px 14px;background:#EFEFEF;color:#262626;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+  .ig-notif-chip.on{background:#0095F6;color:#fff}
+  .ig-notif-scroll{flex:1;min-height:0;padding-bottom:58px}
+  .ig-notif-scroll .ig-notif-empty-wrap{min-height:100%}
+  .ig-notif-empty-wrap{display:flex;align-items:center;justify-content:center;min-height:min(50vh,320px);padding:32px 20px}
+  .ig-notif-empty{text-align:center;color:#8E8E8E;font-size:15px;font-weight:600;margin:0}
+  .ig-notif-avatar-btn,.ig-notif-name-link{border:none;background:transparent;padding:0;cursor:pointer;color:inherit;font:inherit;text-align:left}
+  .ig-notif-name-link b{color:#262626}
+  .ig-notif-stars{color:#FFB830;letter-spacing:1px}
+  .ig-notif-name-link:hover b{text-decoration:underline}
+  .ig-comments-send{border:none;background:#0095F6;color:#fff;font-size:14px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;flex-shrink:0}
+  .ig-comments-send:disabled{opacity:.45;cursor:default}
+  .ig-comments-input-row{align-items:center}
+  .ig-notif-group h3{font-size:15px;font-weight:800;padding:12px 16px 6px;margin:0;color:#262626}
+  .ig-notif-list{list-style:none;margin:0;padding:0}
+  .ig-notif-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px}
+  .ig-notif-row-left{display:flex;gap:12px;align-items:flex-start;flex:1;min-width:0}
+  .ig-notif-row-text p{margin:0;font-size:14px;line-height:1.4;color:#262626}
+  .ig-notif-row-text b{font-weight:700}
+  .ig-notif-age{color:#8E8E8E;font-weight:400}
+  .ig-notif-thumb{width:44px;height:56px;object-fit:cover;border-radius:4px;flex-shrink:0}
+  .ig-notif-follow{border:1px solid #DBDBDB;border-radius:8px;padding:6px 14px;background:#fff;font-weight:700;font-size:13px;cursor:pointer}
+  .ig-notif-follow.on{background:#EFEFEF}
+  .ig-notif-row-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .ig-notif-btn{border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer}
+  .ig-notif-btn--primary{background:#0095F6;color:#fff}
+  .ig-notif-btn--primary:active{opacity:.9}
+  .ig-notif-btn--muted{background:#EFEFEF;color:#8E8E8E;cursor:default}
+  .compose-camera-settings{position:absolute;top:max(58px,env(safe-area-inset-top));right:16px;z-index:5;background:rgba(0,0,0,.65);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:6px}
+  .compose-camera-settings button{border:none;border-radius:8px;padding:8px 12px;background:rgba(255,255,255,.15);color:#fff;font-weight:700;cursor:pointer}
+  .compose-camera-settings button.on{background:#fff;color:#111}
+  .compose-camera-settings-hint{font-size:10px;color:rgba(255,255,255,.75);max-width:140px;line-height:1.35}
+  .compose-camera-countdown{position:absolute;inset:0;z-index:5;display:grid;place-items:center;font-size:88px;font-weight:800;color:#fff;text-shadow:0 4px 24px rgba(0,0,0,.5)}
+  .compose-camera-layout-hint{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:5;padding:8px 14px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-weight:800}
+  .compose-camera-tool.on{opacity:1;transform:scale(1.05);background:rgba(255,255,255,.22);border-radius:12px;box-shadow:0 0 0 2px rgba(255,255,255,.85)}
+  .compose-layout-preview{display:grid;gap:2px;padding:2px;box-sizing:border-box}
+  .compose-layout-preview em{display:block;background:rgba(255,255,255,.85);border-radius:1px}
+  .compose-layout-overlay{position:absolute;inset:0;z-index:3;display:grid;gap:3px;padding:10px;pointer-events:none}
+  .compose-layout-cell{border:2px solid rgba(255,255,255,.55);border-radius:4px;background:rgba(0,0,0,.15)}
+  .compose-layout-cell.filled{background:rgba(255,255,255,.18);border-color:#fff}
+  .compose-layout-cell.active{border-color:#FFD56B;box-shadow:0 0 0 2px rgba(255,213,107,.55);background:rgba(255,213,107,.12)}
+  .compose-layout-picker button{display:grid;place-items:center;padding:6px}
+  .story-editor-bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(28px) brightness(.45);transform:scale(1.08)}
+  .story-editor-media--contain{object-fit:contain!important;position:relative;z-index:2}
+  .story-editor-draw{position:absolute;inset:0;z-index:4;pointer-events:none}
+  .story-editor-draw-canvas{position:absolute;inset:0;z-index:5;touch-action:none;cursor:crosshair}
+  .story-editor-pill.on{outline:2px solid #fff}
+  .feed-scroll--ig .feed-list{gap:0}
+  .feed-scroll--ig .feed-post--ig{border-radius:0;border:none;border-bottom:1px solid #EFEFEF;box-shadow:none;animation:none}
+  .feed-scroll--ig .feed-post-head--ig{padding:10px 12px}
+  .feed-scroll--ig .feed-post-music-line{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);margin-top:2px}
+  .feed-ig-topbar{display:flex;align-items:center;justify-content:space-between;padding:4px 8px 10px;margin:0 -4px}
+  .feed-ig-topbtn{width:44px;height:44px;border:none;background:transparent;display:grid;place-items:center;cursor:pointer;color:#262626;position:relative}
+  .feed-ig-foryou{display:inline-flex;align-items:center;gap:4px;border:none;background:transparent;font-family:var(--font-sans);font-size:18px;font-weight:800;color:#262626;cursor:pointer;letter-spacing:-.02em}
+  .feed-ig-notif-dot{position:absolute;top:10px;right:10px;width:8px;height:8px;border-radius:50%;background:#FF3B7A;font-style:normal}
+  .feed-tabs--sub{margin-top:0}
+  .ig-sheet-backdrop{position:fixed;inset:0;z-index:99980;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;animation:fade .2s}
+  .ig-sheet-grab{width:36px;height:4px;border-radius:999px;background:#DBDBDB;margin:8px auto 4px}
+  .ig-comments-sheet{width:100%;max-height:min(82vh,720px);background:#fff;border-radius:18px 18px 0 0;display:flex;flex-direction:column;animation:slideUp .28s ease;padding-bottom:env(safe-area-inset-bottom)}
+  .ig-comments-head{display:flex;align-items:center;justify-content:center;padding:8px 48px 6px;position:relative}
+  .ig-comments-head h2{margin:0;font-size:15px;font-weight:800;color:#262626}
+  .ig-comments-share{position:absolute;right:14px;top:8px;border:none;background:transparent;padding:8px;cursor:pointer;color:#262626}
+  .ig-comments-sort-wrap{position:relative;margin:0 0 8px 16px;align-self:flex-start}
+  .ig-comments-sort{display:inline-flex;align-items:center;gap:4px;border:none;background:transparent;font-size:13px;font-weight:700;color:#262626;cursor:pointer;padding:0}
+  .ig-comments-sort svg.open{transform:rotate(180deg)}
+  .ig-comments-sort-menu{position:absolute;top:calc(100% + 4px);left:0;min-width:140px;background:#fff;border:1px solid #EFEFEF;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:4;overflow:hidden}
+  .ig-comments-sort-menu button{display:block;width:100%;text-align:left;border:none;background:#fff;padding:10px 14px;font-size:13px;font-weight:600;color:#262626;cursor:pointer}
+  .ig-comments-sort-menu button.on{background:#F5F5F5;font-weight:800}
+  .ig-comments-sort-menu button:active{background:#EFEFEF}
+  .ig-comments-scroll{flex:1;overflow-y:auto;padding:0 16px 12px;min-height:120px}
+  .ig-comments-empty{text-align:center;color:#8E8E8E;font-size:14px;padding:24px 0}
+  .ig-comments-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:16px}
+  .ig-comment-row{display:flex;gap:12px;align-items:flex-start}
+  .ig-comment-body{flex:1;min-width:0}
+  .ig-comment-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 4px}
+  .ig-comment-meta b{font-size:13px;font-weight:700;color:#262626}
+  .ig-comment-meta span{font-size:12px;color:#8E8E8E}
+  .ig-comment-author-tag{font-style:normal;font-size:11px;color:#8E8E8E}
+  .ig-comment-text{margin:0;font-size:14px;line-height:1.4;color:#262626}
+  .ig-comment-reply-btn{border:none;background:transparent;padding:0;margin-top:4px;font-size:12px;font-weight:600;color:#8E8E8E;cursor:pointer}
+  .ig-comment-like-col{display:flex;flex-direction:column;align-items:center;gap:2px;flex-shrink:0;margin-top:2px}
+  .ig-comment-like{border:none;background:transparent;padding:4px;color:#262626;cursor:pointer}
+  .ig-comment-like.on{color:#ED4956}
+  .ig-comment-like-count{font-size:11px;color:#8E8E8E;font-weight:600;min-height:14px}
+  .ig-comment-author-liked{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:#8E8E8E;font-style:normal;font-weight:400}
+  .ig-comment-author-liked svg{color:#ED4956;fill:#ED4956}
+  .ig-comments-foot{border-top:1px solid #EFEFEF;padding:8px 12px 12px}
+  .ig-comments-emoji-row{display:flex;gap:4px;overflow-x:auto;padding-bottom:8px;-webkit-overflow-scrolling:touch}
+  .ig-comments-emoji{border:none;background:transparent;font-size:22px;padding:4px 6px;cursor:pointer}
+  .ig-comments-input-row{display:flex;align-items:center;gap:10px}
+  .ig-comments-input-row input{flex:1;border:none;background:#EFEFEF;border-radius:999px;padding:12px 16px;font-size:14px;outline:none}
+  .ig-comments-sticker{border:none;background:transparent;padding:4px;color:#262626;cursor:pointer}
+  .ech-share-backdrop{align-items:flex-end}
+  .ech-share-sheet{width:100%;max-height:min(86vh,720px);background:#fff;border-radius:20px 20px 0 0;padding:0 max(14px,env(safe-area-inset-left)) max(18px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right));animation:slideUp .28s ease;font-family:var(--font-sans);overflow-y:auto}
+  .ech-share-head{display:flex;align-items:center;justify-content:space-between;padding:4px 0 12px}
+  .ech-share-head h3{margin:0;font-size:17px;font-weight:800;color:#1A1520;font-family:var(--font-display);letter-spacing:-.03em}
+  .ech-share-close{width:36px;height:36px;border:none;border-radius:12px;background:#F7F3FB;color:#6B5080;display:grid;place-items:center;cursor:pointer}
+  .ech-share-preview{display:flex;align-items:center;gap:12px;padding:12px;margin-bottom:12px;border-radius:16px;background:#F7F3FB;border:1px solid #ECE8EF}
+  .ech-share-preview-media{width:52px;height:52px;border-radius:12px;overflow:hidden;flex-shrink:0;background:#1a1228}
+  .ech-share-preview-media img,.ech-share-preview-media video{width:100%;height:100%;object-fit:cover;display:block}
+  .ech-share-preview-fallback{display:grid;place-items:center;width:100%;height:100%;font-size:24px}
+  .ech-share-preview-meta{min-width:0}
+  .ech-share-preview-meta b{display:block;font-size:13px;font-weight:800;color:#1A1520;margin-bottom:2px}
+  .ech-share-preview-meta p{margin:0;font-size:11.5px;line-height:1.4;color:#6B5080;font-weight:600}
+  .ech-share-search-row{display:flex;align-items:center;gap:10px;padding:0 0 12px}
+  .ech-share-search{flex:1;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E4DEE8;border-radius:14px;padding:10px 12px}
+  .ech-share-search input{flex:1;border:none;background:transparent;font-size:14px;font-weight:600;outline:none;color:#1A1520;font-family:var(--font-sans)}
+  .ech-share-search input::placeholder{color:#9B8FA8}
+  .ech-share-add-person{width:42px;height:42px;border-radius:14px;border:1px solid #E4DEE8;background:#fff;display:grid;place-items:center;cursor:pointer;color:#6B5080;flex-shrink:0}
+  .ech-share-contacts{display:flex;gap:14px;overflow-x:auto;padding:2px 0 14px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .ech-share-contacts::-webkit-scrollbar{display:none}
+  .ech-share-contact{display:flex;flex-direction:column;align-items:center;gap:6px;border:none;background:transparent;cursor:pointer;flex:0 0 68px;font-size:11px;color:#5A4A60;font-weight:700;font-family:var(--font-sans)}
+  .ech-share-empty{font-size:13px;color:#9B8FA8;text-align:center;padding:16px;width:100%;font-weight:600}
+  .ech-share-section-label{margin:0 0 10px;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4}
+  .ech-share-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 8px;padding-bottom:4px}
+  .ech-share-action{display:flex;flex-direction:column;align-items:center;gap:7px;border:none;background:transparent;cursor:pointer;padding:0;font-family:var(--font-sans)}
+  .ech-share-action span{font-size:10px;font-weight:700;color:#5A4A60;text-align:center;line-height:1.25;max-width:76px}
+  .ech-share-icon{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;overflow:hidden;box-shadow:0 4px 14px rgba(90,74,96,.12)}
+  .ech-share-icon img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block}
+  .ech-share-icon svg{display:block}
+  .ech-share-icon--story{border:2px dashed #C8BED8;background:#fff;color:#8C6BD8}
+  .ech-share-icon--neutral{background:#F7F3FB;border:1px solid #E4DEE8;color:#6B5080}
+  .ech-share-toast{text-align:center;font-size:12px;font-weight:700;color:#4FA98C;margin-top:10px;padding:8px 12px;border-radius:12px;background:rgba(79,169,140,.1)}
+  .compose-camera-portal{position:fixed;inset:0;z-index:99990;background:#000;height:100dvh;overflow:hidden}
+  .compose-camera-portal .compose-camera--fullscreen{height:100dvh;max-height:100dvh}
+  .compose-camera-aa{font-size:17px;font-weight:800;font-family:var(--font-sans);letter-spacing:-.02em}
+  .compose-camera-handsfree .compose-handsfree-box{width:28px;height:28px;border:2px solid #fff;border-radius:6px;display:grid;place-items:center}
+  .compose-camera-stage{position:absolute;inset:0;z-index:3;pointer-events:none}
+  .compose-camera-stage .compose-camera-text-preview,.compose-camera-stage .compose-layout-overlay,.compose-camera-stage .compose-camera-countdown{pointer-events:auto}
+  .compose-camera-text-input{position:absolute;left:16px;right:16px;top:42%;z-index:5;border:none;background:transparent;color:#fff;font-size:28px;font-weight:700;text-align:center;outline:none;font-family:var(--font-sans)}
+  .compose-camera-text-preview{position:absolute;z-index:9;max-width:88%;color:#fff;font-size:26px;font-weight:800;text-align:center;text-shadow:0 2px 12px rgba(0,0,0,.55);cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;padding:8px 12px;font-family:var(--font-sans)}
+  .compose-camera-text-preview:active{cursor:grabbing}
+  .compose-layout-picker{position:absolute;bottom:150px;left:50%;transform:translateX(-50%);z-index:12;display:flex;gap:10px;background:rgba(0,0,0,.55);padding:8px 12px;border-radius:999px;pointer-events:auto}
+  .compose-layout-picker button{border:none;background:rgba(255,255,255,.12);color:#fff;width:42px;height:42px;border-radius:12px;cursor:pointer;pointer-events:auto}
+  .compose-layout-picker button.on{background:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.9)}
+  .compose-layout-picker button.on .compose-layout-preview em{background:#111}
+  .story-gallery{position:fixed;inset:0;z-index:99990;background:#000;color:#fff;display:flex;flex-direction:column;font-family:var(--font-sans);overflow:hidden}
+  .story-gallery-head{display:flex;align-items:center;justify-content:space-between;padding:max(10px,env(safe-area-inset-top)) 14px 10px}
+  .story-gallery-head h1{margin:0;font-size:17px;font-weight:800;font-family:var(--font-display);letter-spacing:-.03em}
+  .story-gallery-x,.story-gallery-settings{border:none;background:transparent;color:#fff;padding:8px;cursor:pointer}
+  .story-gallery-features{display:flex;gap:10px;padding:10px 14px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .story-gallery-features::-webkit-scrollbar{display:none}
+  .story-gallery-feature{flex:0 0 112px;background:linear-gradient(145deg,#1a1a1a,#262626);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:16px 10px;color:#fff;cursor:pointer;transition:transform .15s,background .15s}
+  .story-gallery-feature:active{transform:scale(.96)}
+  .story-gallery-feature:hover{background:linear-gradient(145deg,#222,#2e2e2e)}
+  .story-gallery-feature-ic{font-size:28px;display:block;margin-bottom:8px}
+  .story-gallery-feature small{font-size:11px;font-weight:700;font-family:var(--font-sans);letter-spacing:-.01em}
+  .story-gallery-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;gap:8px}
+  .story-gallery-bar-actions{display:flex;align-items:center;gap:10px;margin-left:auto}
+  .story-gallery-recents,.story-gallery-select,.story-gallery-delete-selected{border:none;background:transparent;color:#fff;font-size:14px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+  .story-gallery-select.on{color:#0095F6}
+  .story-gallery-delete-selected{color:#FF453A}
+  .story-gallery-grid{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;padding:0 0 12px;align-content:start;scrollbar-width:none;-ms-overflow-style:none}
+  .story-gallery-grid::-webkit-scrollbar{display:none;width:0;height:0}
+  .story-gallery-tile-wrap{position:relative;aspect-ratio:1;width:100%;min-height:0}
+  .story-gallery-tile-wrap.selected{outline:3px solid #0095F6;outline-offset:-3px;z-index:1}
+  .story-gallery-tile{position:absolute;inset:0;border:none;padding:0;margin:0;background:#111;overflow:hidden;cursor:pointer;isolation:isolate;width:100%;height:100%}
+  .story-gallery-trash{position:absolute;top:6px;right:6px;z-index:2;width:28px;height:28px;border:none;border-radius:50%;background:rgba(0,0,0,.62);color:#fff;display:grid;place-items:center;cursor:pointer}
+  .story-gallery-tile img,.story-gallery-tile video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  .story-gallery-tile--camera{display:grid;place-items:center;background:linear-gradient(135deg,#1a1a1a,#2a2a2a);color:#fff;border:none}
+  .story-gallery-tile--camera svg{position:relative;z-index:1}
+  .post-options-backdrop{position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;animation:fade .2s}
+  .post-options-sheet{width:min(100%,430px);background:#fff;border-radius:18px 18px 0 0;padding:8px 14px max(18px,env(safe-area-inset-bottom));font-family:var(--font-sans)}
+  .post-options-grab{width:36px;height:4px;border-radius:999px;background:#DBDBDB;margin:6px auto 14px}
+  .post-options-quick{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .post-options-quick-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:18px 12px;border:none;border-radius:14px;background:#F2F2F2;color:#262626;font-size:13px;font-weight:600;cursor:pointer}
+  .post-options-quick-btn.on{color:#0095F6}
+  .post-options-list{background:#F2F2F2;border-radius:14px;overflow:hidden;margin-bottom:10px}
+  .post-options-row{display:flex;align-items:center;gap:12px;width:100%;border:none;background:transparent;padding:14px 16px;font-size:14px;font-weight:600;color:#262626;cursor:pointer;border-bottom:1px solid rgba(0,0,0,.06)}
+  .post-options-row:last-child{border-bottom:none}
+  .post-options-row.danger{color:#ED4956}
+  .post-options-prefs{display:flex;align-items:center;gap:12px;width:100%;border:none;background:#F2F2F2;border-radius:14px;padding:14px 16px;font-size:14px;font-weight:600;color:#262626;cursor:pointer}
+  .post-options-qr{background:#fff;border-radius:16px;padding:28px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px;margin:auto}
+  .post-options-qr p{margin:0;font-weight:700;color:#262626}
+  .post-options-qr small{color:#8E8E8E}
+  .explore-ig-screen{display:flex;flex-direction:column;height:100%;background:transparent;font-family:var(--font-sans)}
+  .explore-ig-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;gap:8px}
+  .explore-ig-head h1{margin:0;flex:1;font-size:22px;font-weight:800;color:#262626}
+  .explore-ig-sub{margin:0;padding:0 14px 8px;font-size:12px;color:#8E8E8E;font-weight:600}
+  .explore-ig-search{display:flex;align-items:center;gap:8px;margin:0 14px 10px;padding:10px 12px;background:#EFEFEF;border-radius:10px}
+  .explore-ig-search input{flex:1;border:none;background:transparent;font-size:14px;color:#262626;outline:none}
+  .explore-ig-clear{border:none;background:transparent;padding:4px;cursor:pointer;color:#8E8E8E}
+  .explore-ig-scroll{flex:1;padding-bottom:58px}
+  .explore-ig-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;padding:0 2px}
+  .explore-ig-tile{position:relative;aspect-ratio:3/4;border:none;padding:0;background:#111;overflow:hidden;cursor:pointer;border-radius:4px}
+  .explore-ig-tile img,.explore-ig-tile video{width:100%;height:100%;object-fit:cover}
+  .explore-ig-rating{position:absolute;top:6px;right:6px;left:auto;bottom:auto;display:inline-flex;align-items:center;gap:3px;padding:3px 6px;border-radius:6px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;font-weight:700;z-index:2}
+  .explore-ig-rating--mine{background:rgba(255,126,179,.88);color:#fff}
+  .explore-ig-empty{text-align:center;color:#8E8E8E;padding:40px 20px}
+  .map-ig-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px 4px;background:transparent;font-family:var(--font-sans)}
+  .map-ig-head h1{margin:0;flex:1;font-size:18px;font-weight:800;color:#5A4A60;letter-spacing:-.03em}
+  .lens-rate-screen--ig{background:transparent;padding-bottom:58px}
+  .explore-viewer{position:fixed;inset:0;z-index:99995;background:#000;color:#fff;font-family:var(--font-sans)}
+  .explore-viewer-media{position:absolute;inset:0}
+  .explore-viewer-media .feed-post-media,.explore-viewer-media video,.explore-viewer-media img{width:100%;height:100%;object-fit:cover}
+  .explore-viewer-back,.explore-viewer-camera{position:absolute;top:max(12px,env(safe-area-inset-top));z-index:8;border:none;background:transparent;color:#fff;padding:8px;cursor:pointer}
+  .explore-viewer-back{left:8px}
+  .explore-viewer-camera{right:8px}
+  .explore-viewer-rail{position:absolute;right:10px;bottom:120px;z-index:8;display:flex;flex-direction:column;align-items:center;gap:18px}
+  .explore-viewer-rail-btn{display:flex;flex-direction:column;align-items:center;gap:4px;border:none;background:transparent;color:#fff;font-size:11px;font-weight:600;cursor:pointer;text-shadow:0 1px 4px rgba(0,0,0,.5)}
+  .explore-viewer-rail-btn span{min-height:14px}
+  .explore-viewer-foot{position:absolute;left:0;right:72px;bottom:0;z-index:8;padding:12px 14px max(16px,env(safe-area-inset-bottom));background:linear-gradient(180deg,transparent,rgba(0,0,0,.65))}
+  .explore-viewer-author{display:inline-flex;align-items:center;gap:8px;border:none;background:transparent;color:#fff;padding:0;cursor:pointer;margin-bottom:6px}
+  .explore-viewer-author b{font-size:14px;font-weight:800}
+  .explore-viewer-follow{margin-left:8px;border:none;border-radius:8px;padding:6px 12px;background:rgba(255,255,255,.2);color:#fff;font-size:12px;font-weight:700;cursor:pointer}
+  .explore-viewer-follow--sent{cursor:default;background:rgba(255,255,255,.12);color:rgba(255,255,255,.75)}
+  .explore-viewer-caption{margin:4px 0 0;font-size:13px;line-height:1.35;color:#fff}
+  .explore-viewer-likes-line{margin:6px 0 0;font-size:12px;color:rgba(255,255,255,.85);display:flex;align-items:center;gap:4px}
+  .explore-viewer-rated{top:50%;left:50%;transform:translate(-50%,-50%)}
+  .ig-settings-screen{display:flex;flex-direction:column;height:100%;background:transparent;font-family:var(--font-sans)}
+  .ig-settings-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid #EFEFEF}
+  .ig-settings-back{border:none;background:transparent;padding:6px;cursor:pointer;color:#262626}
+  .ig-settings-head h1{margin:0;flex:1;font-size:17px;font-weight:800;color:#262626}
+  .ig-settings-scroll{flex:1;padding-bottom:58px}
+  .ig-settings-screen .sectionlabel{color:#8E8E8E;font-size:12px;font-weight:700;letter-spacing:.04em}
+  .ig-settings-screen .card{border:1px solid #EFEFEF;border-radius:12px;box-shadow:none;background:#fff}
+  .ig-settings-screen .card b{color:#262626}
+  .ig-settings-screen .muted{color:#8E8E8E}
+  .ig-settings-screen .toggle .gate-ic{background:#F2F2F2}
+  .ig-settings-screen .toggle .switch.on{background:#0095F6}
+  .ig-settings-screen .signout-btn{border:1px solid #EFEFEF;color:#262626;background:#fff}
+  .ig-settings-screen .settings-link .gate-ic{background:#F2F2F2!important}
+  .ig-profile-screen{display:flex;flex-direction:column;height:100%;background:transparent;font-family:var(--font-sans)}
+  .ig-profile-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;gap:8px;border-bottom:1px solid #EFEFEF}
+  .ig-profile-handle{font-size:16px;font-weight:800;color:#262626}
+  .ig-profile-head-actions{display:flex;align-items:center;gap:6px}
+  .ig-profile-iconbtn{border:none;background:transparent;padding:6px;cursor:pointer;color:#262626}
+  .ig-profile-scroll{flex:1;padding-bottom:58px}
+  .ig-profile-top{display:flex;gap:28px;padding:14px 16px 8px;align-items:center}
+  .ig-profile-stats{display:flex;flex:1;justify-content:space-around;gap:8px}
+  .ig-profile-stats div{display:flex;flex-direction:column;align-items:center;gap:2px}
+  .ig-profile-stats b{font-size:17px;font-weight:800;color:#262626}
+  .ig-profile-stats span{font-size:12px;color:#8E8E8E}
+  .ig-profile-avatar-wrap{position:relative}
+  .ig-profile-cam{position:absolute;right:-2px;bottom:-2px;width:28px;height:28px;border-radius:50%;border:2px solid #fff;background:#0095F6;color:#fff;display:grid;place-items:center;cursor:pointer}
+  .ig-profile-meta{padding:0 16px 8px;color:#262626}
+  .ig-profile-meta b{display:flex;align-items:center;gap:4px;font-size:14px}
+  .ig-profile-meta p{margin:6px 0 0;font-size:13px;line-height:1.35}
+  .ig-profile-meta a{font-size:13px;color:#00376B;font-weight:600;text-decoration:none}
+  .ig-profile-score-pill{display:inline-flex;align-items:center;gap:4px;margin-left:8px;padding:3px 8px;border-radius:999px;font-size:11px;font-weight:800}
+  .ig-ai-label{display:inline-block;margin-top:4px;padding:3px 8px;border-radius:6px;background:#EFEFEF;font-size:11px;font-weight:700;color:#8E8E8E}
+  .ig-profile-category{display:block;font-size:12px;color:#8E8E8E;margin-top:4px}
+  .ig-profile-actions{display:flex;gap:8px;padding:8px 16px}
+  .ig-profile-edit{flex:1;border:none;border-radius:8px;padding:8px 12px;background:#EFEFEF;color:#262626;font-size:13px;font-weight:700;cursor:pointer}
+  .ig-profile-highlights{padding:8px 12px}
+  .ig-profile-tabs{display:flex;border-top:1px solid #EFEFEF}
+  .ig-profile-tabs button{flex:1;border:none;background:transparent;padding:12px;color:#8E8E8E;cursor:pointer;border-bottom:2px solid transparent}
+  .ig-profile-tabs button.on{color:#262626;border-bottom-color:#262626}
+  .ig-portfolio-empty{text-align:center;padding:32px 20px;color:#8E8E8E;display:flex;flex-direction:column;align-items:center;gap:10px}
+  .ig-profile-cta{border:none;background:#0095F6;color:#fff;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer}
+  .portfolio-grid--reels .portfolio-tile--reel .portfolio-media{aspect-ratio:9/16}
+  .portfolio-reel-dur{position:absolute;left:6px;bottom:6px;font-size:10px;font-style:normal;color:#fff;background:rgba(0,0,0,.55);padding:2px 6px;border-radius:4px}
+  .portfolio-pin-badge{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.45);color:#fff;padding:4px;border-radius:6px}
+  .ig-profile-hold{display:flex;align-items:center;gap:8px;margin:12px 16px;padding:10px 12px;background:#FFF4EC;border-radius:10px;font-size:12px;color:#C44D6E}
+  .ig-profile-more{margin:12px 16px;font-size:13px;color:#262626}
+  .ig-profile-more summary{cursor:pointer;font-weight:700;padding:8px 0}
+  .ech-spark-screen .spark-gender-chip.on{background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff;border-color:transparent}
+  .ech-spark-screen .spark-gender-chip{background:rgba(255,255,255,.78);color:#6B5080;border-color:rgba(183,156,240,.22)}
+  .ech-spark-screen .spark-filter-btn{color:#6B5080;background:rgba(239,233,255,.75)}
+  .ech-spark-screen .spark-filter-btn.on{background:linear-gradient(135deg,#B79CF0,#C9A0F0);color:#fff}
+  .ech-spark-screen .spark-filters--fun{background:rgba(255,255,255,.88);border:1px solid rgba(183,156,240,.16);box-shadow:0 6px 20px rgba(120,90,140,.06)}
+  .ech-spark-screen .spark-filters-title{color:#5A4A60;font-weight:800}
+  .algorithm-sheet .algorithm-topic-stack{display:flex;flex-direction:column;gap:12px}
+  .algorithm-sheet .algorithm-topic-row{display:flex;flex-direction:column;gap:4px}
+  .algorithm-sheet .algorithm-topic-row input{border:1px solid #DBDBDB;border-radius:8px;padding:10px 12px;font-size:14px;width:100%;box-sizing:border-box}
+  .app-toast{position:fixed;left:50%;bottom:max(88px,calc(72px + env(safe-area-inset-bottom)));transform:translateX(-50%);z-index:99995;padding:10px 16px;border-radius:999px;background:rgba(38,38,38,.94);color:#fff;font-size:13px;font-weight:600;max-width:min(92vw,320px);text-align:center;pointer-events:none}
+  .share-success-overlay{position:fixed;inset:0;z-index:99996;display:grid;place-items:center;background:rgba(0,0,0,.42);pointer-events:none;animation:fadein .2s ease}
+  .share-success-card{display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 36px;border-radius:24px;background:rgba(18,18,18,.92);color:#fff;box-shadow:0 20px 60px rgba(0,0,0,.35);animation:pop .35s cubic-bezier(.2,.9,.2,1)}
+  .share-success-icon{width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#00C9A7,#0095F6);display:grid;place-items:center;color:#fff}
+  .share-success-card b{font-size:22px;font-weight:800;font-family:var(--font-display);letter-spacing:-.03em}
+  .explore-ig-users{margin-bottom:14px}
+  .explore-ig-users h3{font-size:13px;font-weight:700;color:#8E8E8E;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em}
+  .explore-ig-users ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+  .explore-ig-user-row{display:flex;align-items:center;gap:12px;width:100%;border:none;background:transparent;padding:8px 4px;text-align:left;cursor:pointer}
+  .explore-ig-user-row b{display:block;font-size:14px;color:#262626}
+  .explore-ig-user-row span{font-size:12px;color:#8E8E8E}
+  .album-editor-sheet{font-family:var(--font-sans);background:#fff;padding:10px max(14px,env(safe-area-inset-left)) max(18px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right))}
+  .album-editor-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
+  .album-editor-head h3{margin:0;font-size:17px;font-weight:800;color:#1A1520;letter-spacing:-.03em;font-family:var(--font-display)}
+  .album-editor-picked{font-size:11px;font-weight:700;color:#8C6BD8;white-space:nowrap}
+  .album-editor-title{width:100%;border:1px solid #E4DEE8;border-radius:12px;padding:11px 12px;font-size:14px;font-weight:600;margin-bottom:8px;box-sizing:border-box;background:#fff;color:#1A1520;font-family:var(--font-sans)}
+  .album-editor-title::placeholder{color:#9B8FA8}
+  .album-editor-search{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding:10px 12px;background:#fff;border:1px solid #E4DEE8;border-radius:12px}
+  .album-editor-search input{flex:1;border:none;background:transparent;font-size:13px;font-weight:600;outline:none;color:#1A1520;font-family:var(--font-sans)}
+  .album-editor-search input::placeholder{color:#9B8FA8;font-weight:600}
+  .album-editor-search-clear{border:none;background:transparent;padding:2px;cursor:pointer;color:#9B8FA8}
+  .album-editor-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+  .album-editor-tabs button{border:1px solid #E4DEE8;background:#fff;border-radius:999px;padding:7px 12px;font-size:11px;font-weight:700;color:#5A4A60;cursor:pointer;font-family:var(--font-sans)}
+  .album-editor-tabs button.on{background:#8C6BD8;color:#fff;border-color:#8C6BD8}
+  .album-editor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-height:min(52vh,380px);overflow-y:auto;overflow-x:hidden;padding:2px 0;align-content:start}
+  .album-editor-tile{position:relative;display:block;width:100%;min-height:0;aspect-ratio:3/4;border:none;padding:0;border-radius:10px;overflow:hidden;background:#F4F0F8;cursor:pointer;-webkit-tap-highlight-color:transparent}
+  .album-editor-tile-media{position:absolute;inset:0;display:block;overflow:hidden;border-radius:inherit}
+  .album-editor-tile-media img,.album-editor-tile-media video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;pointer-events:none}
+  .album-editor-tile-fallback{position:absolute;inset:0;display:grid;place-items:center;font-size:28px;background:#F4F0F8}
+  .album-editor-tile.on{box-shadow:0 0 0 2px #8C6BD8}
+  .album-editor-type{position:absolute;left:6px;bottom:6px;z-index:2;padding:3px 6px;border-radius:6px;background:rgba(12,8,20,.68);color:#fff;font-size:8px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;pointer-events:none;font-family:var(--font-sans)}
+  .album-editor-check{position:absolute;top:6px;right:6px;z-index:3;width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff;display:grid;place-items:center;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+  .album-editor-empty{grid-column:1/-1;text-align:center;padding:28px 12px;font-size:13px;font-weight:600;color:#9B8FA8;margin:0}
+  .album-editor-save{width:100%;margin-top:12px;border-radius:14px}
+  .album-viewer-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}
+  .album-viewer-head h3{margin:0;font-size:16px;color:#1A1520;font-weight:800}
+  .album-viewer-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-height:min(50vh,360px);overflow-y:auto;align-content:start;scrollbar-width:none;-ms-overflow-style:none}
+  .album-viewer-grid::-webkit-scrollbar{display:none}
+  .album-viewer-tile{position:relative;display:block;width:100%;min-height:0;aspect-ratio:3/4;border-radius:10px;overflow:hidden;background:#F4F0F8}
+  .album-viewer-tile-media{position:absolute;inset:0;display:block;overflow:hidden;border-radius:inherit}
+  .album-viewer-tile-media img,.album-viewer-tile-media video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+  .album-viewer-type{position:absolute;left:6px;bottom:6px;z-index:2;padding:3px 6px;border-radius:6px;background:rgba(12,8,20,.68);color:#fff;font-size:8px;font-weight:800;text-transform:uppercase;font-family:var(--font-sans)}
+  .album-viewer-trash{position:absolute;top:6px;right:6px;z-index:3;width:28px;height:28px;border:none;border-radius:50%;background:rgba(12,8,20,.72);color:#fff;display:grid;place-items:center;cursor:pointer}
+  .album-viewer-empty{grid-column:1/-1;text-align:center;padding:20px}
+  .ig-profile-albums{justify-content:flex-start;padding-left:16px}
+  .story-gallery-dur{position:absolute;right:6px;bottom:6px;font-size:11px;font-style:normal;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6)}
+  .feed-post-head-actions{display:flex;align-items:center;gap:8px}
+  .feed-post-follow{border:none;background:transparent;color:#0095F6;font-size:14px;font-weight:700;cursor:pointer;padding:6px 4px}
+  .feed-post-follow--sent{color:#8E8E8E;font-size:13px;font-weight:600;cursor:default;padding:6px 4px}
+  .user-profile-follow-sent{display:inline-flex;align-items:center;gap:6px;opacity:.75;cursor:default;pointer-events:none}
+  .feed-ig-filter-wrap{position:relative}
+  .feed-ig-filter-menu{position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#fff;border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.15);padding:6px;min-width:160px;z-index:20}
+  .feed-ig-filter-menu button{display:block;width:100%;border:none;background:transparent;text-align:left;padding:10px 14px;font-size:15px;font-weight:600;color:#262626;border-radius:8px;cursor:pointer;font-family:var(--font-sans)}
+  .feed-ig-filter-menu button.on{background:#f2f2f2}
+  .ig-comments-sheet--ig,.ig-comments-sheet--ig *{font-family:var(--font-sans)}
+  .ig-comments-sheet--ig .ig-comments-head h2{font-size:16px;font-weight:700;letter-spacing:0}
+  .ig-comments-sheet--ig .ig-comment-text{font-size:14px;line-height:1.35;font-weight:400}
+  .ig-comments-sheet--ig .ig-comment-meta b{font-size:14px;font-weight:600}
+  .ig-comments-sheet--ig .ig-comment-age{font-size:12px;color:#8E8E8E;margin-left:6px;font-weight:400}
+  .ig-comments-input-wrap{flex:1;display:flex;align-items:center;background:#EFEFEF;border-radius:999px;padding:0 12px 0 14px}
+  .ig-comments-input-wrap input{flex:1;border:none;background:transparent;padding:10px 0;font-size:14px;outline:none}
+  .story-music-picker{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .story-music-picker::-webkit-scrollbar{display:none}
+  .story-music-track{display:flex;align-items:center;gap:10px;border:none;background:rgba(255,255,255,.12);color:#fff;padding:8px 10px;border-radius:10px;cursor:pointer;text-align:left}
+  .story-music-track.on{background:rgba(0,149,246,.45)}
+  .story-music-add-btn{margin-top:8px;border:none;background:#0095F6;color:#fff;font-size:14px;font-weight:800;padding:12px;border-radius:12px;cursor:pointer;width:100%}
+  .story-music-applied{display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:12px;font-weight:600;color:rgba(255,255,255,.85)}
+  .story-music-track span{display:flex;flex-direction:column;gap:2px}
+  .story-music-track small{opacity:.8;font-size:11px}
+  .story-editor-trim{display:flex;flex-direction:column;gap:8px;padding:4px 0}
+  .story-editor-trim-label{font-size:11px;font-weight:700;color:rgba(255,255,255,.9)}
+  .story-editor-trim input[type=range]{width:100%}
+  .post-music-audio{display:none}
+  .compose-camera--fullscreen{position:absolute;inset:0;width:100%;height:100%;max-height:none;aspect-ratio:auto;border-radius:0;margin:0}
+  .compose-camera--fullscreen .compose-camera-video{object-fit:cover}
+  .compose-camera-top{position:absolute;top:0;left:0;right:0;z-index:4;display:flex;align-items:center;justify-content:space-between;padding:max(12px,env(safe-area-inset-top)) 16px 8px}
+  .compose-camera-topbtn{width:44px;height:44px;border:none;background:transparent;color:#fff;display:grid;place-items:center;cursor:pointer;filter:drop-shadow(0 1px 4px rgba(0,0,0,.5))}
+  .compose-camera-tools{position:absolute;left:12px;top:50%;transform:translateY(-50%);z-index:4;display:flex;flex-direction:column;gap:18px}
+  .compose-camera-tool{width:40px;height:40px;border:none;background:transparent;color:#fff;display:grid;place-items:center;cursor:pointer;filter:drop-shadow(0 1px 4px rgba(0,0,0,.5))}
+  .compose-camera-bottom{position:absolute;left:0;right:0;bottom:0;z-index:4;padding:0 12px max(16px,env(safe-area-inset-bottom))}
+  .compose-camera-modes{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px;flex-wrap:nowrap;overflow-x:auto;font-family:var(--font-sans)}
+  .compose-camera-mode{border:none;background:transparent;color:rgba(255,255,255,.75);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;padding:6px 4px;white-space:nowrap;font-family:inherit}
+  .compose-camera-mode.on{color:#fff;font-size:13px;font-weight:700}
+  .compose-camera-gallery-thumb{width:100%;height:100%;object-fit:cover;border-radius:8px}
+  .compose-camera-live-overlay{position:absolute;top:max(72px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:6;display:flex;align-items:center;gap:10px}
+  .compose-camera-live-pill{display:inline-flex;align-items:center;gap:6px;background:#ED4956;color:#fff;font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px}
+  .compose-camera-live-end{border:none;background:rgba(255,255,255,.2);color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:999px;cursor:pointer}
+  .spark-filter-bar{margin:0 max(12px,env(safe-area-inset-left)) 10px max(12px,env(safe-area-inset-right));display:flex;align-items:center;gap:8px}
+  .spark-gender-chips{display:flex;gap:8px;overflow-x:auto;flex:1;min-width:0;padding-bottom:2px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .spark-gender-chips::-webkit-scrollbar{display:none}
+  .spark-gender-chip{flex-shrink:0;border:1px solid rgba(183,156,240,.22);background:rgba(255,255,255,.78);color:#6B5080;font-size:12px;font-weight:700;padding:8px 16px;border-radius:999px;cursor:pointer;font-family:var(--font-sans)}
+  .spark-gender-chip.on{background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff;border-color:transparent;box-shadow:0 4px 14px rgba(140,100,160,.18)}
+  .spark-filter-toggle{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(183,156,240,.28);background:rgba(239,233,255,.82);color:#6B5080;font-size:11px;font-weight:800;padding:8px 12px;border-radius:999px;cursor:pointer;font-family:var(--font-sans);white-space:nowrap}
+  .spark-filter-toggle.on{background:linear-gradient(135deg,#B79CF0,#C9A0F0);color:#fff;border-color:transparent;box-shadow:0 4px 14px rgba(140,100,160,.18)}
+  .acct-switch-backdrop{position:fixed;inset:0;z-index:99980}
+  .acct-switch-menu{position:fixed;left:50%;transform:translateX(-50%);background:#fff;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:8px;min-width:min(92vw,320px);z-index:99981;font-family:var(--font-sans)}
+  .acct-switch-row{display:flex;align-items:center;gap:10px;width:100%;border:none;background:transparent;padding:10px 12px;border-radius:10px;cursor:pointer;text-align:left}
+  .acct-switch-row.on{background:#F2F2F2}
+  .acct-switch-meta{display:flex;flex-direction:column;flex:1;gap:2px}
+  .acct-switch-meta b{font-size:14px;font-weight:700;color:#262626}
+  .acct-switch-meta small{font-size:12px;color:#8E8E8E}
+  .acct-switch-add{display:flex;align-items:center;gap:8px;width:100%;border:none;background:transparent;padding:12px;color:#0095F6;font-size:14px;font-weight:700;cursor:pointer}
+  .feed-story-ring.live{background:linear-gradient(45deg,#F09433,#E6683C,#DC2743,#CC2366,#BC1888);padding:3px;position:relative}
+  .feed-story-live-badge{position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);background:#ED4956;color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:4px;letter-spacing:.04em}
+  .story-gallery-feature-ic--svg{display:grid;place-items:center;color:#fff;opacity:.95}
+  .story-gallery-collage-btn{margin:0 14px 8px;border:none;background:#0095F6;color:#fff;font-size:13px;font-weight:700;padding:10px;border-radius:10px;cursor:pointer}
+  .story-viewer--live{background:#111}
+  .story-live-stage{height:100%;display:flex;flex-direction:column;padding:max(12px,env(safe-area-inset-top)) 16px 24px;color:#fff;font-family:var(--font-sans)}
+  .story-live-head{display:flex;align-items:center;gap:10px}
+  .story-live-name{font-weight:700;flex:1}
+  .story-live-pill{display:inline-flex;align-items:center;gap:4px;background:#ED4956;font-size:11px;font-weight:800;padding:4px 8px;border-radius:6px}
+  .story-live-close{border:none;background:transparent;color:#fff;padding:6px;cursor:pointer}
+  .story-live-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center}
+  .story-live-pulse{width:120px;height:120px;border-radius:50%;background:radial-gradient(circle,rgba(237,73,86,.45) 0%,transparent 70%);animation:livePulse 1.6s ease-in-out infinite}
+  @keyframes livePulse{0%,100%{transform:scale(.92);opacity:.7}50%{transform:scale(1.08);opacity:1}}
+  .story-live-end{align-self:center;border:none;background:#ED4956;color:#fff;font-size:14px;font-weight:700;padding:12px 28px;border-radius:999px;cursor:pointer}
+  .ig-notes-bar{display:flex;align-items:center;gap:10px;padding:10px 14px;margin-bottom:8px}
+  .ig-notes-input{flex:1;border:none;background:#EFEFEF;border-radius:999px;padding:10px 14px;font-size:14px;outline:none;font-family:var(--font-sans)}
+  .profile-bio-block{text-align:center;margin-top:10px;padding:0 12px}
+  .profile-bio{margin:0;font-size:14px;color:#262626;line-height:1.4}
+  .profile-website{display:block;color:#00376B;font-size:13px;font-weight:600;margin-top:6px;text-decoration:none}
+  .profile-category{display:inline-block;margin-top:6px;font-size:12px;color:#8E8E8E}
+  .profile-highlights{display:flex;gap:12px;justify-content:flex-start;padding:14px 8px 6px;overflow-x:auto}
+  .profile-highlight{border:none;background:transparent;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;flex:0 0 68px}
+  .profile-highlight-ring{width:56px;height:72px;border-radius:10px;border:1px solid #DBDBDB;display:grid;place-items:center;color:#262626;overflow:hidden}
+  .profile-highlight small{font-size:11px;color:#262626;font-weight:600;max-width:68px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .profile-grid-tabs{display:flex;border-top:1px solid #EFEFEF;margin-top:8px}
+  .profile-grid-tabs button{flex:1;border:none;background:transparent;padding:12px 8px;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12px;font-weight:700;color:#8E8E8E;cursor:pointer}
+  .profile-grid-tabs button.on{color:#262626;border-top:2px solid #262626;margin-top:-1px}
+  .ig-features-sheet{max-height:min(82vh,680px)}
+  .ig-features-title{margin:0 0 4px;text-align:center;color:#262626;font-family:var(--font-sans)}
+  .ig-features-sub{text-align:center;font-size:12px;margin-bottom:12px}
+  .ig-features-scroll{max-height:52vh;overflow-y:auto;padding:4px 2px}
+  .ig-features-section{margin-bottom:14px}
+  .ig-features-section h4{margin:0 0 8px;font-size:13px;color:#8E8E8E;text-transform:uppercase;letter-spacing:.04em}
+  .ig-features-grid{display:flex;flex-wrap:wrap;gap:8px}
+  .ig-features-chip{border:1px solid #EFEFEF;background:#FAFAFA;color:#262626;font-size:12px;font-weight:600;padding:8px 12px;border-radius:999px;cursor:pointer}
+  .ig-form-field{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+  .ig-form-field span{font-size:12px;font-weight:600;color:#8E8E8E}
+  .ig-form-field input,.ig-form-field textarea,.ig-form-field select{border:1px solid #DBDBDB;border-radius:10px;padding:10px 12px;font-size:14px;font-family:var(--font-sans)}
+  .collections-list{display:flex;flex-direction:column;gap:6px}
+  .collections-row{display:flex;align-items:center;gap:10px;border:none;background:#FAFAFA;padding:12px;border-radius:10px;cursor:pointer;text-align:left;font-size:14px;font-weight:600}
+  .collections-row.on{background:#E8F4FD;color:#0095F6}
+  .insights-sheet{font-family:var(--font-sans)}
+  .insights-head h3{margin:0 0 10px;font-size:17px;font-weight:800;color:#1A1520;font-family:var(--font-display)}
+  .insights-filters{margin-bottom:14px}
+  .insights-filter-label{display:block;font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#9B7FD4;margin:0 0 6px}
+  .insights-filter-label:not(:first-child){margin-top:10px}
+  .insights-chips{display:flex;flex-wrap:wrap;gap:6px}
+  .insights-chip{border:1px solid #E4DEE8;background:#fff;border-radius:999px;padding:7px 12px;font-size:11px;font-weight:700;color:#5A4A60;cursor:pointer;font-family:var(--font-sans)}
+  .insights-chip.on{background:#8C6BD8;color:#fff;border-color:#8C6BD8}
+  .insights-post-pick{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+  .insights-post-pick span{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#9B7FD4}
+  .insights-post-pick select{border:1px solid #E4DEE8;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:600;color:#1A1520;background:#fff;font-family:var(--font-sans)}
+  .insights-section{margin-bottom:14px}
+  .insights-section h4{margin:0 0 8px;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#9B7FD4}
+  .insights-empty{text-align:center;padding:24px 12px;font-size:13px}
+  .insights-close{width:100%;margin-top:8px}
+  .insights-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .insights-cell{background:#F7F3FB;border-radius:12px;padding:12px 8px;text-align:center;border:1px solid #ECE8EF}
+  .insights-cell b{display:block;font-size:17px;font-weight:800;color:#1A1520;letter-spacing:-.02em}
+  .insights-cell small{font-size:10px;font-weight:600;color:#8A7A98}
+  .broadcast-channels{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .broadcast-chip{border:1px solid #DBDBDB;background:#fff;padding:8px 12px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer}
+  .broadcast-chip.on{background:#262626;color:#fff}
+  .broadcast-chip.add{display:grid;place-items:center;width:36px;padding:0}
+  .broadcast-feed{max-height:200px;overflow-y:auto;margin-bottom:10px}
+  .broadcast-post{background:#FAFAFA;border-radius:10px;padding:10px;margin-bottom:8px}
+  .broadcast-compose{display:flex;gap:8px}
+  .broadcast-compose input{flex:1;border:1px solid #DBDBDB;border-radius:999px;padding:10px 14px}
+  .broadcast-compose button{border:none;background:#0095F6;color:#fff;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;cursor:pointer}
+  .explore-tabs{display:flex;gap:8px;margin-bottom:12px}
+  .explore-tabs button{flex:1;border:none;background:#EFEFEF;padding:8px;border-radius:8px;font-weight:600;font-size:12px;cursor:pointer}
+  .explore-tabs button.on{background:#262626;color:#fff}
+  .explore-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;max-height:320px;overflow-y:auto}
+  .explore-tile{aspect-ratio:1;border:none;padding:0;overflow:hidden;background:#111;cursor:pointer}
+  .explore-tile img,.explore-tile video{width:100%;height:100%;object-fit:cover}
+  .explore-account-row{display:flex;align-items:center;gap:10px;width:100%;border:none;background:#FAFAFA;padding:10px;border-radius:10px;margin-bottom:8px;cursor:pointer}
+  .close-friend-row{display:flex;align-items:center;gap:10px;width:100%;border:none;background:#FAFAFA;padding:10px;border-radius:10px;margin-bottom:8px;cursor:pointer}
+  .close-friend-row.on{background:#E8F4FD}
+  .profile-edit-btn{border:1px solid #DBDBDB;background:#fff;color:#262626;font-size:13px;font-weight:600;padding:8px 16px;border-radius:8px;margin:8px auto 0;display:block;cursor:pointer}
+  .profile-highlight-ring img{width:100%;height:100%;object-fit:cover;border-radius:10px}
+  .post-carousel-nav{position:absolute;top:50%;transform:translateY(-50%);border:none;background:rgba(0,0,0,.45);color:#fff;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;cursor:pointer;z-index:5}
+  .post-carousel-nav--prev{left:10px}
+  .post-carousel-nav--next{right:10px}
+  .post-carousel-dots{position:absolute;right:10px;top:10px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;z-index:5}
+  .media-overlay-poll,.media-overlay-question,.media-overlay-quiz,.media-overlay-countdown{background:rgba(0,0,0,.55);backdrop-filter:blur(6px);border-radius:12px;padding:10px 14px;color:#fff;min-width:140px}
+  .media-overlay-poll button{display:block;width:100%;margin-top:6px;border:none;background:rgba(255,255,255,.2);color:#fff;padding:6px;border-radius:8px;cursor:pointer}
+  .media-overlay-link{background:#fff;color:#0095F6;padding:8px 12px;border-radius:999px;text-decoration:none;font-weight:700}
+  .media-overlay-hashtag{color:#fff;font-weight:800;font-size:18px}
+  .compose-camera-flip{margin-left:8px;width:40px;height:40px;border-radius:50%;border:1px solid rgba(255,255,255,.35);background:rgba(0,0,0,.25);color:#fff;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .compose-camera-gallery{width:48px;height:48px;border-radius:10px;border:2px solid #fff;background:rgba(255,255,255,.15);color:#fff;display:grid;place-items:center;cursor:pointer}
+  .compose-camera-filters{display:flex;gap:8px}
+  .compose-camera-filter-dot{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#888,#ccc);border:2px solid #fff}
+  .compose-camera-fallback--portal{position:absolute;bottom:max(100px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);color:rgba(255,255,255,.8);z-index:5}
+  .story-editor{position:fixed;inset:0;z-index:99990;background:#0d0d0d;display:flex;flex-direction:column;overflow:hidden;font-family:var(--font-sans)}
+  .story-editor-close{position:absolute;top:max(12px,env(safe-area-inset-top));left:12px;z-index:8;width:40px;height:40px;border-radius:12px;border:none;background:rgba(30,20,40,.55);color:#fff;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(10px)}
+  .story-editor-stage{flex:1;min-height:0;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#000;padding-right:48px;touch-action:none}
+  .story-editor-stage .media-overlay--edit{z-index:8}
+  .story-editor-media{width:100%;height:100%;object-fit:cover}
+  .story-editor-rail{position:absolute;right:8px;top:max(58px, calc(env(safe-area-inset-top) + 48px));bottom:12px;z-index:6;display:flex;flex-direction:column;gap:6px;overflow-y:auto;scrollbar-width:none;padding:2px 0}
+  .story-editor-rail::-webkit-scrollbar{display:none}
+  .story-editor-rail-btn{display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:#fff;cursor:pointer;padding:0;-webkit-tap-highlight-color:transparent}
+  .story-editor-rail-icon{width:36px;height:36px;border-radius:11px;background:rgba(30,20,40,.55);display:grid;place-items:center;backdrop-filter:blur(10px);color:#fff}
+  .story-editor-rail-btn.on .story-editor-rail-icon{background:rgba(183,156,240,.42);color:#fff}
+  .story-editor-panel{flex-shrink:0;margin:0 12px 6px;padding:10px 12px 12px;padding-right:max(12px, calc(12px + env(safe-area-inset-right)));background:rgba(18,14,24,.88);border:1px solid rgba(255,255,255,.1);border-radius:16px;max-height:min(34vh,260px);overflow-y:auto;font-family:var(--font-sans);scrollbar-width:none;-ms-overflow-style:none}
+  .story-editor-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+  .story-editor-panel-head b{font-size:12px;font-weight:800;color:#fff;letter-spacing:-.02em}
+  .story-editor-panel-close{border:none;background:rgba(255,255,255,.14);color:#fff;width:28px;height:28px;border-radius:8px;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .story-editor-panel .compose-sticker-search,.story-editor-panel .story-music-track,.story-editor-panel .compose-tag-row,.story-editor-panel .compose-filter-chip small{font-family:var(--font-sans)}
+  .story-editor-panel::-webkit-scrollbar{display:none}
+  .story-editor-filters-bar{flex-shrink:0;padding:8px 0 6px;background:#121018;border-top:1px solid rgba(255,255,255,.08);font-family:var(--font-sans)}
+  .story-editor-filters-head{display:flex;align-items:center;gap:8px;padding:0 14px 6px;color:#fff;font-size:11px;font-weight:700}
+  .story-editor-filters-head b{flex:1;letter-spacing:-.02em}
+  .story-editor-filters-head span{color:#B79CF0;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+  .story-editor-filters-scroll{padding:0 12px;max-height:108px}
+  .story-editor-foot{flex-shrink:0;padding:10px 14px max(12px,env(safe-area-inset-bottom));background:#121018;border-top:1px solid rgba(255,255,255,.08);z-index:7;font-family:var(--font-sans)}
+  .story-editor-caption{width:100%;border:none;background:transparent;color:#fff;font-size:14px;font-weight:600;padding:6px 2px;outline:none;font-family:var(--font-sans);letter-spacing:-.01em}
+  .story-editor-caption::placeholder{color:rgba(255,255,255,.5);font-weight:500}
+  .story-editor-share-row{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .story-editor-pill{flex:1;display:flex;align-items:center;gap:8px;border:none;border-radius:999px;background:rgba(255,255,255,.15);color:#fff;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer;min-width:0}
+  .story-editor-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .story-editor-pill--cf{flex:0 1 auto}
+  .story-editor-cf-icon{width:24px;height:24px;border-radius:50%;background:#00C853;color:#fff;display:grid;place-items:center;font-size:12px}
+  .story-editor-next{width:48px;height:48px;border-radius:50%;border:none;background:#0095F6;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .feed-rated-badge{position:absolute;top:10px;right:10px;z-index:4;width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,.88);display:grid;place-items:center;box-shadow:0 4px 12px rgba(0,0,0,.12)}
+  .profile-post-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;margin-bottom:12px}
+  .profile-post-tile{position:relative;aspect-ratio:1;border:none;padding:0;overflow:hidden;cursor:pointer;background:#F5F0FA}
+  .profile-post-thumb{width:100%;height:100%;object-fit:cover;display:block}
+  .profile-post-thumb--emoji{display:grid;place-items:center;font-size:28px}
+  .profile-post-play{position:absolute;right:6px;top:6px;color:#fff;filter:drop-shadow(0 1px 3px rgba(0,0,0,.45))}
+  .portfolio-wrap{margin-bottom:14px}
+  .portfolio-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
+  .portfolio-tile{border:none;padding:0;background:transparent;cursor:pointer;text-align:left;display:block;border-radius:14px;overflow:hidden;box-shadow:0 8px 24px rgba(120,90,140,.12)}
+  .portfolio-meta{bottom:0}
+  .portfolio-media{position:relative;aspect-ratio:3/4;overflow:hidden;background:#1a1228}
+  .portfolio-thumb{width:100%;height:100%;object-fit:cover;display:block}
+  .portfolio-thumb--emoji{display:grid;place-items:center;font-size:32px}
+  .portfolio-shade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 55%,rgba(0,0,0,.42));pointer-events:none}
+  .portfolio-play{position:absolute;top:8px;right:8px;color:#fff;filter:drop-shadow(0 2px 6px rgba(0,0,0,.45))}
+  .portfolio-score{display:flex;align-items:center;justify-content:center;gap:5px;padding:8px 6px;background:linear-gradient(135deg,#FFF8FC,#F5EEFF);font-size:12px;font-weight:800;color:#6B5080;flex-wrap:wrap}
+  .portfolio-score--empty{opacity:.55}
+  .portfolio-date{font-size:10px;font-weight:700;color:#9B8FA8;margin-left:4px}
+  .post-viewer-portal{position:fixed;inset:0;z-index:99990;background:#000;display:flex;flex-direction:column;animation:fade .2s;padding:0;margin:0}
+  .post-viewer-full{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
+  .post-viewer-full--edge{height:100dvh;max-height:100dvh}
+  .post-viewer-close{position:absolute;top:calc(18px + env(safe-area-inset-top,0px));right:18px;z-index:6;width:42px;height:42px;border:none;border-radius:50%;background:rgba(0,0,0,.35);color:#fff;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(10px);box-shadow:0 4px 16px rgba(0,0,0,.25)}
+  .post-viewer-media-stage{flex:1;min-height:0;display:flex;align-items:stretch;justify-content:center;background:#000;overflow:hidden;position:relative}
+  .post-viewer-media-stage .feed-post-media{width:100%;height:100%;max-height:100%;aspect-ratio:auto;display:flex;align-items:stretch}
+  .post-viewer-media-stage .feed-post-media .post-media,.post-viewer-media-stage video{height:100%;width:100%;max-height:100%;object-fit:cover;pointer-events:auto}
+  .post-viewer-bar{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;padding:10px 14px max(10px,env(safe-area-inset-bottom));background:linear-gradient(180deg,transparent,rgba(0,0,0,.72) 28%,#111 100%);color:#fff}
+  .post-viewer-bar .post-viewer-meta{margin:0;flex:1;min-width:0}
+  .post-viewer-bar .post-viewer-meta b,.post-viewer-bar .post-viewer-meta p{color:#fff}
+  .post-viewer-bar .muted{color:rgba(255,255,255,.72)}
+  .post-viewer-comments-btn{display:inline-flex;align-items:center;gap:6px;padding:10px 14px;border-radius:999px;border:1px solid rgba(255,255,255,.28);background:rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:700;cursor:pointer;flex-shrink:0}
+  .post-viewer-comments-btn.on{background:rgba(183,156,240,.45);border-color:rgba(255,255,255,.5)}
+  .post-viewer-comments-btn em{font-style:normal;background:rgba(255,255,255,.22);padding:2px 7px;border-radius:999px;font-size:10px}
+  .post-viewer-foot{background:#fff;border-radius:20px 20px 0 0;padding:12px 14px max(14px,env(safe-area-inset-bottom));max-height:38vh;display:flex;flex-direction:column;min-height:0;animation:slideUp .25s ease}
+  .post-viewer-meta{display:flex;gap:10px;margin-bottom:10px;align-items:flex-start}
+  .post-viewer-meta p{margin:4px 0 0;font-size:13px;line-height:1.4;color:var(--text-secondary)}
+  .post-viewer-comments-scroll{flex:1;overflow-y:auto;min-height:48px;max-height:180px;margin-bottom:8px}
+  .compose-enhance-panel{margin:6px 0 8px;padding:10px 12px;border-radius:16px;background:linear-gradient(160deg,#FFFBFE,#F5EEFF);border:1px solid rgba(183,156,240,.28);box-shadow:0 4px 18px rgba(140,100,160,.08)}
+  .compose-enhance-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .compose-enhance-head b{font-size:12px;font-weight:800;color:#6B5080;letter-spacing:.04em;text-transform:uppercase}
+  .compose-enhance-group{margin-bottom:8px}
+  .compose-enhance-group:last-child{margin-bottom:0}
+  .compose-enhance-group-label{display:block;font-size:10px;font-weight:800;color:#9B7EC8;margin-bottom:4px;letter-spacing:.06em;text-transform:uppercase}
+  .compose-enhance-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 10px}
+  .compose-enhance-cell{display:flex;flex-direction:column;gap:3px}
+  .compose-enhance-cell>span{font-size:10px;font-weight:700;color:#7A6890}
+  .compose-enhance-cell input[type=range]{width:100%;height:4px;accent-color:#B79CF0;margin:0}
+  .feed-drag-stars-hint{font-size:11px;font-weight:600;color:rgba(255,255,255,.85);text-align:center;max-width:90%;line-height:1.35}
+  .rate-drag-zone{padding:8px 4px;border-radius:16px;touch-action:none}
+  .rate-drag-zone.active{background:rgba(183,156,240,.12)}
+  .rate-drag-hint{font-size:11px;margin:6px 0 0}
+  button.dm-shared-post{display:block;width:100%;border:none;text-align:left;cursor:pointer;font:inherit;padding:0;background:transparent}
+  .dm-shared-post-stats{display:flex;align-items:center;gap:8px;font-size:11px;opacity:.9}
+  .dm-shared-post-stats em{font-style:normal;opacity:.85}
+  .dm-shared-post-caption{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .dm-shared-post-link{font-size:10px;font-weight:800;color:#FFD1E1;letter-spacing:.06em;text-transform:uppercase;margin-top:2px}
+  .compose-fx{position:absolute;inset:0;pointer-events:none;z-index:3}
+  .compose-fx-vignette{background:radial-gradient(ellipse at center,transparent 42%,rgba(0,0,0,.78) 100%)}
+  .compose-fx-grain{background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");mix-blend-mode:overlay}
+  .compose-tool-tabs{display:flex;gap:6px;margin-bottom:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+  .compose-tool-tab{border:none;border-radius:10px;padding:8px 12px;font-size:11px;font-weight:800;background:#F0E8FA;color:#7A6A86;cursor:pointer;white-space:nowrap;flex-shrink:0}
+  .compose-tool-tab.on{background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff}
+  .compose-tool-tab-reset{margin-left:auto;background:transparent;color:#8C6BD8;text-decoration:underline}
+  .compose-filters-scroll{display:flex;gap:8px;overflow-x:auto;flex-wrap:nowrap;padding-bottom:6px;-webkit-overflow-scrolling:touch}
+  .compose-filter-chip{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:52px;flex-shrink:0;border:none;background:transparent;cursor:pointer;padding:0}
+  .compose-filter-chip span{width:44px;height:44px;border-radius:12px;border:2px solid transparent;display:block}
+  .compose-filter-chip.on span{border-color:#B79CF0;box-shadow:0 4px 12px rgba(140,100,160,.25)}
+  .compose-filter-chip small{font-size:9px;font-weight:700;color:#8C6BD8;max-width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .compose-adjust-row label{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:800;color:#8C6BD8}
+  .compose-adjust-row input[type=range]{width:100%;accent-color:#B79CF0}
+  .media-overlay--edit{cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none}
+  .media-overlay--edit.editing{outline:2px dashed rgba(255,255,255,.95)}
+  .overlay-drag-handle{display:none}
+  .viewfinder-map .leaflet-control-attribution,.party-pin-map .leaflet-control-attribution{display:none!important}
+  .media-pick-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:8px 0 4px}
+  .media-pick-opt{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:22px 12px;border-radius:18px;border:1.5px solid rgba(183,156,240,.28);background:linear-gradient(135deg,#FFF8FC,#F5EEFF);cursor:pointer;font-family:var(--font-sans);font-size:13px;font-weight:700;color:#6B5080}
+  .media-pick-opt:active{transform:scale(.96)}
+  .feed-stories-wrap{margin-bottom:12px;padding-top:4px}
+  .feed-stories-wrap--top{margin:0 0 14px;padding:0}
+  .feed-stories-head{display:flex;align-items:center;justify-content:space-between;margin:0 4px 10px}
+  .feed-stories-title{font-size:13px;font-weight:700;letter-spacing:-.015em;text-transform:none;color:var(--text-muted)}
+  .feed-stories{display:flex;gap:10px;overflow-x:auto;padding:4px 2px 8px;-webkit-overflow-scrolling:touch;scrollbar-width:none;align-items:flex-start}
+  .feed-stories::-webkit-scrollbar{display:none}
+  .feed-story{flex:0 0 auto;background:none;border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0;width:78px}
+  .feed-story-ring{width:72px;height:72px;border-radius:50%;padding:3px;display:grid;place-items:center;position:relative;background:linear-gradient(135deg,#FF9DC0 0%,#B79CF0 45%,#7FB8F0 100%);overflow:hidden}
+  .feed-story-ring.has .feed-story-thumb{width:66px;height:66px;border-radius:50%;object-fit:cover}
+  .feed-story-ring.has.fresh{animation:storyGlow 2.5s ease-in-out infinite}
+  .feed-story-ring.seen{background:linear-gradient(135deg,#E8DFEA,#DDD4E0)}
+  .feed-story-ring.add{background:linear-gradient(145deg,#F8F2FC,#EFE9FF);border:2px dashed #D4C4E0;padding:0}
+  .feed-story-add{width:100%;height:100%;border-radius:50%;background:#FFFBFE;display:grid;place-items:center}
+  .feed-story-plus{position:absolute;bottom:2px;right:2px;width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#B79CF0,#8C6BD8);color:#fff;display:grid;place-items:center;border:2.5px solid #fff;box-shadow:0 4px 10px rgba(140,100,200,.35)}
+  .feed-story-dot{position:absolute;top:4px;right:4px;width:10px;height:10px;border-radius:50%;background:#FF8FB1;border:2px solid #fff;box-shadow:0 0 0 2px rgba(255,143,177,.4)}
+  .feed-story-dot--live{animation:storyDotPulse 1.2s ease-in-out infinite}
+  @keyframes storyDotPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.2);opacity:.88}}
+  .feed-story-name{font-size:11.5px;font-weight:700;color:var(--text-primary);max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.012em}
+  .feed-story-score{font-size:9.5px;font-weight:700;color:#B79CF0}
+  @keyframes storyGlow{0%,100%{box-shadow:0 0 0 0 rgba(255,157,192,.35)}50%{box-shadow:0 0 0 6px rgba(183,156,240,.15)}}
+  
+  /* feed composer */
+  .feed-composer{display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:16px;border-radius:22px;background:rgba(255,255,255,.82);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.95);box-shadow:0 10px 28px rgba(140,100,130,.1)}
+  .feed-composer--post-only{justify-content:center;padding:14px 12px}
+  .feed-composer--post-only .feed-composer-fab.story{width:52px;height:52px;border-radius:16px;margin:0 auto}
+  .feed-composer.locked{opacity:.55}
+  .feed-composer-prompt{flex:1;border:none;background:transparent;text-align:left;font-family:var(--font-sans);font-size:13.5px;font-weight:600;color:#9B8FA8;cursor:pointer;padding:8px 4px;min-width:0}
+  .feed-composer-prompt:disabled{cursor:not-allowed}
+  .feed-composer-fab{width:42px;height:42px;border-radius:14px;border:none;background:linear-gradient(135deg,#EFE9FF,#F5E8FF);color:#8C6BD8;display:grid;place-items:center;cursor:pointer;box-shadow:0 6px 14px rgba(183,156,240,.2);transition:transform .12s}
+  .feed-composer-fab.story{background:linear-gradient(135deg,#FFE8F2,#FFD1E1);color:#E07AA0}
+  .feed-composer-fab:active{transform:scale(.92)}
+  .feed-composer-fab:disabled{opacity:.5;cursor:not-allowed}
+  .feed-ig-banner{display:flex;align-items:center;gap:10px;padding:12px 14px;margin-bottom:14px;border-radius:18px;background:linear-gradient(120deg,#FFF4F8,#FBE3F0);border:1px solid #F5D4E6;font-size:12px;font-weight:600;color:#8B5A72;line-height:1.45}
+  .feed-section-label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;letter-spacing:-.015em;text-transform:none;color:var(--text-muted);margin:4px 2px 12px}
+  .feed-tabs{display:flex;align-items:center;gap:6px;margin:0 0 14px;padding:4px;background:rgba(255,255,255,.65);border-radius:16px;border:1px solid #F3EBF2}
+  .feed-tab{flex:1;border:none;background:transparent;padding:10px 8px;border-radius:12px;font-family:var(--font-sans);font-size:13px;font-weight:600;color:var(--text-secondary);cursor:pointer;transition:background .2s,color .2s,transform .12s;letter-spacing:-.01em}
+  .feed-tab.on{background:#fff;color:#6B5080;box-shadow:0 4px 14px rgba(140,100,130,.12)}
+  .feed-tab:active{transform:scale(.97)}
+  .feed-refresh{margin-left:auto;width:38px;height:38px;border:none;border-radius:12px;background:linear-gradient(135deg,#EFE9FF,#F5E8FF);color:#8C6BD8;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .feed-refresh:disabled{opacity:.5}
+  .feed-empty{text-align:center;padding:36px 20px 48px;border-radius:24px;background:rgba(255,255,255,.7);border:1px dashed #E8DFEA;margin-bottom:16px}
+  .feed-empty p{margin:12px 0 0;font-size:13px;line-height:1.55;color:var(--text-secondary);font-weight:600;letter-spacing:-.012em}
+  .reels-strip-wrap{margin:0 0 14px}
+  .reels-strip-head{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:-.01em;text-transform:none;color:#fff;margin:0 4px 8px;padding:6px 10px;border-radius:12px;background:linear-gradient(120deg,#1a1a2e,#3d2a4a);width:fit-content}
+  .reels-strip{display:flex;gap:10px;overflow-x:auto;padding:4px 2px 10px;-webkit-overflow-scrolling:touch;scroll-snap-type:x mandatory;scrollbar-width:none}
+  .reels-strip::-webkit-scrollbar{display:none}
+  .reel-tile{flex:0 0 88px;border:none;background:none;padding:0;cursor:pointer;scroll-snap-align:start}
+  .reel-tile-bg{width:88px;height:132px;border-radius:16px;overflow:hidden;display:grid;place-items:center;font-size:32px;box-shadow:0 8px 22px rgba(40,20,50,.25);position:relative}
+  .reel-tile-vid{width:100%;height:100%;object-fit:cover}
+  .reel-tile-name{display:block;margin-top:5px;font-size:10px;font-weight:800;color:#5A4A60;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
+  .reels-feed{display:flex;flex-direction:column;gap:14px;margin:0 -16px;padding:0 0 8px}
+  .reel-slide{position:relative;border-radius:0;overflow:hidden;background:#111;min-height:min(72vh,520px);scroll-snap-align:start;scroll-snap-stop:always}
+  .reel-slide-media{position:absolute;inset:0}
+  .reel-slide-media .feed-post-media,.reel-slide-media video,.reel-slide-media img{width:100%;height:100%;object-fit:cover;min-height:min(72vh,520px);border-radius:0}
+  .reel-slide-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.15) 0%,transparent 35%,rgba(0,0,0,.55) 100%);pointer-events:none}
+  .reel-slide-overlay{position:absolute;inset:0;display:flex;align-items:flex-end;justify-content:space-between;padding:16px 14px 18px;pointer-events:none}
+  .reel-slide-side{display:flex;flex-direction:column;align-items:center;gap:14px;pointer-events:auto;margin-left:auto;padding-left:10px}
+  .reel-side-btn{display:flex;flex-direction:column;align-items:center;gap:4px;border:none;background:rgba(255,255,255,.12);backdrop-filter:blur(8px);border-radius:14px;padding:8px 10px;color:#fff;font-size:10px;font-weight:800;cursor:pointer}
+  .reel-side-btn.on{background:rgba(255,143,177,.35)}
+  .reel-side-btn--rate{background:rgba(255,213,107,.25)}
+  .reel-slide-meta{flex:1;min-width:0;pointer-events:auto;padding-right:8px}
+  .reel-slide-author{display:flex;align-items:center;gap:8px;margin-bottom:6px;color:#fff}
+  .reel-slide-author b{font-size:14px;text-shadow:0 1px 4px rgba(0,0,0,.4)}
+  .reel-slide-caption{margin:0;font-size:13px;line-height:1.45;color:rgba(255,255,255,.92);text-shadow:0 1px 3px rgba(0,0,0,.5);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .reel-slide-time{font-size:10px;font-weight:700;color:rgba(255,255,255,.65);margin-top:6px;display:block}
+  .feed-scroll:has(.reels-feed){scroll-snap-type:y proximity}
+  .feed-list{display:flex;flex-direction:column;gap:18px}
+  
+  /* feed posts */
+  .feed-post{background:#fff;border-radius:26px;overflow:hidden;margin-bottom:0;border:1px solid #F3EBF2;
+    box-shadow:0 16px 40px rgba(120,80,110,.09),0 2px 0 rgba(255,255,255,.8) inset;animation:feedIn .45s ease both}
+  .feed-post--featured{border-color:rgba(255,213,107,.55);box-shadow:0 20px 48px rgba(200,160,100,.14),0 0 0 1px rgba(255,213,107,.25)}
+  .feed-post:nth-child(1){animation-delay:.05s}
+  .feed-post:nth-child(2){animation-delay:.1s}
+  .feed-post:nth-child(3){animation-delay:.15s}
+  @keyframes feedIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .feed-post-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 14px 10px}
+  .feed-post-author{display:flex;align-items:center;gap:10px;flex:1;min-width:0;border:none;background:none;padding:0;cursor:pointer;text-align:left;font:inherit;color:inherit}
+  .feed-post-author-meta{min-width:0}
+  .feed-post-author-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .feed-post-author-row b{font-size:14px;font-weight:600;color:var(--text-primary);letter-spacing:-.01em}
+  .feed-post-handle{font-size:12px;color:var(--text-secondary);letter-spacing:-.005em}
+  .feed-post-head-end{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
+  .feed-post-time{font-size:11px;color:var(--text-tertiary);font-weight:400;letter-spacing:0}
+  .feed-post-score-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:#9A6A1A;background:linear-gradient(120deg,#FFF6D8,#FFE9C8);padding:4px 9px;border-radius:999px;letter-spacing:-.01em}
+  .feed-post-more{width:32px;height:32px;border:none;border-radius:10px;background:transparent;color:#B6A8BE;display:grid;place-items:center;cursor:pointer}
+  .feed-post-media{aspect-ratio:4/5;width:100%;display:grid;place-items:center;position:relative;overflow:hidden;background:#111}
+  .feed-post-media .post-media{width:100%;height:100%;object-fit:cover}
+  .feed-post-emoji{font-size:clamp(48px,18vw,72px);filter:drop-shadow(0 8px 24px rgba(0,0,0,.12));z-index:1}
+  .feed-post-media-shade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 35%,rgba(20,10,30,.45) 100%);pointer-events:none;z-index:2}
+  .feed-post-badge{position:absolute;z-index:4;font-size:10px;font-weight:800;padding:5px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:4px;backdrop-filter:blur(8px)}
+  .feed-post-badge--story{top:12px;left:12px;background:rgba(0,0,0,.5);color:#fff}
+  .feed-post-badge--ig{top:12px;right:12px;background:rgba(193,53,132,.88);color:#fff}
+  .feed-post-badge--premium{bottom:12px;left:12px;background:linear-gradient(120deg,rgba(255,213,107,.9),rgba(255,157,192,.85));color:#5A4030}
+  .feed-post-lock{position:absolute;inset:0;z-index:5;display:grid;place-items:center;background:rgba(40,30,50,.45);backdrop-filter:blur(12px)}
+  .feed-post-lock-inner{text-align:center;color:#fff;padding:20px}
+  .feed-post-lock-inner b{display:block;font-size:15px;margin-top:8px}
+  .feed-post-lock-inner span{font-size:12px;opacity:.9}
+  .feed-post-caption-overlay{position:absolute;left:0;right:0;bottom:0;z-index:3;margin:0;padding:20px 16px 16px;font-size:14px;line-height:1.4;color:#fff;font-weight:400;letter-spacing:-.01em;text-shadow:0 1px 8px rgba(0,0,0,.45)}
+  .feed-heart-burst{position:absolute;inset:0;z-index:6;display:grid;place-items:center;pointer-events:none;animation:heartPop .7s ease forwards}
+  @keyframes heartPop{0%{opacity:0;transform:scale(.3)}30%{opacity:1;transform:scale(1.1)}100%{opacity:0;transform:scale(1.4)}}
+  .feed-post-body{padding:12px 14px 16px}
+  .feed-post-actions{display:flex;align-items:center;gap:2px;flex-wrap:wrap;margin-bottom:6px}
+  .feed-action{display:inline-flex;align-items:center;gap:6px;border:none;background:transparent;padding:6px 8px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;color:var(--text-primary);letter-spacing:-.01em;font-variant-numeric:tabular-nums;transition:transform .12s,opacity .12s}
+  .feed-action:active{transform:scale(.92);opacity:.7}
+  .feed-action.on{background:transparent}
+  .feed-post-author-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .ig-pill--icon{padding:4px 6px;min-width:0}
+  .feed-section-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(183,156,240,.25),transparent);margin:4px 16px 12px}
+  .feed-composer-prompt--icon{flex:0 0 44px;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.85);border:1px solid rgba(183,156,240,.2)}
+  .feed-ig-banner--icon{justify-content:center;padding:8px}
+  .feed-action--rate{margin-left:2px}
+  .feed-action.muted{opacity:.35}
+  .feed-action--save{margin-left:auto}
+  .mention-link{border:none;background:none;padding:0;font:inherit;font-weight:700;color:#6B5080;cursor:pointer}
+  .mention-link--author{color:var(--text-primary)}
+  .media-overlay{position:absolute;z-index:4;max-width:88%;pointer-events:none;touch-action:none}
+  .media-overlay--edit,.media-overlay--tag{pointer-events:auto;touch-action:none}
+  .media-overlay--edit.selected{touch-action:none}
+  .story-slide .media-overlay--tag{pointer-events:auto;z-index:8;cursor:pointer;touch-action:manipulation}
+  .media-overlay--edit.selected{outline:2px solid rgba(255,255,255,.92);outline-offset:6px;border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.35)}
+  .media-overlay--edit{padding:10px 14px;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;position:absolute}
+  .overlay-drag-handle{position:absolute;bottom:-38px;left:50%;transform:translateX(-50%);width:44px;height:44px;border-radius:14px;border:none;background:rgba(255,255,255,.95);color:#6B5080;display:grid;place-items:center;cursor:grab;box-shadow:0 6px 20px rgba(0,0,0,.28);touch-action:none}
+  .overlay-drag-handle:active{cursor:grabbing}
+  .overlay-delete-btn{position:absolute;top:-12px;right:-12px;width:28px;height:28px;border-radius:50%;border:none;background:#FF7FA6;color:#fff;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+  .media-overlay-inline-edit{background:transparent;border:none;outline:none;font:inherit;font-weight:800;text-shadow:0 2px 12px rgba(0,0,0,.55);min-width:48px;max-width:min(80vw,280px);padding:2px 6px}
+  .compose-sticker-emoji span{font-size:28px;line-height:1}
+  .story-editor-overlay-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(0,0,0,.72);border-top:1px solid rgba(255,255,255,.08)}
+  .story-editor-overlay-bar .compose-overlay-bar-hint{color:rgba(255,255,255,.75)}
+  .story-editor-overlay-bar .compose-icon-btn{background:rgba(255,255,255,.12);color:#fff;border:none}
+  .story-editor-overlay-bar .compose-icon-btn.danger-soft{background:rgba(255,90,120,.35)}
+  .compose-overlay-bar{display:flex;align-items:center;gap:8px;margin:8px 0;padding:10px 12px;border-radius:16px;background:linear-gradient(135deg,#FFF8FC,#F5EEFF);border:1px solid rgba(183,156,240,.22)}
+  .compose-overlay-bar-hint{flex:1;font-size:11px;font-weight:700;color:#8C6BD8;min-width:0}
+  .compose-icon-btn.danger-soft{background:#FFF0F3;color:#C45A6A}
+  .media-overlay--tag{border:none;background:rgba(0,0,0,.35);backdrop-filter:blur(6px);padding:6px 12px;border-radius:999px;cursor:pointer}
+  .media-overlay-text{font-size:1.05rem;font-weight:800;line-height:1.3;text-shadow:0 2px 12px rgba(0,0,0,.55);word-break:break-word;display:block}
+  .media-overlay-loc{display:inline-flex;align-items:center;gap:5px;font-size:.95rem;font-weight:800;text-shadow:0 2px 12px rgba(0,0,0,.55);background:rgba(0,0,0,.28);padding:6px 12px;border-radius:999px;backdrop-filter:blur(4px)}
+  .media-overlay-tag{font-size:.9rem;font-weight:800;color:#fff}
+  .compose-head{display:flex;justify-content:center;gap:10px;margin-bottom:10px}
+  .compose-head-tab{width:44px;height:44px;border-radius:50%;border:1.5px solid #EBD9F0;background:#fff;color:#9B8FA8;display:grid;place-items:center;cursor:pointer}
+  .compose-head-tab.on{background:linear-gradient(135deg,#FF9DC0,#B79CF0);border-color:transparent;color:#fff}
+  .compose-top-bar{display:flex;justify-content:center;align-items:center;gap:10px;margin-bottom:10px}
+  .compose-top-btn{width:44px;height:44px;border-radius:14px;border:none;background:#F0E8FA;color:#7A6A86;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .compose-top-btn:disabled{opacity:.35;cursor:not-allowed}
+  .compose-top-btn.publish{background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff;box-shadow:0 4px 14px rgba(140,100,160,.22)}
+  .compose-top-btn.publish:disabled{opacity:.45}
+  .compose-camera{position:relative;width:100%;aspect-ratio:3/4;max-height:min(62vh,520px);background:#111;border-radius:20px;overflow:hidden;margin:0 auto}
+  .compose-camera-video{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0}
+  .compose-camera-rec-overlay{position:absolute;top:max(60px,env(safe-area-inset-top));left:14px;right:14px;z-index:6;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .compose-camera-rec-badge{padding:6px 10px;border-radius:999px;background:rgba(255,77,109,.88);color:#fff;font-size:11px;font-weight:800;letter-spacing:.04em}
+  .compose-camera-boomerang-end{border:none;background:rgba(255,255,255,.92);color:#262626;font-size:12px;font-weight:700;padding:8px 14px;border-radius:999px;cursor:pointer;margin-left:auto}
+  .compose-camera-controls{display:flex;justify-content:center;align-items:center;gap:28px;padding:0 8px}
+  .compose-camera-side{width:44px;height:44px;border-radius:12px;border:none;background:rgba(255,255,255,.18);color:#fff;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(6px)}
+  .compose-shutter{width:68px;height:68px;border-radius:50%;border:4px solid #fff;background:transparent;cursor:pointer;touch-action:none;box-shadow:0 0 0 3px rgba(255,255,255,.35);padding:0}
+  .compose-shutter.recording{background:#FF4D6D;border-color:#FFB3C6;animation:shutterRec 1s ease infinite}
+  .compose-camera-hint{text-align:center;font-size:11px;font-weight:700;color:#9B8FA8;margin:8px 0 0}
+  .compose-camera-fallback{display:block;margin:10px auto 0;border:none;background:transparent;color:#8C6BD8;font-size:12px;font-weight:700;cursor:pointer;text-decoration:underline}
+  .compose-camera-overlay{position:fixed;inset:0;z-index:12000;background:#000;display:flex;flex-direction:column;justify-content:center;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom))}
+  .compose-camera-overlay .compose-camera{max-height:78vh;aspect-ratio:9/16;width:100%;border-radius:16px}
+  @keyframes shutterRec{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+  .compose-canvas-actions{display:flex;justify-content:center;gap:12px;margin-top:6px}
+  .compose-tool-icons{align-items:center}
+  .compose-icon-btn{width:36px;height:36px;border-radius:50%;border:none;background:#F5F0FA;color:#7A6A86;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .compose-icon-btn.on{background:linear-gradient(120deg,#FFD1E1,#E0D2FB);color:#6B5080}
+  .compose-tool-sep{width:1px;height:22px;background:#E8E0EE;margin:0 4px;flex-shrink:0}
+  .compose-overlay-edit{position:absolute;transform:translate(-50%,-50%);z-index:5;background:transparent;border:none;outline:none;font-size:1.05rem;font-weight:800;text-shadow:0 2px 12px rgba(0,0,0,.55);min-width:40px;max-width:80%;padding:4px 8px}
+  .compose-tag-picker,.compose-desc-wrap{position:relative;margin-top:8px}
+  .compose-tag-search,.compose-caption-input{width:100%;border:none;border-bottom:1px solid #E8E0EE;padding:10px 4px;font-size:14px;background:transparent}
+  .compose-tag-search:focus,.compose-caption-input:focus{outline:none;border-color:#B79CF0}
+  .compose-tag-results,.compose-mention-drop{max-height:140px;overflow-y:auto;margin-top:6px;border-radius:14px;background:#FBF6FB;border:1px solid #F0E6F0}
+  .compose-tag-row{display:flex;align-items:center;gap:10px;width:100%;border:none;background:transparent;padding:10px 12px;text-align:left;font:inherit;cursor:pointer}
+  .compose-tag-row:active{background:rgba(183,156,240,.12)}
+  .story-rate-ic{margin-left:auto;border:none;background:rgba(255,255,255,.2);backdrop-filter:blur(8px);width:40px;height:40px;border-radius:50%;display:grid;place-items:center;cursor:pointer}
+  .story-rate-ic.muted{opacity:.35}
+  .feed-post-badge--story,.feed-post-badge--ig,.feed-post-badge--premium{padding:5px 7px;gap:0;font-size:0;min-width:26px;justify-content:center}
+  .feed-toast{position:sticky;top:0;z-index:6;margin:0 0 10px;padding:10px 14px;border-radius:14px;background:rgba(38,38,38,.92);color:#fff;font-size:13px;font-weight:600;text-align:center;letter-spacing:-.01em;animation:feedToastIn .25s ease}
+  @keyframes feedToastIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+  .post-comments-modal{max-height:min(78vh,640px);display:flex;flex-direction:column}
+  .post-comments-body{flex:1;overflow:auto;min-height:120px}
+  .post-comments-post{display:flex;gap:10px;align-items:flex-start;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid #F0F0F0}
+  .post-comments-post p{margin:4px 0 0;font-size:13px;line-height:1.45;color:var(--text-secondary)}
+  .post-comments-empty{text-align:center;padding:20px 0;font-size:13px}
+  .post-comments-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+  .post-comments-list li{font-size:14px;line-height:1.45;color:var(--text-primary);letter-spacing:-.01em}
+  .post-comments-list b{font-weight:600;margin-right:6px}
+  .post-comments-compose{display:flex;gap:8px;padding:12px 16px;border-top:1px solid #F0F0F0;background:#FFFBFE}
+  .post-comments-compose input{flex:1;border:1px solid #EFEFEF;border-radius:999px;padding:10px 14px;font-family:var(--font-sans);font-size:14px;outline:none;background:#FAFAFA;color:var(--text-primary);letter-spacing:-.01em}
+  .post-comments-send{width:auto!important;min-width:44px;padding:10px 14px!important;border-radius:999px!important}
+  .feed-rate-row{margin-top:4px}
+  .feed-rate-pill{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;padding:10px 16px;border-radius:999px;font-weight:800;font-size:12.5px;cursor:pointer;
+    background:linear-gradient(120deg,#FF9DC0,#B79CF0);color:#fff;box-shadow:0 8px 22px rgba(200,120,180,.35);transition:transform .12s,box-shadow .2s}
+  .feed-rate-pill--wide{width:100%}
+  .feed-rate-pill:active{transform:scale(.96)}
+  .feed-rate-pill--blocked{opacity:.42;filter:grayscale(.25)}
+  .feed-rate-hint{font-size:11px;color:#8C6BD8;margin:6px 0 0;text-align:center;line-height:1.45;padding:0 8px}
+  .feed-rate-pill--open{background:linear-gradient(120deg,#EFE9FF,#E8F4FF);color:#7B6A96;box-shadow:none;cursor:default}
+  .feed-post-caption{font-size:14px;line-height:1.4;margin:0 0 8px;color:var(--text-primary);letter-spacing:-.01em;font-weight:400}
+  .feed-post-caption b{font-weight:600}
+  .feed-post-foot{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);margin:0;line-height:1.4;letter-spacing:-.005em}
+  .feed-filter-banner{display:flex;gap:12px;align-items:flex-start;padding:16px;border-radius:22px;margin-top:8px;
+    background:linear-gradient(135deg,#F3ECFF,#FFF4F8);border:1px solid #E8DFF5}
+  .feed-filter-banner-icon{width:40px;height:40px;border-radius:14px;background:linear-gradient(135deg,#B79CF0,#8C6BD8);display:grid;place-items:center;flex-shrink:0}
+  .feed-filter-banner b{display:block;font-size:13.5px;color:#5A4A60;margin-bottom:4px}
+  .feed-filter-banner p{margin:0;font-size:12px;color:#7B6A86;line-height:1.45}
+  .phone.calm .feed-post{animation:none}
+  
+  .tabbar span{font-size:10.5px;font-weight:600;letter-spacing:-.015em;color:var(--text-secondary)}
+  .tab.on span{color:var(--text-primary);font-weight:700}
+  .wordmark{font-family:var(--font-display);font-weight:800;font-size:34px;letter-spacing:-.05em;
+    background:linear-gradient(120deg,#FF8FB1,#B79CF0,#7FB8F0);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .wordmark.sm{font-size:21px}
+  
+  /* screen titles */
+  .screen-title{display:flex;align-items:center;gap:12px;padding:4px 2px 20px;margin:0}
+  .screen-title-h{margin:0;font-family:var(--font-display);font-size:22px;font-weight:800;color:var(--text-primary);letter-spacing:-.035em;line-height:1.2;flex:1;min-width:0}
+  .page-empty-hint{margin:0 2px 16px;font-size:13px;font-weight:500;color:var(--text-muted);text-align:center;letter-spacing:-.012em}
+
+  /* status bar */
+  .statusbar{height:54px;flex-shrink:0;display:flex;align-items:center;gap:6px;padding:0 12px;overflow:hidden;
+    background:rgba(255,255,255,.92);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid rgba(0,0,0,.06);z-index:6}
+  .statusbar-left{display:flex;align-items:center;gap:6px;min-width:0;flex:1;overflow:hidden}
+  .statusbar-right{display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:auto;padding-right:6px}
+  .lensbtn:not(.on){background:linear-gradient(135deg,#FFF4F8,#EFE9FF);border:1px solid rgba(183,156,240,.4);color:#8C6BD8;box-shadow:0 2px 10px rgba(140,100,160,.14)}
+  .langtabs-status{flex:1;min-width:0;max-width:100%;flex-wrap:nowrap!important;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-webkit-overflow-scrolling:touch;align-self:center}
+  .langtabs-status::-webkit-scrollbar{display:none}
+  .statusbar-install{display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border-radius:999px;border:1.5px solid #E8DFF5;background:linear-gradient(135deg,#FFF4F8,#EFE9FF);color:#6B5080;font-weight:800;font-size:10.5px;cursor:pointer;white-space:nowrap;flex-shrink:0}
+  .statusbar-install:active{transform:scale(.96)}
+  .livedot{width:8px;height:8px;border-radius:50%;background:#5fd6a0;box-shadow:0 0 0 0 rgba(95,214,160,.6);animation:pulsering 1.8s infinite}
+  .lensbtn{width:32px;height:32px;border-radius:11px;border:none;background:#F3ECF3;color:#9B8FA8;display:grid;place-items:center;cursor:pointer;transition:.2s}
+  .lensbtn.on{background:linear-gradient(135deg,#B79CF0,#7FB8F0);color:#fff}
+  .mini-score{display:inline-flex;align-items:center;gap:4px;font-family:var(--font-display);font-weight:700;font-size:12.5px;padding:5px 11px;border-radius:20px;letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+  
+  /* cards & layout */
+  .card{background:rgba(255,255,255,.88);border-radius:18px;padding:15px 16px;margin-bottom:12px;box-shadow:0 6px 20px rgba(120,90,140,.06);border:1px solid rgba(183,156,240,.14);transition:transform .12s}
+  .card:active{transform:scale(.992)}
+  .card.row{display:flex;align-items:center;gap:14px;padding:14px 16px}
+  .friend-row{display:grid;grid-template-columns:52px minmax(0,1fr) auto;align-items:center;gap:12px 14px;padding:14px 16px}
+  .friend-row-main{min-width:0;overflow:hidden;display:flex;flex-direction:column;gap:3px}
+  .friend-row-name{display:flex;align-items:center;gap:8px;min-width:0}
+  .friend-row-name b{font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+  .friend-row-handle{display:block;font-size:12.5px;font-weight:500;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.01em}
+  .friend-row-score{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;color:var(--text-secondary)}
+  .friend-row-actions{display:flex;gap:6px;flex-shrink:0;align-items:center;padding-left:4px}
+  .friend-row-actions .icbtn{width:36px;height:36px;flex-shrink:0}
+  .statusbar-left{display:flex;align-items:center;gap:8px}
+  .statusbar-docs{width:32px;height:32px;border-radius:10px;border:none;background:rgba(255,255,255,.72);display:grid;place-items:center;color:#6B5080;cursor:pointer;flex-shrink:0;box-shadow:0 2px 10px rgba(120,90,140,.08)}
+  .statusbar-docs:active{transform:scale(.96)}
+  .statusbar-profile{width:32px;height:32px;border-radius:10px;border:1px solid rgba(183,156,240,.35);background:rgba(255,251,254,.9);display:grid;place-items:center;color:#9B7FD4;cursor:pointer;flex-shrink:0}
+  .statusbar-profile:active{transform:scale(.96)}
+  .viewfinder-panel{display:flex;flex-direction:column;flex:1;min-height:0;padding:0 0 12px;gap:10px}
+  .viewfinder-toolbar{display:flex;align-items:center;gap:10px;flex-shrink:0;padding:0 max(14px,env(safe-area-inset-left)) 0 max(14px,env(safe-area-inset-right))}
+  .viewfinder-panel .lens-toggle-chip{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:999px;border:2px solid rgba(183,156,240,.4);background:linear-gradient(135deg,#FFF8FC,#EDE4FA);color:#6B5080;font-size:13px;font-weight:800;letter-spacing:-.015em;cursor:pointer;font-family:var(--font-sans);flex-shrink:0;box-shadow:0 3px 14px rgba(140,100,160,.18);margin-right:14px;transition:transform .15s ease,box-shadow .15s ease}
+  .viewfinder-panel .lens-toggle-chip.on{background:linear-gradient(135deg,#5fd6a0,#3cb371);border-color:#2d9d5f;color:#fff;box-shadow:0 2px 14px rgba(61,179,113,.35)}
+  .viewfinder-panel .lens-toggle-chip:active{transform:scale(.96)}
+  .viewfinder-search{flex:1;margin:0}
+  .viewfinder-privacy{display:flex;align-items:flex-start;gap:12px;margin:0 max(14px,env(safe-area-inset-left)) 10px max(14px,env(safe-area-inset-right));padding:14px 15px;background:linear-gradient(135deg,#FBF7FE 0%,#F4F0FA 100%);border:1px solid rgba(183,156,240,.18);border-radius:16px;box-shadow:0 4px 16px rgba(140,100,160,.06)}
+  .viewfinder-privacy-pin{flex-shrink:0;margin-top:2px}
+  .viewfinder-privacy-copy{flex:1;min-width:0}
+  .viewfinder-privacy-lead{margin:0;font-size:11.5px;line-height:1.5;color:#5A4A60;font-weight:600}
+  .viewfinder-privacy-settings{margin-top:12px;padding-top:12px;border-top:1px solid rgba(183,156,240,.14)}
+  .viewfinder-privacy-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .viewfinder-privacy-toggle span{font-size:12px;font-weight:800;color:#3D3048;line-height:1.35}
+  .viewfinder-privacy-sub{display:block;margin-top:8px;font-size:10.5px;line-height:1.45;color:#8C6BD8;font-weight:700}
+  .viewfinder-empty{text-align:center;padding:8px 14px 0;font-size:12px}
+  .viewfinder-map-wrap{flex:1;min-height:280px;border-radius:0;overflow:hidden;border:none;border-top:1px solid #ECE8EF;border-bottom:1px solid #ECE8EF;box-shadow:none;position:relative}
+  .viewfinder-map{width:100%;height:100%;min-height:280px;z-index:0}
+  .viewfinder-loading{position:absolute;inset:0;display:grid;place-items:center;background:rgba(255,251,254,.85);z-index:2}
+  .viewfinder-detail{display:flex;align-items:center;gap:14px;padding:14px 16px;flex-shrink:0;margin:8px max(14px,env(safe-area-inset-left)) 0 max(14px,env(safe-area-inset-right));border-radius:16px;border:1px solid #ECE8EF;box-shadow:0 6px 18px rgba(120,90,140,.06)}
+  .viewfinder-hint{padding:8px max(14px,env(safe-area-inset-left)) 4px max(14px,env(safe-area-inset-right));font-size:11.5px;line-height:1.45}
+  .viewfinder-detail-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .viewfinder-detail-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .viewfinder-hint{text-align:center;font-size:12px;padding:4px 8px 0;margin:0}
+  .viewfinder-geo-warn{font-size:11px;color:#c45;text-align:center;margin:0}
+  .viewfinder-cooldown{font-size:11px;color:#C9B8C6}
+  .viewfinder-muted{font-size:11px;color:#C9B8C6;max-width:88px;text-align:right;line-height:1.3}
+  .leaflet-div-icon.vf-marker-icon{background:transparent!important;border:none!important}
+  .vf-pin{position:relative;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;border:3px solid #fff;box-shadow:0 6px 18px rgba(0,0,0,.28);overflow:hidden;background:linear-gradient(135deg,#FFE9F5,#E8DEFF) center/cover no-repeat;cursor:pointer;transition:transform .2s cubic-bezier(.34,1.4,.64,1)}
+  .vf-pin-has-img{background-size:cover;background-position:center}
+  .vf-pin:hover{transform:scale(1.08)}
+  .vf-pin-img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;position:relative;z-index:1}
+  .vf-pin-letter{font-size:16px;font-weight:800;color:#6B5080;z-index:1}
+  .vf-pin-emoji{font-size:22px;line-height:1;z-index:1}
+  .vf-pin-fallback{background:linear-gradient(135deg,#FFE9F5,#E8DEFF)}
+  .leaflet-tooltip.vf-tooltip{background:rgba(58,40,72,.92);color:#fff;border:none;border-radius:10px;padding:6px 10px;font-weight:700;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.2)}
+  .vf-pin-ring{position:absolute;inset:-4px;border-radius:50%;border:2px solid transparent;pointer-events:none}
+  .vf-pin-glow-high .vf-pin-ring{border-color:rgba(255,213,107,.95);box-shadow:0 0 16px rgba(255,213,107,.65),0 0 28px rgba(255,200,80,.35)}
+  .vf-pin-glow-mid .vf-pin-ring{border-color:rgba(183,156,240,.85);box-shadow:0 0 12px rgba(183,156,240,.5)}
+  .vf-pin-glow-low .vf-pin-ring{border-color:rgba(126,207,184,.7);box-shadow:0 0 8px rgba(126,207,184,.35)}
+  .vf-pin-glow-soft .vf-pin-ring{border-color:rgba(255,184,208,.55);box-shadow:0 0 6px rgba(255,184,208,.25)}
+  .vf-pin-on{transform:scale(1.1);z-index:10}
+  .vf-party-pin{width:42px;height:42px;border-radius:10px;display:grid;place-items:center;border:3px solid #fff;background:linear-gradient(135deg,#FFF0F6,#E8DEFF);box-shadow:0 6px 18px rgba(140,90,160,.32);cursor:pointer;transition:transform .2s cubic-bezier(.34,1.4,.64,1);font-size:22px;line-height:1}
+  .vf-party-pin:hover{transform:scale(1.06)}
+  .vf-party-pin-on{transform:scale(1.1);z-index:11;box-shadow:0 8px 22px rgba(183,156,240,.45)}
+  .vf-tooltip--party{font-weight:800}
+  .feed-post-badge--ig-left{left:12px!important;right:auto!important;top:12px}
+  .portfolio-empty{display:flex;align-items:center;gap:10px;justify-content:center;padding:20px;font-size:13px;font-weight:600;color:#8C6BD8}
+  .onb-handle-wrap{display:flex;align-items:stretch;border-radius:14px;border:1.5px solid #EBD9F0;background:#fff;overflow:hidden}
+  .onb-handle-at{display:grid;place-items:center;padding:0 12px;font-weight:800;color:#B79CF0;background:linear-gradient(135deg,#FFF4F8,#EFE9FF);font-size:15px}
+  .onb-input-handle{border:none!important;border-radius:0!important;flex:1}
+  .onb-birth-wheel{max-height:140px;margin-bottom:8px;border-radius:14px;border:1px solid #EBD9F0;overflow:hidden;background:#FFFBFE}
+  .friend-row-link{display:flex;flex-direction:column;align-items:flex-start;flex:1;min-width:0;border:none;background:transparent;cursor:pointer;font:inherit;padding:0;text-align:left}
+  .friend-request-meta{flex:1;min-width:0;border:none;background:transparent;cursor:pointer;font:inherit;padding:0;text-align:left}
+  .spark-filter-block{display:flex;flex-direction:column;gap:8px;padding:10px 0;border-bottom:1px solid rgba(240,230,245,.8)}
+  .spark-filter-block:last-child{border-bottom:none;padding-bottom:0}
+  .spark-filter-label{font-size:12px;font-weight:800;color:#6B5080}
+  .spark-star-preview{display:flex;align-items:center;gap:4px}
+  .spark-star-preview b{margin-left:6px;font-size:12px;color:#8C6BD8}
+  .spark-range-row{display:flex;align-items:center;gap:10px;font-size:11px;font-weight:700;color:#9B8FA8}
+  .spark-range-row input{flex:1;accent-color:#B79CF0;height:6px}
+  .spark-range-dual{display:flex;flex-direction:column;gap:6px}
+  .spark-range-dual input{width:100%;accent-color:#FF9DC0;height:6px}
+  .spark-range-val{font-size:12px;font-weight:800;color:#8C6BD8;text-align:center}
+  .spark-gender-tabs{display:flex;gap:8px}
+  .spark-gender-tab{flex:1;border:none;border-radius:12px;padding:10px 8px;font-size:11px;font-weight:800;background:#F5F0FA;color:#8C6BD8;cursor:pointer}
+  .spark-gender-tab.on{background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff;box-shadow:0 4px 12px rgba(140,100,160,.2)}
+  .post-viewer-foot{font-family:var(--font-sans)}
+  .post-viewer-meta b,.post-viewer-meta p,.post-comments-list li{font-family:var(--font-sans);letter-spacing:-.02em}
+  .post-viewer-ig-badge{position:absolute;top:calc(18px + env(safe-area-inset-top,0px));left:18px;z-index:6;width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888);color:#fff;display:grid;place-items:center;box-shadow:0 4px 18px rgba(0,0,0,.3)}
+  .ig-import-options{display:flex;flex-direction:column;gap:8px}
+  .ig-import-opt{padding:12px 14px;border-radius:14px;border:1.5px solid #F0E6F0;background:#FFFBFE;text-align:left;font-size:13px;font-weight:700;color:#5A4A60;cursor:pointer}
+  .ig-import-opt.on{border-color:#C13584;background:linear-gradient(135deg,#FFF0F6,#FBE3F0);color:#9B3060;box-shadow:0 4px 14px rgba(193,53,132,.15)}
+  .party-guest-list{margin-top:12px;padding:12px}
+  .party-guest-list-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .party-guest-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto}
+  .party-guest-rows li{display:flex;align-items:center;gap:10px;padding:8px;border-radius:12px;background:#FFFBFE}
+  .party-guest-rank{width:22px;font-size:11px;font-weight:800;color:#B79CF0;text-align:center}
+  .party-guest-score{margin-left:auto;font-weight:800;color:#6B5080;font-size:13px}
+  .party-guest-export{display:flex;gap:8px;margin-top:10px}
+  .compose-stickers-panel{display:flex;flex-direction:column;gap:6px}
+  .compose-sticker-search{width:100%;padding:8px 12px;border-radius:12px;border:1px solid #F0E6F0;font-size:12px;font-family:var(--font-sans)}
+  .story-editor-panel .compose-sticker-search{border-color:rgba(255,255,255,.16);background:rgba(255,255,255,.08);color:#fff}
+  .story-editor-panel .compose-sticker-search::placeholder{color:rgba(255,255,255,.45)}
+  .compose-sticker-img{width:56px;height:56px;border:none;padding:4px;border-radius:14px;background:#fff;cursor:pointer;flex-shrink:0}
+  .compose-stickers--grid{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;max-height:min(34vh,200px);overflow-y:auto;overflow-x:hidden;scrollbar-width:none;-ms-overflow-style:none}
+  .compose-stickers--grid::-webkit-scrollbar{display:none}
+  .compose-stickers--grid .compose-sticker-img{width:100%;height:auto;aspect-ratio:1}
+  .compose-stickers--grid .compose-sticker-img img{width:100%;height:100%;object-fit:cover;border-radius:10px}
+  .compose-sticker-upload{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;aspect-ratio:1;border:2px dashed rgba(255,255,255,.28);border-radius:14px;background:rgba(255,255,255,.06);color:#fff;cursor:pointer;font-size:9px;font-weight:700;padding:6px}
+  .story-editor-panel .compose-sticker-upload{border-color:rgba(255,255,255,.35)}
+  .compose-stickers-panel .compose-sticker-upload{border-color:rgba(140,107,216,.35);color:#5A4A60;background:#F8F4FC}
+  .compose-sticker-loading{grid-column:1/-1;display:grid;place-items:center;padding:12px}
+  .media-overlay-sticker{width:88px;height:88px;max-width:40vw;max-height:40vw;object-fit:contain;pointer-events:none;filter:drop-shadow(0 4px 12px rgba(0,0,0,.35))}
+  .story-more-tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .story-more-tool{display:flex;align-items:center;gap:8px;border:none;background:rgba(255,255,255,.1);color:#fff;padding:10px 12px;border-radius:12px;cursor:pointer;font-size:12px;font-weight:600}
+  .mentions-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:0 max(10px,env(safe-area-inset-left)) 0 max(10px,env(safe-area-inset-right))}
+  .mentions-tile{position:relative;aspect-ratio:3/4;border:none;border-radius:12px;overflow:hidden;background:#1a1228;cursor:pointer;padding:0}
+  .mentions-tile img,.mentions-tile video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .mentions-tile-by{position:absolute;left:6px;bottom:6px;z-index:2;padding:3px 6px;border-radius:6px;background:rgba(12,8,20,.72);color:#fff;font-size:9px;font-weight:700}
+  .mentions-viewer-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}
+  .mentions-viewer-head h3{margin:0;font-size:16px;font-weight:800;color:#1A1520}
+  .mentions-viewer-focus{margin-bottom:12px}
+  .mentions-viewer-media{display:block;width:100%;aspect-ratio:4/5;border:none;border-radius:14px;overflow:hidden;padding:0;background:#111;cursor:pointer}
+  .mentions-viewer-media img,.mentions-viewer-media video{width:100%;height:100%;object-fit:cover;display:block}
+  .mentions-viewer-meta{font-size:12px;color:#5A4A60;margin:8px 0}
+  .mentions-viewer-author{border:none;background:none;padding:0;font:inherit;font-weight:800;color:#8C6BD8;cursor:pointer}
+  .mentions-viewer-remove{display:inline-flex;align-items:center;gap:6px;width:100%;margin-top:4px}
+  .mentions-viewer-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;max-height:min(36vh,240px);overflow-y:auto;scrollbar-width:none}
+  .mentions-viewer-grid::-webkit-scrollbar{display:none}
+  .mentions-viewer-thumb{position:relative;aspect-ratio:1;border:none;border-radius:10px;overflow:hidden;padding:0;background:#F4F0F8;cursor:pointer}
+  .mentions-viewer-thumb.on{box-shadow:0 0 0 2px #8C6BD8}
+  .mentions-viewer-thumb img,.mentions-viewer-thumb video{width:100%;height:100%;object-fit:cover;display:block}
+  .ig-notif-mention-link{border:none;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left}
+  .compose-sticker-img img{width:100%;height:100%;object-fit:contain}
+  .spark-filters--fun{background:linear-gradient(145deg,#FFF8FC,#F5EEFF 55%,#FFE9F5);border:1px solid rgba(255,126,179,.25);box-shadow:0 12px 32px rgba(255,126,179,.12);animation:slideUp .22s ease}
+  .spark-filters--fun input[type=range]{accent-color:#FF7EB3;height:6px}
+  .spark-filters--fun .spark-filter-label{color:#9B3060}
+  @keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  .post-viewer-media-stage .feed-post-badge--ig{display:none}
+  .vf-you{width:18px;height:18px;border-radius:50%;background:#fff;border:3px solid #7FB8F0;box-shadow:0 0 0 4px rgba(127,184,240,.25)}
+  .spark-head-actions{display:flex;align-items:center;gap:8px}
+  .spark-filter-btn{width:36px;height:36px;border-radius:12px;border:1px solid rgba(183,156,240,.35);background:#FFFBFE;display:grid;place-items:center;color:#9B7FD4;cursor:pointer}
+  .spark-filters-scroll{flex-shrink:0;max-height:min(52vh,420px);overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;margin:0 0 8px}
+  .spark-filters-scroll .spark-filters{margin:0 16px 10px}
+  .spark-filter-block{display:flex;flex-direction:column;gap:8px}
+  .spark-min-stars{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+  .spark-min-star{border:none;background:transparent;padding:2px;cursor:pointer;border-radius:8px;line-height:0}
+  .spark-min-star:active{transform:scale(.92)}
+  .spark-preset-row{display:flex;flex-wrap:wrap;gap:8px}
+  .spark-preset-chip{border:1px solid #EFEFEF;background:#F5F5F5;color:#262626;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
+  .spark-preset-chip.on{background:#262626;color:#fff;border-color:#262626}
+  .spark-height-chips{display:flex;flex-wrap:wrap;gap:8px}
+  .spark-height-chip{border:1px solid #EFEFEF;background:#F5F5F5;border-radius:999px;padding:8px 14px;font-size:12px;font-weight:700;color:#262626;cursor:pointer;white-space:nowrap}
+  .spark-height-chip.on{background:#262626;color:#fff;border-color:#262626}
+  .spark-filter-hint{font-size:11px;margin:4px 0 0}
+  .spark-range-val{font-size:12px;font-weight:800;color:#262626}
+  .spark-filters{margin:0 16px 10px;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+  .spark-filters-title{font-size:13px;font-weight:800;margin:0 0 4px;color:var(--text-primary)}
+  .spark-filter-row{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:var(--text-secondary)}
+  .spark-filter-range{display:flex;align-items:center;gap:8px}
+  .spark-filter-range input[type=number]{width:72px;padding:6px 8px;border-radius:10px;border:1px solid rgba(183,156,240,.3);font-size:13px;font-weight:700}
+  .spark-filter-row input[type=range]{width:100%}
+  .spark-likes-banner{display:flex;align-items:center;gap:8px;margin:0 16px 10px;padding:10px 14px;border-radius:14px;background:linear-gradient(135deg,#FFF0F6,#F5EEFF);font-size:13px;font-weight:700;color:#B79CF0}
+  .spark-height-gate{margin:12px 16px;padding:24px 20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px}
+  .spark-height-gate h3{margin:0;font-size:17px}
+  .spark-height-input{display:flex;align-items:center;gap:8px;margin:8px 0}
+  .spark-height-input input{width:100px;padding:10px 12px;border-radius:12px;border:1px solid rgba(183,156,240,.35);font-size:18px;font-weight:800;text-align:center}
+  .ech-docs-btn:active{transform:scale(.96)}
+  .echelon-guide{position:relative;max-height:min(92vh,720px);padding:0;overflow:hidden;display:flex;flex-direction:column;border-radius:0}
+  .echelon-guide-hero{position:relative;padding:20px 18px 18px;background:linear-gradient(135deg,#B79CF0 0%,#FF8FB1 55%,#FFD56B 100%);color:#fff;display:flex;align-items:flex-start;gap:14px;flex-shrink:0;border-radius:0}
+  .echelon-guide-hero h3{margin:0 0 6px;font-size:18px;font-weight:800;letter-spacing:-.03em;color:#fff}
+  .echelon-guide-hero p{margin:0;font-size:13px;line-height:1.5;opacity:.92;color:#fff}
+  .echelon-guide-hero-icon{width:44px;height:44px;border-radius:14px;background:rgba(255,255,255,.22);display:grid;place-items:center;flex-shrink:0;backdrop-filter:blur(6px)}
+  .echelon-guide-scroll{padding:14px 16px 16px;background:linear-gradient(180deg,#FFFBFE 0%,#F8F2FF 100%)}
+  .echelon-guide-tipcard{width:100%;display:flex;align-items:flex-start;gap:10px;padding:12px 14px;margin-bottom:12px;border-radius:16px;border:1px solid rgba(183,156,240,.2);background:linear-gradient(135deg,#FFF8FC,#F3EEFF);cursor:pointer;text-align:left;font:inherit}
+  .echelon-guide-tipcard-label{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin-bottom:4px}
+  .echelon-guide-tipcard p{margin:0;font-size:12px;line-height:1.45;color:#6B5080;font-weight:600}
+  .echelon-guide-tier-pill{font-size:10px;font-weight:800;padding:3px 8px;border-radius:999px}
+  .echelon-guide-block-label{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin-bottom:8px}
+  .echelon-guide-tiers{margin-bottom:12px;padding:12px 14px;border-radius:16px;background:rgba(255,255,255,.75);border:1px solid rgba(183,156,240,.14)}
+  .echelon-guide-tier-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  .echelon-guide-tier-btn{display:inline-flex;align-items:center;gap:4px;border:1px solid rgba(183,156,240,.2);background:#fff;border-radius:999px;padding:6px 10px;font-size:10px;font-weight:800;color:var(--tier-ink,#6B5080);cursor:pointer}
+  .echelon-guide-tier-btn.on{background:var(--tier-soft,#F3EEFF);border-color:rgba(140,107,216,.35);box-shadow:0 4px 12px rgba(140,107,216,.12)}
+  .echelon-guide-tier-blurb{margin:0;font-size:12px;line-height:1.45;color:#6B5080;font-weight:600}
+  .echelon-guide-quiz{margin-bottom:12px;padding:14px 16px;border-radius:16px;background:linear-gradient(135deg,#FFF0F6,#EFE9FF);border:1px solid rgba(255,143,177,.22)}
+  .echelon-guide-quiz b{display:block;font-size:13px;color:#5A4A60;margin-bottom:10px}
+  .echelon-guide-quiz-row{display:flex;gap:8px}
+  .echelon-guide-quiz-btn{flex:1;border:1px solid rgba(183,156,240,.25);background:#fff;border-radius:12px;padding:10px;font-size:12px;font-weight:800;color:#6B5080;cursor:pointer}
+  .echelon-guide-quiz-btn.picked{background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff;border-color:transparent}
+  .echelon-guide-quiz-result{margin:10px 0 0;font-size:12px;font-weight:700;line-height:1.4}
+  .echelon-guide-quiz-result.right{color:#2E8B57}
+  .echelon-guide-quiz-result.wrong{color:#C44D6E}
+  .echelon-guide-section.open{box-shadow:0 8px 22px rgba(140,107,216,.1)}
+  .echelon-guide-section-head{width:100%;display:flex;align-items:center;gap:10px;margin-bottom:0;flex-wrap:wrap;border:none;background:transparent;padding:0;cursor:pointer;text-align:left;font:inherit}
+  .echelon-guide-section.open .echelon-guide-section-head{margin-bottom:8px}
+  .echelon-guide-chevron{margin-left:auto;color:#9B8FA8;transition:transform .18s ease;flex-shrink:0}
+  .echelon-guide-chevron.open{transform:rotate(180deg)}
+  .echelon-guide-section-body{padding-top:2px}
+  .echelon-guide-extra{margin-top:8px!important;font-size:12px!important;color:#8C6BD8!important;font-weight:600!important}
+  .echelon-guide-try{display:inline-flex;align-items:center;gap:4px;margin-top:10px;border:none;border-radius:999px;padding:8px 12px;background:linear-gradient(135deg,#B79CF0,#C9A0F0);color:#fff;font-size:11px;font-weight:800;cursor:pointer}
+  .echelon-guide-gates{margin:4px 0 12px;padding:12px 14px;border-radius:16px;background:rgba(255,255,255,.7);border:1px solid rgba(183,156,240,.14)}
+  .echelon-guide-gate{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(240,230,245,.8)}
+  .echelon-guide-gate:last-child{border-bottom:none;padding-bottom:0}
+  .echelon-guide-gate b{display:block;font-size:12px;color:#5A4A60}
+  .echelon-guide-gate span{font-size:10px;color:#9B8FA8;font-weight:700}
+  .echelon-guide-gate-ic{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;flex-shrink:0}
+  .echelon-guide-gate.on b{color:#4A3A58}
+  .echelon-guide-scorecard{margin-bottom:12px;padding:14px 16px;border-radius:18px;background:linear-gradient(135deg,#FFF8E6,#FFF0F6);border:1px solid rgba(232,184,74,.28);box-shadow:0 8px 24px rgba(200,148,26,.1)}
+  .echelon-guide-scorecard-main{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:6px}
+  .echelon-guide-scorecard-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4}
+  .echelon-guide-scorecard-main b{font-size:28px;font-weight:800;color:#5A4A60;letter-spacing:-.04em;font-family:var(--font-display)}
+  .echelon-guide-scorecard p{margin:0;font-size:12px;line-height:1.5;color:#6B5080;font-weight:600}
+  .echelon-guide-section{padding:14px 16px;margin-bottom:10px;text-align:left;border-radius:16px;background:var(--guide-tint,#fff);border:1px solid rgba(183,156,240,.18);box-shadow:0 4px 16px rgba(120,90,140,.06)}
+  .echelon-guide-section--core{border-color:rgba(140,107,216,.32);box-shadow:0 6px 20px rgba(140,107,216,.1)}
+  .echelon-guide-section-head{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+  .echelon-guide-icon{width:34px;height:34px;border-radius:11px;background:#fff;display:grid;place-items:center;box-shadow:0 2px 8px rgba(90,74,96,.08);flex-shrink:0}
+  .echelon-guide-section-head b,.echelon-guide-section b{display:block;font-size:14px;font-weight:800;color:var(--text-primary);letter-spacing:-.02em;flex:1;min-width:0;text-align:left}
+  .echelon-guide-core-pill{font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:rgba(140,107,216,.12);color:#8C6BD8}
+  .echelon-guide-section p{margin:0;font-size:13px;line-height:1.55;color:var(--text-secondary)}
+  .echelon-guide-footer{margin-top:4px;padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.75);border:1px solid rgba(183,156,240,.16)}
+  .echelon-guide-footer-label{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin-bottom:10px}
+  .echelon-guide-footer-links{display:flex;flex-wrap:wrap;gap:8px}
+  .echelon-guide-footer-links a,.echelon-guide-footer-links button{font-size:12px;font-weight:700;color:#8C6BD8;background:rgba(243,238,255,.9);border:1px solid rgba(183,156,240,.22);border-radius:999px;padding:7px 12px;cursor:pointer;text-decoration:none}
+  .ech-rate-score-compare{display:inline-flex;align-items:center;gap:6px;margin-top:10px;padding:8px 12px;border-radius:999px;background:#F8F2FF;border:1px solid rgba(183,156,240,.2);font-size:11px;font-weight:700;color:#6B5080}
+  .ech-rate-score-compare.ok{background:linear-gradient(135deg,#EEFAF4,#F3EEFF);border-color:rgba(46,204,113,.22)}
+  .ech-rate-score-compare.locked{background:linear-gradient(135deg,#FFF4F6,#F8F2FF);border-color:rgba(201,160,220,.28)}
+  .ech-rate-score-compare b{color:#5A4A60}
+  .ech-rate-modal-rule{margin:8px 0 0;font-size:10px;font-weight:600;color:#9B8FA8;line-height:1.4}
+  .ech-rate-overlay.locked{background:rgba(8,6,14,.72);border-color:rgba(201,160,220,.28);max-width:min(148px,calc(100% - 24px))}
+  .ech-rate-overlay-locked{display:inline-flex;align-items:center;gap:4px;font-size:8px;font-weight:700;color:rgba(255,255,255,.88);text-align:left;padding:2px 0;max-width:130px;line-height:1.25}
+  .card.row b{font-size:15px;font-weight:700;color:var(--text-primary);letter-spacing:-.025em;line-height:1.25}
+  .card.row .user-meta{display:block;font-size:13px;font-weight:500;color:var(--text-secondary);letter-spacing:-.012em;line-height:1.35;margin-top:2px}
+  .stat-hero{padding:16px 18px}
+  .stat-hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+  .stat-hero-label{display:block;font-size:13px;font-weight:600;color:var(--text-secondary);letter-spacing:-.012em;margin-bottom:4px}
+  .stat-hero-value{font-family:var(--font-display);font-weight:800;font-size:32px;letter-spacing:-.045em;line-height:1;font-variant-numeric:tabular-nums}
+  .stat-hero-value.good{color:#2E9B72}
+  .stat-hero-value.mid{color:#C9921A}
+  .stat-hero-value.low{color:#C45C6A}
+  .stat-hero-copy{flex:1;max-width:190px;margin:0;text-align:right;font-size:13px;font-weight:500;line-height:1.45;color:var(--text-secondary);letter-spacing:-.012em}
+  .title-ic{width:34px;height:34px;border-radius:12px;background:linear-gradient(135deg,#FF9DC0,#B79CF0);display:grid;place-items:center;box-shadow:0 6px 14px rgba(255,140,180,.35)}
+  .sectionlabel{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin:18px 2px 10px}
+  
+  /* tier pill */
+  .tierpill{display:inline-flex;align-items:center;gap:4px;border-radius:20px;font-weight:800;line-height:1}
+  
+  /* buttons */
+  .btn{width:100%;border:none;border-radius:18px;padding:14px;font-family:var(--font-sans);font-weight:800;font-size:15px;cursor:pointer;
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;transition:transform .12s, box-shadow .2s}
+  .btn:active{transform:scale(.97)}
+  .btn.primary{background:linear-gradient(120deg,#FF9DC0,#C6A0F0);color:#fff;box-shadow:0 12px 26px rgba(200,120,200,.36)}
+  .btn.soft{background:#F3ECF6;color:#7B6A86}
+  .btn.danger{background:linear-gradient(120deg,#E5A8A8,#D89BB0);color:#fff}
+  
+  .composer{width:100%;border:1.5px dashed #EBD7E4;background:#FFF8FC;border-radius:18px;padding:13px 16px;margin-bottom:12px;
+    display:flex;align-items:center;gap:9px;color:#B49AAC;font-weight:600;font-size:13.5px;cursor:pointer;text-align:left;border:none;font-family:var(--font-sans)}
+  .compose-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .compose-row .composer{margin-bottom:0}
+  .compose-post{color:#7B6A86}
+  .compose-story{color:#B07E96;background:#FFF4F8}
+  .compose-tabs{display:flex;gap:8px;margin-bottom:8px}
+  .compose-tab{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px;border-radius:14px;border:1.5px solid #EBD9F0;background:#fff;color:#9B8FA8;font-weight:800;font-size:12.5px;cursor:pointer}
+  .compose-tab.on{background:linear-gradient(135deg,#FF9DC0,#B79CF0);border-color:transparent;color:#fff}
+  .media-picker{width:100%;border:none;padding:0;background:none;cursor:pointer;border-radius:18px;overflow:hidden}
+  .media-picker-preview{width:100%;height:200px;object-fit:cover;display:block;border-radius:18px;background:#111}
+  .media-picker-empty{height:160px;border-radius:18px;border:2px dashed #EBD9F0;background:#FFF8FC;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#B49AAC;font-weight:700;font-size:13px}
+  .story-bar{display:flex;gap:14px;overflow-x:auto;padding:4px 2px 14px;margin-bottom:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .story-bar::-webkit-scrollbar{display:none}
+  .story-ring-wrap{flex:0 0 auto;background:none;border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0;width:68px}
+  .story-ring{width:60px;height:60px;border-radius:50%;padding:3px;background:linear-gradient(135deg,#FF9DC0,#B79CF0,#7FB8F0);display:grid;place-items:center;position:relative}
+  .story-ring.seen{background:#E8DFEA}
+  .story-ring.add{background:linear-gradient(135deg,#F5EFF8,#EFE9FF);border:2px dashed #D8C8E0;padding:0}
+  .story-add-inner{width:100%;height:100%;border-radius:50%;background:#FFFBFE;display:grid;place-items:center}
+  .story-add-ic{position:absolute;bottom:0;right:0;width:20px;height:20px;border-radius:50%;background:#8C6BD8;color:#fff;display:grid;place-items:center;border:2px solid #fff}
+  .story-label{font-size:10px;font-weight:700;color:#7B6A86;max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .post-media{width:100%;height:100%;object-fit:cover;display:block}
+  .post-story-badge{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;font-weight:800;padding:4px 8px;border-radius:999px}
+  .post-ig-badge{position:absolute;top:10px;right:10px;background:rgba(193,53,132,.85);color:#fff;font-size:9px;font-weight:800;padding:4px 7px;border-radius:999px;display:flex;align-items:center;gap:3px}
+  .ig-pill{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:800;color:#C13584;background:#FBE3F0;padding:2px 7px;border-radius:999px}
+  .rate-open-badge{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:800;color:#8C6BD8;background:#EFE9FF;padding:6px 10px;border-radius:999px}
+  .story-viewer{position:absolute;inset:0;z-index:30;background:#000;display:flex;flex-direction:column;animation:fade .2s}
+  .story-viewer-inner{width:100%;height:100%;max-height:100%;display:flex;flex-direction:column;position:relative;flex:1;min-height:0}
+  .story-progress{display:flex;gap:4px;padding:10px 12px 6px;z-index:2}
+  .story-progress-seg{flex:1;height:3px;border-radius:999px;background:rgba(255,255,255,.25);overflow:hidden}
+  .story-progress-seg.done{background:rgba(255,255,255,.85)}
+  .story-progress-seg.on{background:rgba(255,255,255,.28);position:relative;overflow:hidden}
+  .story-progress-fill{display:block;height:100%;width:0;background:#fff;border-radius:999px;animation:storyprogFill linear forwards}
+  @keyframes storyprogFill{from{width:0}to{width:100%}}
+  .story-viewer-head{display:flex;align-items:center;gap:8px;padding:8px 12px;z-index:2;color:#fff}
+  .story-viewer-head b{font-size:13px;color:#fff}
+  .story-slide{flex:1;min-height:0;position:relative;overflow:hidden;display:block;padding:0;margin:0;background:#000}
+  .story-slide-media{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:0;max-width:none;max-height:none}
+  .story-slide-fallback{position:absolute;inset:0;width:100%;height:100%;border-radius:0;display:grid;place-items:center}
+  .story-drag-stars{z-index:8}
+  .story-rate-hint{text-align:center;font-size:11px;font-weight:700;color:rgba(255,255,255,.72);padding:6px 12px 10px;margin:0;z-index:3}
+  .story-viewer-foot{display:none}
+  .story-tap-prev,.story-tap-next{position:absolute;top:72px;bottom:72px;width:30%;border:none;background:transparent;cursor:pointer;z-index:4}
+  .story-tap-prev{left:0}
+  .story-tap-next{right:0;width:70%}
+  .story-caption-overlay{position:absolute;left:12px;right:12px;bottom:18%;font-size:1.15rem;font-weight:700;line-height:1.35;text-shadow:0 2px 12px rgba(0,0,0,.55);pointer-events:none;word-break:break-word}
+  .story-rate-hint{font-size:10.5px;color:#FFD1E1;margin:4px 0 0;text-align:center;max-width:220px;line-height:1.35}
+  .ratebtn--blocked{opacity:.5}
+  .compose-canvas-wrap{margin:8px 0 10px}
+  .compose-canvas{position:relative;width:100%;aspect-ratio:9/16;max-height:340px;border:none;border-radius:16px;overflow:hidden;padding:0;background:#1a1228;cursor:pointer}
+  .compose-canvas-media{width:100%;height:100%;object-fit:cover;display:block}
+  .compose-canvas-filter{position:absolute;inset:0;pointer-events:none}
+  .compose-caption-overlay{position:absolute;left:10%;right:10%;bottom:22%;font-size:1.1rem;font-weight:700;line-height:1.35;text-shadow:0 2px 10px rgba(0,0,0,.5);pointer-events:none}
+  .compose-canvas-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px;color:#B79CF0;font-size:13px}
+  .compose-tools{display:flex;flex-direction:column;gap:8px;margin-bottom:8px}
+  .compose-tool-row{display:flex;gap:6px;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px}
+  .compose-sticker{border:none;background:#F5F0FA;border-radius:10px;padding:6px 8px;font-size:18px;cursor:pointer;flex-shrink:0}
+  .compose-color-dot{width:22px;height:22px;border-radius:50%;border:2px solid transparent;flex-shrink:0;cursor:pointer}
+  .compose-color-dot.on{border-color:#8C6BD8;box-shadow:0 0 0 2px #fff inset}
+  .compose-align-btn{border:none;background:#EFE9FF;color:#6A5A80;border-radius:8px;padding:4px 8px;font-size:11px;font-weight:700;cursor:pointer}
+  .compose-align-btn.on{background:#8C6BD8;color:#fff}
+  .compose-caption-input{width:100%;border:none;border-bottom:1px solid #E8E0EE;padding:10px 4px;font-size:14px;background:transparent;margin-top:4px}
+  .compose-caption-input:focus{outline:none;border-color:#B79CF0}
+  .story-viewer-empty{color:#fff;text-align:center;padding:40px}
+  .story-queue-pill{font-size:10px;font-weight:700;color:rgba(255,255,255,.75);background:rgba(255,255,255,.12);padding:3px 8px;border-radius:999px;margin-left:4px}
+  .share-post-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+  .share-post-head h3{margin:0;font-size:17px;color:#5A4A60}
+  .share-post-preview{border-radius:18px;overflow:hidden;border:1px solid #F0E8F4;margin-bottom:14px;background:#FFFBFE}
+  .share-post-preview-media{height:120px;display:grid;place-items:center;font-size:40px;overflow:hidden}
+  .share-post-preview-img,.share-post-preview-vid{width:100%;height:100%;object-fit:cover}
+  .share-post-preview-meta{display:flex;align-items:flex-start;gap:10px;padding:12px 14px}
+  .share-post-preview-meta b{display:block;font-size:13px;color:#5A4A60;margin-bottom:2px}
+  .share-post-preview-meta p{margin:0;font-size:12px;line-height:1.45;color:#8B7A96}
+  .share-friend-list{display:flex;flex-direction:column;gap:6px;max-height:min(42vh,320px);overflow-y:auto;margin-bottom:12px}
+  .share-friend-row{display:flex;align-items:center;gap:12px;width:100%;border:none;background:#FFFBFE;border-radius:16px;padding:10px 12px;cursor:pointer;text-align:left;transition:background .15s,transform .12s}
+  .share-friend-row:active{transform:scale(.98);background:#F8F2FC}
+  .share-friend-meta{flex:1;min-width:0}
+  .share-friend-meta b{display:block;font-size:13px;color:#5A4A60}
+  .share-friend-meta span{font-size:11px;color:#9B8FA8}
+  .share-post-empty{font-size:12px;line-height:1.5;margin:0 0 12px;padding:12px;border-radius:14px;background:#F8F4FF;text-align:center}
+  .share-external-btn{width:100%;margin-top:4px;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+  .share-post-toast{text-align:center;font-size:12px;font-weight:700;color:#4FA98C;margin:10px 0 0}
+  .dm-shared-post{min-width:min(240px,72vw);max-width:280px;border-radius:14px;overflow:hidden;background:rgba(255,255,255,.15);margin-bottom:4px}
+  .dm-bubble.mine .dm-shared-post{background:rgba(255,255,255,.22)}
+  .dm-shared-post-media{height:140px;display:grid;place-items:center;overflow:hidden}
+  .dm-shared-post-img,.dm-shared-post-vid{width:100%;height:100%;object-fit:cover}
+  .dm-shared-post-emoji{font-size:48px}
+  .dm-shared-post-meta{padding:10px 12px;display:flex;flex-direction:column;gap:4px}
+  .dm-shared-post-meta b{font-size:12px;font-weight:800}
+  .dm-shared-post-meta span{font-size:11px;line-height:1.4;opacity:.92;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  /* posts */
+  .post-img{height:188px;border-radius:18px;margin-top:11px;display:grid;place-items:center;position:relative;overflow:hidden;box-shadow:inset 0 -30px 50px rgba(0,0,0,.04)}
+  .lockwrap{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;backdrop-filter:blur(7px);background:rgba(120,90,120,.30)}
+  .ratebtn{display:inline-flex;align-items:center;gap:5px;border:none;background:#FFF1F6;color:#E07AA0;font-weight:800;font-size:12px;padding:7px 12px;border-radius:16px;cursor:pointer}
+  .softnote{display:flex;align-items:center;gap:10px;background:#F8F4FF;border:1px solid #EFE6FB;font-size:12.5px;color:#7B6A86;line-height:1.45}
+  
+  /* search */
+  .searchbar{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.85);border:1px solid rgba(183,156,240,.16);border-radius:16px;padding:12px 14px;margin-bottom:12px;box-shadow:0 4px 16px rgba(120,90,140,.06);transition:border-color .15s,box-shadow .15s}
+  .searchbar:focus-within{background:#fff;border-color:rgba(183,156,240,.35);box-shadow:0 6px 20px rgba(140,100,160,.1)}
+  .searchbar input{border:none;outline:none;flex:1;font-family:var(--font-sans);font-size:14px;font-weight:600;color:#5A4A60;background:none;letter-spacing:-.015em}
+  .searchbar input::placeholder{color:#9B8FA8;font-weight:600}
+  .searchbar-page{margin-bottom:18px}
+  .searchbar-global{border-color:#E8E0F0;background:linear-gradient(135deg,#FFFBFE,#FAF7FC)}
+  
+  .icbtn{width:38px;height:38px;border-radius:13px;border:none;background:#F4ECF4;color:#9B7CC0;display:grid;place-items:center;cursor:pointer;transition:.18s}
+  .icbtn:active{transform:scale(.92)}
+  .icbtn.on{background:linear-gradient(135deg,#9FE0C2,#BFE08A);color:#fff}
+  
+  /* gates */
+  .gate{display:flex;align-items:center;gap:13px;width:100%;text-align:left;cursor:pointer}
+  .gate-ic{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;flex:0 0 auto}
+  .badge-ok{display:inline-flex;align-items:center;gap:3px;background:#E7F6EF;color:#3E8F73;font-weight:800;font-size:11px;padding:5px 9px;border-radius:14px}
+  .badge-lock{display:inline-flex;align-items:center;gap:3px;background:#EFE9EF;color:#A38FA0;font-weight:800;font-size:11px;padding:5px 9px;border-radius:14px}
+  
+  /* notifs */
+  .pulse-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .pulse-score-card{display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg,#FFF4F8,#EEF4FF);margin-bottom:16px}
+  .pulse-score-val{font-weight:800;font-size:28px;letter-spacing:-.02em;line-height:1.1;margin-top:2px}
+  .notif-list{display:flex;flex-direction:column;gap:12px}
+  .notif-card{padding:14px 14px 14px 16px;margin-bottom:0;border-left:3px solid var(--notif-tone,#8C6BD8)}
+  .notif-empty{text-align:center;padding:28px 18px}
+  .notif-head{display:flex;align-items:flex-start;gap:12px}
+  .notif-content{flex:1;min-width:0}
+  .notif-title-row{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
+  .notif-title{font-size:15px;font-weight:700;color:#121212;letter-spacing:-.01em;flex:1;min-width:0}
+  .notif-time{font-size:11px;color:#9B8FA8;flex-shrink:0;font-weight:600}
+  .notif-body{font-size:13px;line-height:1.55;color:#6B5A76;margin:0}
+  .notif-user-link{border:none;background:none;padding:0;font:inherit;font-weight:700;color:#7B5BD8;cursor:pointer;text-decoration:none;display:inline}
+  .notif-user-link:active{opacity:.65}
+  .notif-avatar-btn{border:none;background:none;padding:0;cursor:pointer;flex-shrink:0;border-radius:50%;line-height:0}
+  .notif-avatar-btn:active{transform:scale(.96)}
+  .notif-stars{color:#D9A625;letter-spacing:.04em;font-weight:700}
+  .notif-tag{color:#9B8FA8}
+  .notif-actions{display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .notif{padding:13px}
+  .notif-ic{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;flex:0 0 auto}
+  .delta{display:inline-flex;align-items:center;gap:3px;font-weight:800;font-size:12px;padding:3px 8px;border-radius:12px}
+  .delta.up{background:#E7F6EF;color:#3E9B78}
+  .delta.down{background:#F8E9EC;color:#C77A8C}
+  .link{border:none;background:none;color:#9B7CC0;font-weight:800;font-size:11.5px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;padding:0}
+  
+  /* profile */
+  .profile-hero{border-radius:26px;padding:22px 16px 18px;text-align:center;margin-bottom:14px;position:relative;box-shadow:0 10px 28px rgba(150,110,140,.12)}
+  .profile-avatar-wrap{position:relative;display:inline-block;margin:8px auto 0}
+  .profile-photo-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;margin-top:10px;padding:8px 14px;border-radius:14px;border:1.5px solid rgba(255,255,255,.85);background:rgba(255,255,255,.58);color:#6B5080;font-weight:800;font-size:12px;cursor:pointer}
+  .profile-photo-btn:disabled{opacity:.65;cursor:wait}
+  .profile-photo-err{font-size:11px;color:#b44;margin:6px 0 0;font-weight:700}
+  .signout-btn{width:100%;margin:10px 0 4px;padding:14px 16px;border-radius:18px;border:1.5px solid #F0D0DC;background:#FFF7FA;color:#C77A8C;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer}
+  .signout-btn:active{transform:scale(.98)}
+  .legal-link{background:none;border:none;padding:0;font:inherit;color:#8C6BD8;font-weight:800;text-decoration:underline;cursor:pointer}
+  .legal-backdrop{align-items:stretch;padding:0}
+  .legal-backdrop .legal-modal{width:100%;max-width:100%;border-radius:0;max-height:100dvh;animation:slideup .28s ease}
+  .legal-modal{position:relative;width:100%;max-width:100%;max-height:100dvh;background:#fff;border-radius:0;box-shadow:none;display:flex;flex-direction:column;overflow:hidden;animation:slideup .28s ease}
+  .legal-modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px max(48px,env(safe-area-inset-left)) 10px max(14px,env(safe-area-inset-right));padding-top:max(16px,env(safe-area-inset-top));border-bottom:1px solid #ECE8EF;flex-shrink:0}
+  .ech-modal-close{position:absolute;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:12;width:36px;height:36px;border-radius:12px;border:1px solid rgba(183,156,240,.28);background:rgba(255,255,255,.96);color:#6B5080;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 14px rgba(120,90,140,.14)}
+  .ech-modal-close:active{transform:scale(.94)}
+  .ech-modal-close.echelon-guide-close{top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right))}
+  .legal-modal-head h2{font-family:var(--font-display);margin:0;font-size:18px;color:#1A1520;font-weight:800}
+  .legal-modal-body{overflow:auto;padding:14px max(14px,env(safe-area-inset-left)) max(24px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right));-webkit-overflow-scrolling:touch}
+  .legal-modal-body h3{font-family:var(--font-display);font-size:14px;color:#5A4A60;margin:16px 0 8px}
+  .legal-modal-body p,.legal-modal-body li{font-size:12.5px;line-height:1.6;color:#6B5A76;margin-bottom:10px}
+  .legal-modal-body ul{padding-left:18px;margin-bottom:10px}
+  .legal-modal-foot{flex-shrink:0;padding:12px max(14px,env(safe-area-inset-left)) max(16px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right));border-top:1px solid #ECE8EF;background:rgba(255,255,255,.98)}
+  .legal-modal-close-btn{width:100%}
+  .legal-updated{font-size:11px;color:#9B8FA8;margin-bottom:12px}
+  .cookie-banner{position:absolute;inset:auto 0 0 0;z-index:90;padding:12px;pointer-events:none}
+  .cookie-banner-inner{pointer-events:auto;background:rgba(255,251,254,.97);border:1px solid #EBD9F0;border-radius:20px;padding:14px 16px;box-shadow:0 -8px 32px rgba(120,80,110,.18);backdrop-filter:blur(12px)}
+  .cookie-banner-inner b{display:block;font-size:13.5px;color:#5A4A60;margin-bottom:6px}
+  .cookie-banner-inner p{font-size:11.5px;line-height:1.5;margin-bottom:8px}
+  .cookie-banner-links{margin-bottom:10px;font-size:11.5px}
+  .cookie-banner-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+  .cookie-banner-actions .btn{padding:9px 14px;font-size:12px;border-radius:14px}
+  .cookie-pref-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid #F1E8F0;font-size:12.5px;cursor:pointer}
+  .cookie-prefs{border-radius:24px;margin:auto 12px;max-height:70vh}
+  .onb-lang{flex-shrink:0;display:flex;justify-content:center;padding:max(10px,env(safe-area-inset-top,0px)) 16px 14px;z-index:12;position:relative}
+  .langtabs{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;align-items:center}
+  .langtabs-feed{margin-bottom:8px}
+  .langtabs-compact{gap:2px;padding:2px;border-radius:999px;background:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.85);backdrop-filter:blur(8px);box-shadow:0 2px 10px rgba(150,110,150,.06);flex-wrap:nowrap}
+  .langtabs-compact.langtabs-status{width:max-content;max-width:100%}
+  .langtabs-compact .langtab{min-width:0;width:27px;height:22px;padding:0;border:none;background:transparent;font-size:9px;font-weight:700;letter-spacing:.03em;border-radius:999px;flex-shrink:0}
+  .langtabs-compact .langtab.on{box-shadow:0 2px 8px rgba(183,156,240,.28)}
+  .langtab{min-width:32px;height:28px;padding:0 8px;border-radius:999px;border:1.5px solid rgba(255,255,255,.75);background:rgba(255,255,255,.72);color:#8B7A96;font-weight:800;font-size:10.5px;cursor:pointer;transition:transform .12s,background .12s,border-color .12s;line-height:1}
+  .langtab.on{background:linear-gradient(135deg,#FF9DC0,#B79CF0);border-color:transparent;color:#fff;box-shadow:0 4px 14px rgba(183,156,240,.35)}
+  .langtab:active{transform:scale(.94)}
+  .gearbtn{position:absolute;top:8px;right:8px;min-width:52px;min-height:52px;padding:0 12px;border-radius:16px;border:1.5px solid rgba(255,255,255,.9);background:rgba(255,255,255,.94);color:#6B5A76;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer;z-index:8;box-shadow:0 6px 18px rgba(120,80,110,.16);transition:transform .12s,box-shadow .12s}
+  .gearbtn:active{transform:scale(.94)}
+  .gearbtn-label{font-size:8px;font-weight:800;letter-spacing:.04em;line-height:1;color:#9B8FA8}
+  .settings-row{width:100%;cursor:pointer;margin-bottom:14px;text-align:left;border:none;font:inherit;color:inherit}
+  .settings-link{width:100%;cursor:pointer;text-align:left;border:none;font:inherit;color:inherit;margin-bottom:12px}
+  .settings-link:active,.settings-row:active{transform:scale(.98)}
+  .score-private{width:138px;height:138px;margin:0 auto;border-radius:50%;background:rgba(255,255,255,.55);border:2.5px dashed rgba(255,255,255,.85);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+  .phone.calm .breathe,.phone.calm .jitter,.phone.calm .wobble,.phone.calm .pulse-soft,.phone.calm .spk,.phone.calm .lensscan{animation:none!important}
+  .phone.calm .pop{animation-duration:.15s!important}
+  .stats{display:flex;justify-content:space-around;margin-top:14px;background:rgba(255,255,255,.6);border-radius:18px;padding:12px 6px}
+  .boostchip,.boost-aura{}
+  .boostchip{display:inline-flex;align-items:center;gap:5px;background:linear-gradient(120deg,#FFE9A8,#FFD1E1);color:#9A6A1A;font-weight:800;font-size:12px;padding:6px 12px;border-radius:18px;margin-top:8px}
+  .boost-aura{position:absolute;inset:-8px;border-radius:50%;border:3px solid #FFD56B;animation:auraPulse 2s infinite;pointer-events:none}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .tile{aspect-ratio:1;border-radius:16px;display:grid;place-items:center;font-size:30px;box-shadow:inset 0 -16px 30px rgba(0,0,0,.04)}
+  
+  /* banner */
+  .banner{border-radius:20px;padding:14px;margin-bottom:14px;display:flex;gap:11px;align-items:flex-start;color:#fff}
+  .banner.hold{background:linear-gradient(120deg,#C99,#B58FA8)}
+  .banner p{margin:2px 0 0}
+  
+  /* toggles / settings */
+  .toggle{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:none;font:inherit;color:inherit}
+  .switch{width:46px;height:27px;border-radius:20px;background:#E8DEE8;position:relative;flex:0 0 auto;transition:.2s}
+  .switch.on{background:linear-gradient(120deg,#B79CF0,#7FB8F0)}
+  .switch .knob{position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 2px 5px rgba(0,0,0,.18)}
+  .switch.on .knob{left:22px}
+  .qa{cursor:pointer;display:block;width:100%}
+  
+  /* tabbar */
+  .tabbar{height:74px;flex-shrink:0;display:flex;background:rgba(255,255,255,.94);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-top:1px solid rgba(0,0,0,.06);padding-bottom:6px;z-index:6}
+  .tabbar-6 .tab span,.tabbar-7 .tab span{font-size:9px;letter-spacing:-.02em}
+  .tabbar-6 .tab-icon-wrap svg,.tabbar-7 .tab-icon-wrap svg{width:17px;height:17px}
+  .tabbar-7 .tab{padding:0 1px}
+  .feed-quick-react{display:flex;gap:6px;padding:6px 12px 0;flex-wrap:wrap}
+  .feed-quick-react-btn{border:none;background:rgba(255,255,255,.75);border-radius:999px;width:34px;height:34px;font-size:18px;cursor:pointer;transition:.15s;box-shadow:0 2px 8px rgba(120,80,110,.1)}
+  .feed-quick-react-btn.on{background:linear-gradient(120deg,#FFD1E1,#E0D2FB);transform:scale(1.08)}
+  .feed-post-react-badge{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:700;margin-left:6px}
+  .spark-match-row{display:flex;align-items:center;gap:8px;padding:10px 12px;margin-bottom:10px}
+  .spark-match-row-main{flex:1;display:flex;align-items:center;gap:12px;border:none;background:none;padding:0;cursor:pointer;font:inherit;color:inherit;text-align:left}
+  .spark-match-row-actions{display:flex;gap:6px;flex-shrink:0}
+  .party-detail{padding:0 0 8px}
+  .party-detail-hero{height:140px;border-radius:20px;margin-bottom:12px;display:grid;place-items:center;font-size:48px}
+  .party-detail-desc{font-size:13.5px;line-height:1.55;margin:0 0 12px;color:var(--text-secondary)}
+  .party-card{cursor:pointer;transition:transform .15s}
+  .party-card:active{transform:scale(.98)}
+  .profile-locked{display:flex;flex-direction:column;align-items:center;gap:10px}
+  .dm-emoji-tabs{display:flex;gap:6px;margin-bottom:8px;padding:0 4px}
+  .dm-emoji-tabs button{border:none;background:#F5EFF5;padding:6px 12px;border-radius:999px;font-size:11px;font-weight:700;color:var(--text-muted);cursor:pointer}
+  .dm-emoji-tabs button.on{background:linear-gradient(120deg,#FFD1E1,#E0D2FB);color:#7A5A86}
+  .btn.danger-soft{background:#FFF0F0;color:#B07E7E;border:1px solid #F5D8D8}
+
+  /* Spark — rank-gated matching */
+  .spark-screen{flex:1;display:flex;flex-direction:column;min-height:0;background:transparent}
+  .spark-head{padding:10px 16px 8px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-shrink:0}
+  .spark-head-brand{display:flex;align-items:center;gap:8px}
+  .spark-head-brand h2{margin:0;font-family:var(--font-display);font-size:20px;font-weight:800;letter-spacing:-.03em;background:linear-gradient(120deg,#FF7EB3,#B79CF0);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .spark-mode-tabs{display:flex;gap:4px;background:rgba(255,255,255,.7);padding:3px;border-radius:999px;border:1px solid rgba(0,0,0,.05)}
+  .spark-mode-tabs button{border:none;background:transparent;padding:6px 12px;border-radius:999px;font-size:11px;font-weight:700;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+  .spark-mode-tabs button.on{background:linear-gradient(120deg,#FF9DC0,#C6A0F0);color:#fff;box-shadow:0 4px 14px rgba(183,156,240,.35)}
+  .spark-tab-badge{min-width:16px;height:16px;padding:0 4px;border-radius:999px;background:rgba(255,255,255,.35);font-size:9px;display:grid;place-items:center}
+  .spark-rule{margin:0 12px 10px;padding:10px 12px;display:flex;align-items:flex-start;gap:10px;font-size:11.5px;line-height:1.45;border-radius:16px;background:rgba(255,255,255,.85);border:1px solid rgba(255,255,255,.95);flex-shrink:0}
+  .spark-rule b{display:block;font-size:12px;margin-bottom:2px}
+  .spark-rule p{margin:0;color:var(--text-secondary)}
+  .spark-likes-pill{margin-left:auto;flex-shrink:0;font-size:10px;font-weight:800;color:#fff;background:linear-gradient(120deg,#FF7EB3,#B79CF0);padding:5px 10px;border-radius:999px;white-space:nowrap}
+  .spark-deck-wrap{flex:1;display:flex;flex-direction:column;min-height:0;padding:0 16px 8px}
+  .spark-stack{flex:1;position:relative;min-height:280px;margin:4px 0 12px;touch-action:none;user-select:none}
+  .spark-card{position:absolute;inset:0;border-radius:28px;overflow:hidden;box-shadow:0 20px 50px rgba(120,80,110,.22);border:2px solid rgba(255,255,255,.9);transition:transform .28s cubic-bezier(.2,.9,.2,1);will-change:transform}
+  .spark-card-exit{transition:transform .28s ease-out,opacity .28s ease-out;opacity:0}
+  .spark-card-img{width:100%;height:100%;object-fit:cover;display:block}
+  .spark-card-fallback{width:100%;height:100%;display:grid;place-items:center}
+  .spark-card-emoji{font-size:88px}
+  .spark-card-shade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 35%,rgba(20,10,20,.72) 100%);pointer-events:none}
+  .spark-stamp{position:absolute;top:28px;padding:8px 14px;border:3px solid;font-size:22px;font-weight:900;letter-spacing:.08em;border-radius:8px;transform:rotate(-12deg);opacity:.92;z-index:2}
+  .spark-stamp-like{right:20px;color:#4FA98C;border-color:#4FA98C}
+  .spark-stamp-pass{left:20px;color:#B07E7E;border-color:#B07E7E}
+  .spark-card-info{position:absolute;left:0;right:0;bottom:0;padding:18px 16px 16px;color:#fff;z-index:2}
+  .spark-card-name-row{display:flex;align-items:baseline;gap:8px}
+  .spark-card-name-row b{font-size:22px;font-weight:800;letter-spacing:-.02em}
+  .spark-card-score{font-size:14px;font-weight:700;background:rgba(255,255,255,.2);padding:3px 8px;border-radius:999px}
+  .spark-card-handle{display:block;font-size:13px;opacity:.85;margin:2px 0 8px}
+  .spark-card-meta{display:block;font-size:12px;opacity:.75;margin:-4px 0 8px;font-weight:600}
+  .spark-card-caption{font-size:12px;line-height:1.4;margin:8px 0 0;opacity:.9;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .spark-card-gate{font-size:11px;margin:8px 0 0;color:#FFD6E4}
+  .spark-actions{display:flex;align-items:center;justify-content:center;gap:18px;padding:4px 0 12px;flex-shrink:0}
+  .spark-act{width:58px;height:58px;border-radius:50%;border:none;display:grid;place-items:center;cursor:pointer;box-shadow:0 8px 24px rgba(120,80,110,.18);transition:transform .15s}
+  .spark-act:active{transform:scale(.92)}
+  .spark-act:disabled{opacity:.45;cursor:not-allowed}
+  .spark-act.pass{background:#fff;color:#B07E7E;border:2px solid #F0E0E0}
+  .spark-act.like{background:linear-gradient(135deg,#FF7EB3,#FF9DC0);color:#fff;width:64px;height:64px;box-shadow:0 10px 28px rgba(255,126,179,.45)}
+  .spark-act.super{background:linear-gradient(135deg,#FFE9A8,#FFD6E4);color:#9B7CC0;border:2px solid rgba(255,255,255,.8)}
+  .spark-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;color:var(--text-secondary)}
+  .spark-empty p{font-size:13px;line-height:1.5;max-width:260px;margin:0}
+  .spark-matches-scroll{padding-top:4px}
+  .spark-match-backdrop{align-items:center;padding:24px}
+  .spark-match-card{width:100%;max-width:300px;background:rgba(255,255,255,.98);border-radius:28px;padding:28px 22px 22px;text-align:center;box-shadow:0 24px 60px rgba(120,80,110,.28);position:relative;overflow:hidden}
+  .spark-match-burst{position:absolute;inset:-40%;background:radial-gradient(circle at 50% 30%,rgba(255,157,192,.35),transparent 55%);pointer-events:none}
+  .spark-match-card h2{margin:12px 0 6px;font-family:var(--font-display);font-size:22px;font-weight:800;color:#6B5080}
+  .spark-match-avatars{display:flex;justify-content:center;margin:16px 0 20px}
+  .spark-match-card .btn{width:100%;margin-top:10px}
+
+  .tab{flex:1;border:none;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text-tertiary);font-weight:500;font-size:10px;cursor:pointer;transition:.18s;letter-spacing:-.01em}
+  .tab.on{color:var(--text-primary)}
+  .tab.on svg{filter:drop-shadow(0 4px 8px rgba(198,160,240,.5))}
+  .tab-icon-wrap{position:relative;display:grid;place-items:center}
+  .tab-badge{position:absolute;top:-6px;right:-9px;background:#FF7FA6;color:#fff;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:9px;display:grid;place-items:center;padding:0 3px}
+  
+  /* sheets / modals */
+  .backdrop{position:absolute;inset:0;background:rgba(90,60,90,.34);backdrop-filter:blur(3px);display:flex;align-items:flex-end;z-index:20;animation:fade .2s}
+  .sheet{width:100%;background:#fff;border-radius:0 28px 0 0;padding:14px 20px 26px;box-shadow:0 -16px 50px rgba(120,80,110,.28);animation:slideup .32s cubic-bezier(.2,.9,.2,1);max-height:88%;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .sheet::-webkit-scrollbar{display:none;width:0;height:0}
+  .sheet-overlay{position:absolute;inset:0;z-index:25;background:rgba(90,60,90,.34);backdrop-filter:blur(3px);display:flex;flex-direction:column;animation:fade .2s}
+  .sheet-grab{width:42px;height:5px;border-radius:5px;background:#EBDEE9;margin:0 auto 14px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+  .chip{border:1px solid #EEE2EE;background:#FBF6FB;color:#8B7A92;font-weight:700;font-size:12px;padding:8px 13px;border-radius:18px;cursor:pointer;transition:.15s}
+  .chip.on{background:linear-gradient(120deg,#FFD1E1,#E0D2FB);color:#7A5A86;border-color:transparent}
+  .staricon:active{transform:scale(1.2)}
+  .iact-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px}
+  .iact{border:none;background:#FBF4FB;border:1px solid #F1E5F1;border-radius:18px;padding:16px 4px;display:flex;flex-direction:column;align-items:center;gap:7px;color:#9B7CC0;font-weight:800;font-size:12px;cursor:pointer}
+  .iact:active{transform:scale(.96)}
+  .lock-hero,.warn-hero{width:64px;height:64px;border-radius:20px;margin:0 auto;display:grid;place-items:center;background:linear-gradient(135deg,#C6A0F0,#7FB8F0)}
+  .warn-hero{background:linear-gradient(135deg,#E0A0A0,#C99)}
+  .lock-meter{height:9px;border-radius:9px;background:#F0E8F0;margin-top:18px;overflow:hidden}
+  .lock-fill{height:100%;border-radius:9px;background:linear-gradient(90deg,#FFD1E1,#C6A0F0);transition:width .6s}
+  .compose-input{width:100%;border:1px solid #F0E6F0;border-radius:16px;padding:12px;font-family:var(--font-sans);font-size:13.5px;color:#5A4A60;resize:none;min-height:70px;margin-top:12px;outline:none}
+  .compose-input::placeholder{color:#C5B6C5}
+  
+  /* onboarding */
+  .onb{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;position:relative;overflow:hidden}
+  .onb-inner{flex:1;min-height:0;width:100%;display:flex;flex-direction:column;position:relative;z-index:2;overflow:hidden}
+  .onb-stage{flex:1;min-height:0;display:flex;align-items:flex-start;justify-content:center;padding:6px 18px 12px;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+  .onb-stage-scroll{align-items:flex-start;justify-content:flex-start;padding-top:8px}
+  .onb-footer{flex-shrink:0;padding:8px 20px max(18px,env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;align-items:center;gap:12px;z-index:3;background:linear-gradient(180deg,rgba(252,246,250,0) 0%,rgba(238,244,255,.55) 35%,rgba(238,244,255,.85) 100%)}
+  .onb-footer-consent{font-size:10px;line-height:1.55;margin:0;padding:0 12px;max-width:300px;text-align:center}
+  .onb-dots-wrap{background:rgba(255,255,255,.72);border:1px solid rgba(255,255,255,.9);border-radius:20px;padding:9px 18px;box-shadow:0 4px 16px rgba(150,110,150,.08)}
+  .onb-card{width:100%;max-width:318px;margin:0 auto 6px;background:rgba(255,255,255,.88);border:1px solid rgba(255,255,255,.95);border-radius:28px;padding:24px 20px 22px;text-align:center;box-shadow:0 20px 50px rgba(150,110,150,.14),inset 0 1px 0 rgba(255,255,255,.9);backdrop-filter:blur(10px);display:flex;flex-direction:column;gap:0;flex-shrink:0}
+  .onb-card-score{padding:24px 18px 22px;margin-bottom:4px}
+  .onb-score-head{margin-bottom:2px}
+  .onb-lead-tight{margin-top:10px;font-size:12px;line-height:1.5}
+  .onb-tier-label{margin-top:8px;margin-bottom:10px}
+  .onb-tier-row{display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:8px}
+  .onb-tier-blurb{font-size:11.5px;line-height:1.55;margin:0 0 10px;text-align:center}
+  .onb-perk-chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+  .onb-perk-chip{font-size:10.5px;font-weight:800;padding:5px 10px;border-radius:12px;background:rgba(255,255,255,.75);color:#7B6A86;border:1px solid rgba(255,255,255,.9)}
+  .onb-hero{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:10px;padding-top:2px}
+  .onb-logo-wrap{position:relative;display:grid;place-items:center;flex-shrink:0}
+  .onb-logo-glow{position:absolute;inset:-14px;border-radius:28px;background:conic-gradient(from 200deg,#FFE9A8,#FF9DC0,#B79CF0,#7FB8F0,#FFE9A8);filter:blur(18px);opacity:.55;animation:onbLogoGlow 6s ease-in-out infinite alternate}
+  .onb-logo-img{position:relative;z-index:1;width:100%;height:100%;border-radius:22px;box-shadow:0 14px 36px rgba(150,110,150,.22),inset 0 0 0 2px rgba(255,255,255,.85);object-fit:cover}
+  @keyframes onbLogoGlow{0%{transform:scale(.92) rotate(0deg);opacity:.45}100%{transform:scale(1.06) rotate(12deg);opacity:.62}}
+  .onb-pills{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:4px;max-width:280px}
+  .onb-pill{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.78);color:#8B6FA8;border:1px solid rgba(255,255,255,.95);box-shadow:0 4px 12px rgba(150,110,150,.08)}
+  .onb-wordmark{font-size:30px;margin-top:4px;line-height:1.1}
+  .onb-tag{font-family:var(--font-display);font-weight:600;color:#9B7CC0;margin:0;font-size:13.5px;line-height:1.45;max-width:260px}
+  .onb-h{font-family:var(--font-display);font-weight:700;font-size:21px;color:#5A4A60;margin:0;line-height:1.25}
+  .onb-lead{font-size:12.5px;line-height:1.55;margin:0;padding:0 2px}
+  .onb-actions{margin-top:20px;display:flex;flex-direction:column;gap:10px;width:100%}
+  .onb-actions .applebtn{margin:0;width:100%}
+  .onb-form{align-items:stretch;text-align:left}
+  .onb-label{font-size:11px;font-weight:700;color:#8A7A92;margin:4px 0 2px;display:block}
+  .onb-input{width:100%;border:1.5px solid #F0E4EE;border-radius:14px;padding:12px 14px;font-family:var(--font-sans);font-size:14px;background:#FFFBFD;box-sizing:border-box}
+  .onb-input:focus{outline:none;border-color:#D4B8E8}
+  .onb-back{align-self:flex-start;background:none;border:none;color:#9A8AA8;font-size:12px;font-weight:700;cursor:pointer;padding:0;margin-bottom:4px}
+  .onb-or{display:flex;align-items:center;gap:10px;color:#B0A0B8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+  .onb-or::before,.onb-or::after{content:"";flex:1;height:1px;background:#F0E4EE}
+  .auth-alt{width:100%}
+  .google-btn-wrap{display:flex;justify-content:center;min-height:44px}
+  .onb-hint{font-size:13px;color:#6A5A72;text-align:center;line-height:1.5;margin:8px 0}
+  .onb-foot{font-size:10.5px;margin:0;line-height:1.45}
+  .onb-consent{margin-top:4px;font-size:10px;line-height:1.5;padding-top:2px}
+  .onb-face-scan{position:relative;width:140px;height:140px;margin:20px auto 0;border-radius:50%;overflow:hidden;background:#111;display:grid;place-items:center;flex-shrink:0}
+  .onb-face-video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:block}
+  .onb-face-emoji{font-size:72px;line-height:1}
+  .onb-error{color:#b44;font-size:12px;text-align:center;margin-top:8px;font-weight:700;line-height:1.45}
+  .applebtn:disabled{opacity:.55;cursor:not-allowed}
+  .gmailbtn{width:100%;background:#fff;color:#3c4043;border:1.5px solid #dadce0;border-radius:16px;padding:14px 15px;font-family:var(--font-sans);font-weight:800;font-size:15.5px;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;box-shadow:0 4px 14px rgba(60,64,67,.12)}
+  .gmailbtn:active{transform:scale(.98);background:#f8f9fa}
+  .gmailbtn:disabled{opacity:.55;cursor:not-allowed}
+  .gmail-signin-overlay{position:fixed;inset:0;background:rgba(20,10,30,.45);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px}
+  .gmail-signin-box{background:#fff;border-radius:20px;padding:24px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.2)}
+  .gmail-signin-box p{margin:0 0 16px;font-size:14px;color:#5A4A60;font-weight:700}
+  .onb-signing-gmail{position:relative;width:72px;height:72px;margin:0 auto;display:grid;place-items:center;background:#fff;border-radius:50%;border:1.5px solid #dadce0;box-shadow:0 8px 24px rgba(60,64,67,.12)}
+  .onb-signing-spin{position:absolute;inset:-6px;margin:auto}
+  .onb-signing-back{margin-top:20px;width:100%}
+
+  /* events search + host */
+  .events-search-card{margin-bottom:12px}
+  .events-search-row{display:flex;align-items:center;gap:10px;padding:4px 2px 10px}
+  .events-search-input{flex:1;border:none;background:transparent;font:inherit;font-size:14px;outline:none;min-width:0}
+  .events-host-btn{width:100%;margin-top:4px}
+  .events-host-hint{font-size:11.5px;margin:8px 0 0;text-align:center}
+  .toggle-row{width:100%;display:flex;align-items:center;justify-content:space-between;padding:12px 14px;margin:10px 0;border-radius:14px;border:1.5px solid #F0E6F0;background:#FFFDFE;cursor:pointer;font-size:13px;font-weight:600;color:#5A4A60}
+  .toggle-row.on{border-color:#C6A0F0;background:linear-gradient(135deg,#FFF4F8,#EFE9FF)}
+  .toggle-dot{width:38px;height:22px;border-radius:999px;background:#E8DFEA;position:relative;flex-shrink:0;transition:.2s}
+  .toggle-row.on .toggle-dot{background:linear-gradient(120deg,#FF9DC0,#C6A0F0)}
+  .toggle-dot::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.12);transition:.2s}
+  .toggle-row.on .toggle-dot::after{transform:translateX(16px)}
+  .a2hs-btn{width:100%;padding:16px 18px;border-radius:20px;border:2px solid rgba(255,255,255,.95);background:linear-gradient(135deg,#FFE9F2 0%,#E8E0FF 55%,#DCE8FF 100%);box-shadow:0 12px 32px rgba(150,110,150,.18),inset 0 1px 0 rgba(255,255,255,.9);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;cursor:pointer;color:#4A3A58;font-family:var(--font-sans);transition:transform .12s}
+  .a2hs-btn:active{transform:scale(.98)}
+  .a2hs-label{font-weight:900;font-size:17px;line-height:1.2;letter-spacing:-.01em}
+  .a2hs-hint{font-size:11px;font-weight:700;color:#8B7A96;line-height:1.35;max-width:260px;text-align:center}
+  .install-help-portal{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;padding:max(20px,env(safe-area-inset-top)) 16px max(20px,env(safe-area-inset-bottom));background:rgba(30,18,38,.62);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);animation:fade .2s}
+  .install-coach-portal{position:fixed;inset:0;z-index:99999;background:rgba(12,8,18,.78);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:fade .22s;display:flex;flex-direction:column;justify-content:flex-end;padding:0}
+  .install-coach{position:relative;width:100%;max-width:480px;margin:0 auto;padding:24px 20px max(28px,env(safe-area-inset-bottom));background:linear-gradient(180deg,#FFFBFE 0%,#F8F2FC 100%);border-radius:28px 28px 0 0;box-shadow:0 -24px 60px rgba(60,30,50,.35);animation:slideup .35s cubic-bezier(.2,.9,.2,1)}
+  .install-coach--ios{padding-bottom:max(36px,env(safe-area-inset-bottom))}
+  .install-coach-close{position:absolute;top:14px;right:14px;width:36px;height:36px;border:none;border-radius:12px;background:rgba(244,236,246,.92);color:#7B6A86;display:grid;place-items:center;cursor:pointer;z-index:2}
+  .install-coach-icon,.install-coach-card .install-coach-app-icon{margin:0 auto 14px}
+  .install-coach-icon{width:56px;height:56px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(135deg,#FF9DC0,#B79CF0);box-shadow:0 10px 24px rgba(200,120,180,.35)}
+  .install-coach-card{text-align:center;padding:8px 12px 0}
+  .install-coach-app-icon{border-radius:16px;box-shadow:0 8px 22px rgba(140,100,160,.25)}
+  .install-coach-title{font-family:var(--font-display);font-size:20px;font-weight:800;color:#5A4A60;margin:0 0 8px;text-align:center;line-height:1.25}
+  .install-coach-lead{font-size:13px;line-height:1.5;text-align:center;margin:0 0 16px;color:#8B7A96;font-weight:600}
+  .install-coach-cta{width:100%;margin-top:8px}
+  .install-coach-foot{font-size:11px;color:#9B8FA8;text-align:center;margin:12px 0 0;line-height:1.45}
+  .install-coach-arrow{display:grid;place-items:center;color:#fff;margin:8px auto 6px;animation:installBounce 1.1s ease-in-out infinite;filter:drop-shadow(0 4px 12px rgba(0,0,0,.35))}
+  @keyframes installBounce{0%,100%{transform:translateY(0)}50%{transform:translateY(8px)}}
+  .install-coach-safari-mock{margin:0 auto 10px;padding:14px 16px;border-radius:20px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);max-width:320px}
+  .install-coach-share-pulse{display:flex;flex-direction:column;align-items:center;gap:4px;color:#fff;font-size:11px;font-weight:800;animation:installPulse 1.4s ease-in-out infinite}
+  @keyframes installPulse{0%,100%{transform:scale(1);opacity:.88}50%{transform:scale(1.08);opacity:1}}
+  .install-coach-step{font-size:13px;font-weight:800;color:#fff;text-align:center;margin:0;padding:0 12px 8px;line-height:1.45;text-shadow:0 2px 10px rgba(0,0,0,.35)}
+  .install-coach--ios{background:transparent;box-shadow:none;padding-bottom:max(12px,env(safe-area-inset-bottom))}
+  .install-coach--ios .install-coach-card{background:rgba(255,255,255,.96);border-radius:24px;padding:22px 18px 18px;box-shadow:0 16px 40px rgba(0,0,0,.22)}
+  .install-coach--ios .install-coach-close{background:rgba(255,255,255,.9)}
+  .install-coach-android-chip{display:flex;align-items:center;gap:10px;padding:14px 16px;border-radius:16px;background:#FBF4FB;border:1px solid #F1E5F1;font-size:13.5px;font-weight:700;color:#5A4A60;line-height:1.45;margin-bottom:12px}
+  .score-reveal-install{width:100%;margin-top:14px;padding:13px 16px;border-radius:16px;border:2px solid rgba(183,156,240,.35);background:linear-gradient(135deg,#FFF4F8,#EFE9FF);color:#6B5080;font-family:var(--font-sans);font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer}
+  .score-reveal-install:active{transform:scale(.98)}
+  .score-reveal-card .onb-enter{margin-top:10px}
+  .a2hs-sheet{padding-bottom:max(26px,env(safe-area-inset-bottom))}
+  .a2hs-sheet-title{font-family:var(--font-display);font-size:20px;color:#5A4A60;margin:0 0 8px;text-align:center}
+  .a2hs-sheet-lead{font-size:13px;line-height:1.5;text-align:center;margin:0 0 16px}
+  .a2hs-steps{list-style:none;padding:0;margin:0 0 8px;display:flex;flex-direction:column;gap:12px}
+  .a2hs-steps li{display:flex;align-items:flex-start;gap:10px;font-size:13.5px;font-weight:700;color:#5A4A60;line-height:1.45;padding:12px 14px;border-radius:16px;background:#FBF4FB;border:1px solid #F1E5F1}
+  .a2hs-steps li svg{flex-shrink:0;margin-top:2px;color:#9B7CC0}
+  .score-reveal-backdrop{z-index:50;align-items:center;padding:20px}
+  .score-reveal-card{width:100%;max-width:300px;margin:0 auto;background:rgba(255,255,255,.96);border:1px solid rgba(255,255,255,.95);border-radius:28px;padding:26px 22px 22px;text-align:center;box-shadow:0 24px 60px rgba(120,80,110,.28)}
+  .score-reveal-kicker{font-family:var(--font-display);font-weight:800;font-size:22px;color:#9B7CC0;margin:0 0 6px}
+  .score-reveal-title{font-family:var(--font-display);font-size:15px;font-weight:700;color:#5A4A60;margin:0 0 12px;line-height:1.3}
+  .score-reveal-tier{font-family:var(--font-display);font-weight:800;font-size:14px;color:#8C6BD8;margin:10px 0 0}
+  .score-reveal-note{font-size:12px;line-height:1.5;margin:10px 0 0;padding:0 4px}
+  .onb-face-ring{position:absolute;inset:0;border:3px dashed rgba(255,255,255,.75);border-radius:50%;pointer-events:none}
+  .onb-scan-status{margin-top:18px;font-size:12px;font-weight:600;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+  .onb-scan-retry{margin-top:4px;padding:10px 18px;font-size:13px;border-radius:14px;width:auto}
+  .onb-score-wrap{display:grid;place-items:center;margin:12px 0 4px}
+  .onb-tier-box{border-radius:18px;padding:12px 12px 14px;margin-top:0;text-align:center;border:1px solid transparent}
+  .onb-enter{margin-top:16px}
+  .onb-dots{display:flex;gap:8px;align-items:center;justify-content:center}
+  .onb-dot{width:7px;height:7px;border-radius:7px;background:#E7D7E0;transition:width .3s,background .3s}
+  .onb-dot.on{width:22px;background:#FF9DC0}
+  .onb .sparkles{opacity:.28;z-index:0}
+  .onb .spk{opacity:.5}
+  
+  /* lens overlay (behind screen content, status bar shows Lens state) */
+  .lens-badge{position:absolute;bottom:-4px;right:-6px;top:auto;font-size:9px;font-weight:800;padding:2px 6px;border-radius:10px;display:flex;align-items:center;gap:2px;box-shadow:0 3px 8px rgba(0,0,0,.18);white-space:nowrap;z-index:2}
+  .lensfilm{position:absolute;inset:0;pointer-events:none;z-index:1;
+    background:linear-gradient(180deg,rgba(127,184,240,.04),transparent 18%,transparent 82%,rgba(183,156,240,.04));
+    border-left:1px solid rgba(150,180,240,.12);border-right:1px solid rgba(150,180,240,.12)}
+  .lensscan{position:absolute;left:0;right:0;height:72px;background:linear-gradient(180deg,transparent,rgba(150,200,255,.07),transparent);animation:scanmove 3.4s linear infinite;opacity:.85}
+  
+  /* sparkles */
+  .sparkles{position:absolute;inset:0;pointer-events:none;z-index:1;overflow:hidden}
+  .spk{position:absolute;bottom:-30px;animation:floatup linear infinite;opacity:.7}
+  
+  /* scan during onboarding face read */
+  .scanline{position:absolute;left:0;right:0;height:3px;background:linear-gradient(90deg,transparent,#fff,transparent);box-shadow:0 0 14px #fff}
+  
+  /* ---- keyframes (the subtle anxiety) ---- */
+  @keyframes pop{0%{opacity:0;transform:scale(.92) translateY(10px)}100%{opacity:1;transform:none}}
+  .pop{animation:pop .4s cubic-bezier(.2,.9,.2,1)}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  @keyframes slideup{from{transform:translateY(100%)}to{transform:none}}
+  @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
+  .breathe{animation:breathe 3.4s ease-in-out infinite}
+  @keyframes jitter{0%,100%{transform:translate(0,0)}25%{transform:translate(.4px,-.3px)}50%{transform:translate(-.3px,.4px)}75%{transform:translate(.3px,.2px)}}
+  .jitter{animation:jitter 1.6s infinite}
+  @keyframes wobble{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(4deg)}}
+  .wobble{animation:wobble 3.2s ease-in-out infinite}
+  @keyframes floatup{0%{transform:translateY(0) rotate(0);opacity:0}10%{opacity:.7}100%{transform:translateY(-820px) rotate(40deg);opacity:0}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .spin{animation:spin 1s linear infinite}
+  @keyframes pulsering{0%{box-shadow:0 0 0 0 rgba(95,214,160,.5)}70%{box-shadow:0 0 0 7px rgba(95,214,160,0)}100%{box-shadow:0 0 0 0 rgba(95,214,160,0)}}
+  @keyframes auraPulse{0%,100%{opacity:.4;transform:scale(1)}50%{opacity:.95;transform:scale(1.06)}}
+  @keyframes scanmove{0%{top:-90px}100%{top:100%}}
+  @keyframes shimmermove{0%{background-position:-200% 0}100%{background-position:200% 0}}
+  .shimmer{background-image:linear-gradient(110deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.35) 50%,rgba(255,255,255,0) 70%);background-size:200% 100%;animation:shimmermove 2.6s linear infinite}
+  @keyframes softpulse{0%,100%{opacity:1}50%{opacity:.82}}
+  .pulse-soft{animation:softpulse 2s ease-in-out infinite}
+  
+  /* apple sign-in + face id */
+  .applebtn{width:100%;background:#0d0d0f;color:#fff;border:none;border-radius:16px;padding:15px;font-family:var(--font-sans);font-weight:800;font-size:15.5px;display:flex;align-items:center;justify-content:center;gap:9px;cursor:pointer;box-shadow:0 12px 28px rgba(0,0,0,.28)}
+  .applebtn:active{transform:scale(.98)}
+  .faceid{width:118px;height:118px;border-radius:28px;margin:0 auto;display:grid;place-items:center;background:linear-gradient(135deg,#1c1c22,#33333d);position:relative}
+  .faceid-ring{position:absolute;inset:14px;border:2px solid #6fd0ff;border-radius:20px;animation:faceidpulse 1.2s ease-in-out infinite}
+  @keyframes faceidpulse{0%,100%{opacity:.4;transform:scale(.96)}50%{opacity:1;transform:scale(1)}}
+  
+  /* events */
+  .range{-webkit-appearance:none;appearance:none;width:100%;height:7px;border-radius:7px;background:linear-gradient(90deg,#FFD1E1,#C6A0F0);outline:none;margin:2px 0 12px}
+  .range::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #C6A0F0;cursor:pointer;box-shadow:0 3px 8px rgba(150,100,180,.4)}
+  .range::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid #C6A0F0;cursor:pointer}
+  .fchips{display:flex;gap:7px;overflow-x:auto;padding-bottom:4px;scrollbar-width:none}
+  .fchips::-webkit-scrollbar{display:none}
+  .fchip{flex:0 0 auto;border:1px solid #EEE2EE;background:#FBF6FB;color:#8B7A92;font-weight:700;font-size:12px;padding:7px 13px;border-radius:16px;cursor:pointer;white-space:nowrap}
+  .fchip.on{background:linear-gradient(120deg,#FFD1E1,#E0D2FB);color:#7A5A86;border-color:transparent}
+  .sortpills{display:flex;gap:8px;margin-top:10px}
+  .sortpill{flex:1;border:1px solid #EFE6F0;background:#fff;color:#9B8FA8;font-weight:800;font-size:12px;padding:9px;border-radius:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px}
+  .sortpill.on{background:#F3ECF6;color:#8C6BD8;border-color:transparent}
+  .ev-img{height:130px;border-radius:16px;display:grid;place-items:center;position:relative;overflow:hidden;box-shadow:inset 0 -24px 40px rgba(0,0,0,.04)}
+  .dist-pill{position:absolute;left:10px;top:10px;background:rgba(255,255,255,.85);color:#7B6A86;font-weight:800;font-size:11px;padding:4px 9px;border-radius:14px;display:inline-flex;align-items:center;gap:3px}
+  .rank-badge{position:absolute;right:10px;top:10px;background:#E7F6EF;color:#3E8F73;font-weight:800;font-size:11px;padding:4px 9px;border-radius:14px;display:inline-flex;align-items:center;gap:3px}
+  .rank-badge.lock{background:rgba(255,255,255,.9);color:#A38FA0}
+  .ratebtn.lock{background:#EFE9EF;color:#A38FA0}
+  
+  /* instagram + verify */
+  .igconnect{margin-top:8px;border:none;background:linear-gradient(45deg,#F58529,#DD2A7B,#8134AF);color:#fff;font-weight:800;font-size:12px;padding:7px 14px;border-radius:16px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .igverified{margin-top:8px;display:inline-flex;align-items:center;gap:5px;background:#fff;color:#C13584;font-weight:800;font-size:12px;padding:6px 12px;border-radius:16px;border:1px solid #F3D9EC}
+  .ig-hero{width:64px;height:64px;border-radius:20px;margin:0 auto;display:grid;place-items:center;background:linear-gradient(45deg,#F58529,#DD2A7B,#8134AF,#515BD4)}
+  .ig-input{width:100%;border:1px solid #F0E6F0;border-radius:14px;padding:12px;font-family:var(--font-sans);font-size:14px;color:#5A4A60;outline:none;margin-top:14px;text-align:center}
+  .btn.igbtn{background:linear-gradient(45deg,#F58529,#DD2A7B,#8134AF,#515BD4);color:#fff}
+  
+  /* photo upload + accounts + bell */
+  .camera-badge{position:absolute;right:-2px;bottom:-2px;width:30px;height:30px;border-radius:50%;border:3px solid #fff;background:linear-gradient(135deg,#FF9DC0,#C6A0F0);color:#fff;display:grid;place-items:center;cursor:pointer;padding:0}
+  .avatar-ring{width:100%;height:100%;border-radius:50%;overflow:hidden;position:relative;box-shadow:0 6px 16px rgba(120,90,110,.16)}
+  .avatar-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:50%}
+  .avatar-emoji{position:absolute;inset:0;display:grid;place-items:center;font-size:50%;filter:saturate(1.1)}
+  .acct-ic{width:40px;height:40px;border-radius:13px;display:grid;place-items:center;flex:0 0 auto}
+  .acct-ic.ig{background:linear-gradient(45deg,#F58529,#DD2A7B,#8134AF)}
+  .lensbtn.hasbadge{position:relative}
+  .bell-badge{position:absolute;top:-5px;right:-5px;background:#FF7FA6;color:#fff;font-size:8px;font-weight:800;min-width:15px;height:15px;border-radius:8px;display:grid;place-items:center;padding:0 3px;border:1.5px solid #fff}
+
+  /* proximity rate radar */
+  .prox-radar{height:160px;display:grid;place-items:center;position:relative;overflow:hidden;background:linear-gradient(180deg,#F3ECF6,#FFFDFE);margin-bottom:12px}
+  .radar-ring{position:absolute;width:130px;height:130px;border-radius:50%;border:2px solid rgba(183,156,240,.35);animation:radarPulse 2.4s ease-out infinite}
+  .radar-sweep{position:absolute;width:130px;height:130px;border-radius:50%;background:conic-gradient(from 0deg,transparent 0deg,rgba(127,184,240,.35) 40deg,transparent 80deg);animation:spin 3s linear infinite}
+  .radar-core{text-align:center;position:relative;z-index:2}
+  .radar-label{font-size:10px;font-weight:800;letter-spacing:.12em;color:#8C6BD8;display:block}
+  .radar-count{font-family:var(--font-display);font-weight:700;font-size:28px;color:#5A4A60;display:block;margin-top:4px}
+  @keyframes radarPulse{0%{transform:scale(.55);opacity:.9}100%{transform:scale(1.35);opacity:0}}
+
+  /* lens + rate merged tab */
+  .lens-rate-screen{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 0 12px;background:transparent}
+  .lens-rate-screen .viewfinder-panel{flex:1;min-height:0}
+  .lens-rate-scroll{padding-top:0}
+  .lens-rate-tabs{display:flex;gap:8px;padding:14px 16px 18px;flex-shrink:0;z-index:2;background:linear-gradient(180deg,#FFFDFE 0%,#FCF8FB 100%);border-bottom:1px solid rgba(0,0,0,.05)}
+  .lens-rate-scroll .lens-rate-tabs{position:sticky;top:0}
+  .lens-rate-tab{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:11px 12px;border-radius:14px;border:1px solid var(--border-subtle);background:var(--surface);color:var(--text-secondary);font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:-.015em}
+  .lens-rate-tab.on{background:linear-gradient(135deg,#E6DBFF,#FFD1E1);border-color:transparent;color:var(--text-primary);box-shadow:0 4px 14px rgba(140,107,216,.12)}
+  .lens-rate-tab:active{transform:scale(.98)}
+  .lens-rate-screen .lens-hud{margin:0 0 8px;border-radius:0;box-shadow:none;min-height:min(52vh,420px)}
+  .lens-rate-panel{padding:8px 16px 20px;display:flex;flex-direction:column;gap:0}
+  .lens-scan-cta{margin:4px 0 20px}
+  .lens-scan-stop{margin:-4px 0 20px;padding:11px}
+  .lens-rate-note{display:flex;align-items:center;gap:8px;margin:0 0 20px;padding:0 2px;font-size:13px;font-weight:500;color:var(--text-secondary);line-height:1.45;letter-spacing:-.012em}
+  .lens-rate-note.warn{color:#C77A8C}
+  .lens-rate-muted{opacity:.55}
+  .msg-row-wrap{position:relative;margin-bottom:0}
+  .msg-row-wrap .msg-row,.msg-row-wrap .ech-msg-row{width:100%;margin-bottom:0;padding-right:42px}
+  .msg-row-unread{border-color:#E8D4FF;background:linear-gradient(135deg,rgba(255,241,250,.95),rgba(239,233,255,.85))}
+  .msg-row-top{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .msg-row-name{border:none;background:none;padding:0;font:inherit;font-weight:700;font-size:14px;color:#121212;cursor:pointer;text-align:left;letter-spacing:-.01em}
+  .msg-row-name:active{color:#7B5BD8}
+  .msg-row-avatar-btn{border:none;background:none;padding:0;cursor:pointer;flex-shrink:0;line-height:0}
+  .msg-row-avatar-btn:active{transform:scale(.96)}
+  .msg-new-badge{font-size:9px;font-weight:900;letter-spacing:.08em;color:#fff;background:linear-gradient(135deg,#FF7FA6,#B79CF0);padding:2px 6px;border-radius:999px;line-height:1.2}
+  .msg-row-time{display:block;font-size:10px;margin-top:2px}
+  .msg-row-delete{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:34px;height:34px;border:none;border-radius:50%;background:#FFF1F6;color:#E07AA0;display:grid;place-items:center;cursor:pointer;box-shadow:0 2px 8px rgba(140,90,120,.12)}
+  .msg-row-delete:active{transform:translateY(-50%) scale(.92)}
+  .msg-row{width:100%;cursor:pointer;text-align:left;margin-bottom:10px}
+  .msg-row:active{transform:scale(.99)}
+  .msg-row-preview{display:block;font-size:12px;color:#B79CF0;margin-top:3px}
+
+  /* lens AR HUD */
+  .lens-hud{flex:1;min-height:0;display:flex;flex-direction:column;background:linear-gradient(180deg,#0b1524 0%,#0f2230 50%,#0a1620 100%);position:relative;overflow:hidden;color:#b8e8dc}
+  .lens-bracket{position:absolute;width:28px;height:28px;border:2px solid rgba(95,214,160,.75);pointer-events:none;z-index:4}
+  .lens-bracket.tl{top:12px;left:12px;border-right:none;border-bottom:none}
+  .lens-bracket.tr{top:12px;right:12px;border-left:none;border-bottom:none}
+  .lens-bracket.bl{bottom:12px;left:12px;border-right:none;border-top:none}
+  .lens-bracket.br{bottom:12px;right:12px;border-left:none;border-top:none}
+  .lens-hud-head{display:flex;align-items:center;justify-content:center;gap:10px;padding:16px 14px;z-index:3}
+  .lens-live-dot{width:8px;height:8px;border-radius:50%;background:#5fd6a0;box-shadow:0 0 12px #5fd6a0;animation:pulsering 1.8s infinite;flex-shrink:0}
+  .lens-live-dot.off{background:#5a7080;box-shadow:none;animation:none}
+  .lens-toggle-chip{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:999px;border:1px solid rgba(95,214,160,.45);background:rgba(95,214,160,.12);color:#eafff5;font-size:13px;font-weight:700;letter-spacing:-.015em;cursor:pointer;font-family:var(--font-sans)}
+  .lens-toggle-chip:active{transform:scale(.96)}
+  .lens-field{flex:1;min-height:220px;position:relative;margin:0 12px 12px;border-radius:18px;overflow:hidden;border:1px solid rgba(95,214,160,.25)}
+  .lens-map{position:absolute;inset:0;background:#0d1f2d url("https://tile.openstreetmap.org/6/32/32.png") center/cover no-repeat;opacity:.92}
+  .lens-map-grid{position:absolute;inset:0;background:linear-gradient(rgba(95,214,160,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(95,214,160,.08) 1px,transparent 1px);background-size:28px 28px;mix-blend-mode:screen;pointer-events:none}
+  .lens-map-you{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:34px;height:34px;border-radius:50%;background:rgba(95,214,160,.25);border:2px solid #5fd6a0;color:#eafff5;display:grid;place-items:center;box-shadow:0 0 18px rgba(95,214,160,.45);z-index:2}
+  .lens-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:24px;color:#9de8d4;font-weight:600;font-size:15px;letter-spacing:-.015em;z-index:3;background:rgba(11,21,36,.55)}
+  .lens-empty p{margin:0;font-size:15px;font-weight:700;color:#b8e8dc}
+  .lens-target{position:absolute;transform:translate(-50%,-50%);background:none;border:none;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;padding:4px;transition:transform .2s;z-index:4}
+  .lens-target.locked{transform:translate(-50%,-50%) scale(1.08)}
+  .lens-target.ghost{opacity:.45;cursor:default}
+  .lens-score-pill{font-size:11px;font-weight:800;background:rgba(255,255,255,.92);padding:3px 9px;border-radius:12px;line-height:1}
+  .lens-avatar{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;font-size:26px;border:2px solid rgba(255,255,255,.5)}
+  .lens-name{font-size:12px;font-weight:800;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.5)}
+  .lens-uid{font-size:9px;font-weight:700;color:rgba(184,232,220,.7);letter-spacing:.06em}
+  .lens-lock{position:absolute;top:-2px;right:-2px;background:rgba(0,0,0,.5);border-radius:50%;padding:3px;color:#fff}
+  .lens-footer{padding:0 16px 16px;z-index:3}
+  .lens-acquire{width:100%;border:none;border-radius:16px;padding:14px;background:linear-gradient(135deg,rgba(95,214,160,.25),rgba(127,184,240,.25));border:1px solid rgba(95,214,160,.5);color:#eafff5;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;font-family:var(--font-sans);letter-spacing:-.015em}
+  .lens-acquire-sm{width:auto;padding:10px 20px;font-size:13px;margin-top:4px}
+
+  /* Instagram-style DM */
+  .dm-screen{position:absolute;inset:0;z-index:45;background:#FFFDFE;display:flex;flex-direction:column;animation:fade .2s}
+  .dm-head{display:flex;align-items:center;gap:10px;padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top,0px));border-bottom:1px solid #F2E9F0;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);flex-shrink:0}
+  .dm-head-meta{flex:1;min-width:0;line-height:1.25;text-align:left}
+  .dm-head-meta b{display:block;font-size:14px;color:#5A4A60}
+  .dm-head-meta .muted{font-size:11px}
+  .dm-head-score{font-style:normal;color:#8C6BD8;font-weight:800}
+  .dm-head-profile{flex:1;min-width:0;display:flex;align-items:center;gap:10px;border:none;background:none;padding:0;cursor:pointer;text-align:left;font:inherit}
+  .dm-head-profile:active{opacity:.85}
+  .dm-end-btn{border:none;background:#FFF1F6;color:#E07AA0;font-weight:800;font-size:11px;padding:7px 11px;border-radius:999px;cursor:pointer;white-space:nowrap;flex-shrink:0}
+  .dm-end-btn:active{transform:scale(.96)}
+  .dm-head-ic{width:34px;height:34px;border-radius:11px;border:none;background:#F3ECF6;color:#9B7CC0;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .dm-head-ic:active{transform:scale(.94)}
+  .dm-thread{flex:1;min-height:0;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:10px;-webkit-overflow-scrolling:touch;scroll-behavior:auto;overscroll-behavior:contain;touch-action:pan-y;background:linear-gradient(180deg,#FFFDFE,#FCF7FB);scrollbar-width:none;-ms-overflow-style:none}
+  .dm-thread::-webkit-scrollbar{display:none;width:0;height:0}
+  .dm-day-divider{display:flex;align-items:center;justify-content:center;padding:4px 0}
+  .dm-day-divider span{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#9B8FA8;padding:4px 10px;border-radius:999px;background:rgba(243,238,255,.9);border:1px solid rgba(183,156,240,.16)}
+  .dm-new-divider{display:flex;align-items:center;gap:10px;padding:2px 0 6px}
+  .dm-new-divider::before,.dm-new-divider::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,transparent,rgba(183,156,240,.45),transparent)}
+  .dm-new-divider span{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#8C6BD8}
+  .dm-jump-latest{position:absolute;left:50%;bottom:calc(148px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:8;display:inline-flex;align-items:center;gap:6px;border:none;border-radius:999px;padding:8px 14px;background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff;font-size:11px;font-weight:800;cursor:pointer;box-shadow:0 8px 24px rgba(140,100,160,.28)}
+  .dm-quick-replies{display:flex;flex-direction:column;gap:8px;padding:8px 4px 4px}
+  .dm-quick-label{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#9B7FD4}
+  .dm-quick-chips{display:flex;flex-wrap:wrap;gap:8px}
+  .dm-quick-chip{border:1px solid rgba(183,156,240,.22);background:rgba(255,255,255,.92);color:#6B5080;font-size:12px;font-weight:700;padding:8px 12px;border-radius:999px;cursor:pointer}
+  .dm-seen-hint{align-self:flex-end;font-size:10px;font-weight:700;color:#9B8FA8;padding:0 6px 2px}
+  .dm-row{display:flex;align-items:flex-end;gap:8px;width:100%}
+  .dm-row.mine{justify-content:flex-end}
+  .dm-bubble-wrap{position:relative;max-width:78%;display:flex;flex-direction:column;align-items:flex-start}
+  .dm-row.mine .dm-bubble-wrap{align-items:flex-end;margin-left:auto}
+  .dm-bubble{max-width:100%;width:max-content;flex:0 0 auto;background:#fff;border:1px solid #F1E8F0;border-radius:18px 18px 18px 6px;padding:10px 12px 6px;box-shadow:0 4px 14px rgba(140,100,130,.06);text-align:left;cursor:pointer;border-width:1px;font:inherit;color:inherit;appearance:none;-webkit-appearance:none}
+  .dm-bubble.has-media,.dm-bubble.has-voice{padding:4px}
+  .dm-bubble.has-media p,.dm-bubble.has-voice p{padding:6px 8px 2px}
+  .dm-bubble.mine{background:linear-gradient(135deg,#FF9DC0,#B79CF0);border-color:transparent;border-radius:18px 18px 6px 18px;color:#fff}
+  .dm-bubble p{margin:0;font-size:13.5px;line-height:1.45;white-space:pre-wrap;overflow-wrap:break-word;word-break:normal}
+  .dm-bubble.mine p{color:#fff}
+  .dm-media{display:block;max-width:220px;width:100%;border-radius:14px;object-fit:cover;background:#111}
+  .dm-bubble.has-media .dm-media{max-width:240px;min-width:140px}
+  video.dm-media{min-height:120px}
+  .dm-voice{display:flex;align-items:center;gap:8px;padding:8px 10px;min-width:180px}
+  .dm-voice-play{width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,.25);display:grid;place-items:center;flex-shrink:0;border:none;padding:0;color:inherit;cursor:pointer}
+  .dm-voice-play.playing{background:rgba(255,255,255,.45)}
+  .dm-bubble:not(.mine) .dm-voice-play{background:#EFE9FF;color:#8C6BD8}
+  .dm-voice-bars{flex:1;display:flex;align-items:center;gap:2px;height:24px}
+  .dm-voice-bars.active span{animation:voiceBar .6s ease-in-out infinite alternate}
+  .dm-voice-bars span:nth-child(odd){animation-delay:.1s}
+  @keyframes voiceBar{from{opacity:.35;transform:scaleY(.7)}to{opacity:1;transform:scaleY(1.15)}}
+  .dm-voice-bars span{width:3px;border-radius:999px;background:currentColor;opacity:.55}
+  .dm-bubble.mine .dm-voice-bars span{opacity:.85}
+  .dm-voice-dur{font-size:11px;font-weight:700;opacity:.8;flex-shrink:0}
+  .dm-react-float{position:absolute;bottom:-8px;right:8px;background:#fff;border-radius:999px;padding:2px 6px;font-size:13px;box-shadow:0 2px 8px rgba(120,80,110,.15);line-height:1}
+  .dm-row.mine .dm-react-float{right:auto;left:8px}
+  .dm-react-bar{display:flex;gap:4px;margin-top:6px;padding:4px 6px;background:rgba(255,255,255,.95);border-radius:999px;box-shadow:0 4px 16px rgba(120,80,110,.12);border:1px solid #F1E8F0;animation:pop .2s}
+  .dm-row.mine .dm-react-bar{margin-left:auto}
+  .dm-react-btn{border:none;background:none;font-size:18px;cursor:pointer;padding:2px 4px;line-height:1;border-radius:8px}
+  .dm-react-btn:active{transform:scale(1.2);background:#FFF1F6}
+  .dm-time{display:block;font-size:9px;opacity:.65;margin-top:4px;text-align:right}
+  .dm-bubble.typing{padding:12px 16px;cursor:default}
+  .dm-dots{display:flex;gap:4px;align-items:center}
+  .dm-dots i{width:6px;height:6px;border-radius:50%;background:#C9B8C6;animation:dmDot 1.2s infinite}
+  .dm-dots i:nth-child(2){animation-delay:.15s}
+  .dm-dots i:nth-child(3){animation-delay:.3s}
+  @keyframes dmDot{0%,80%,100%{opacity:.35;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+  .dm-emoji-panel{flex-shrink:0;border-top:1px solid #F2E9F0;background:#FFFBFE;padding:10px 8px 6px;max-height:min(38vh,220px);overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .dm-emoji-panel::-webkit-scrollbar{display:none;width:0;height:0}
+  .dm-emoji-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:2px}
+  .dm-emoji-btn{border:none;background:none;font-size:22px;line-height:1;padding:6px 2px;border-radius:10px;cursor:pointer}
+  .dm-emoji-btn:active{background:#FFF1F6;transform:scale(1.15)}
+  .dm-sticker-panel{display:flex;flex-direction:column;gap:8px}
+  .dm-sticker-search{width:100%;border:1px solid #F0E6F0;border-radius:12px;padding:8px 12px;font-family:var(--font-sans);font-size:13px;color:#5A4A60;outline:none;background:#fff}
+  .dm-sticker-search::placeholder{color:#C5B6C5}
+  .dm-sticker-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;max-height:min(28vh,160px);overflow-y:auto;overflow-x:hidden;scrollbar-width:none;-ms-overflow-style:none}
+  .dm-sticker-grid::-webkit-scrollbar{display:none}
+  .dm-sticker-tile{aspect-ratio:1;border:none;background:#F8F4FC;border-radius:12px;padding:4px;cursor:pointer;overflow:hidden;display:grid;place-items:center}
+  .dm-sticker-tile img{width:100%;height:100%;object-fit:cover;border-radius:8px}
+  .dm-sticker-upload{color:#8C6BD8;border:1.5px dashed rgba(140,107,216,.35)}
+  .dm-sticker-busy{grid-column:1/-1;text-align:center;font-size:11px;padding:8px}
+  .dm-sticker-img{display:block;width:min(168px,72vw);max-height:168px;object-fit:contain;border-radius:0;background:transparent}
+  .dm-bubble.has-sticker{background:transparent!important;border:none!important;box-shadow:none!important;padding:2px 0!important;color:inherit}
+  .dm-bubble.has-sticker.mine{background:transparent!important;color:inherit}
+  .dm-bubble.has-sticker .dm-time{text-align:right;margin-top:2px;opacity:.55}
+  .dm-delete-btn{border:none;background:#FFF1F6;color:#E07AA0;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .dm-delete-btn:active{transform:scale(.92);background:#FFE4EE}
+  .dm-recording{display:flex;align-items:center;gap:10px;padding:10px 14px;background:linear-gradient(135deg,#FFF1F6,#EFE9FF);border-top:1px solid #F2E9F0;font-size:12px;font-weight:700;color:#E07AA0}
+  .dm-rec-dot{width:8px;height:8px;border-radius:50%;background:#FF7FA6;animation:pulsering 1.2s infinite;flex-shrink:0}
+  .dm-rec-stop{margin-left:auto;border:none;background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff;font-weight:800;font-size:11px;padding:7px 14px;border-radius:999px;cursor:pointer}
+  .dm-compose{display:flex;align-items:center;gap:6px;padding:8px 10px;padding-bottom:max(8px,env(safe-area-inset-bottom,0px));border-top:1px solid #F2E9F0;background:#fff;flex-shrink:0}
+  .dm-tool{width:36px;height:36px;border-radius:50%;border:none;background:#F3ECF6;color:#9B7CC0;display:grid;place-items:center;cursor:pointer;flex-shrink:0;transition:background .15s,transform .12s}
+  .dm-tool.on{background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff}
+  .dm-tool:active{transform:scale(.92)}
+  .dm-input{flex:1;min-width:0;border:1px solid #F0E6F0;border-radius:999px;padding:10px 14px;font-family:var(--font-sans);font-size:14px;color:#5A4A60;outline:none;background:#FFFBFE}
+  .dm-input::placeholder{color:#C5B6C5}
+  .dm-send{width:40px;height:40px;border-radius:50%;border:none;background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff;display:grid;place-items:center;cursor:pointer;flex-shrink:0;transition:opacity .15s,transform .12s,background .15s}
+  .dm-send.voice{background:#F3ECF6;color:#9B7CC0}
+  .dm-send.voice.rec{background:#FF7FA6;color:#fff;animation:softpulse 1s ease-in-out infinite}
+  .dm-send:disabled{opacity:.4;cursor:default}
+  .dm-send:not(:disabled):active{transform:scale(.94)}
+
+  .dm-tip{display:flex;align-items:flex-start;gap:10px;padding:12px 14px;margin-bottom:6px;border-radius:18px;background:linear-gradient(135deg,#FFF4F8,#EFE9FF);border:1.5px solid #E8DFF5;animation:slideUp .35s ease}
+  .dm-tip-icon{width:36px;height:36px;border-radius:12px;background:#fff;display:grid;place-items:center;color:#B79CF0;flex-shrink:0;box-shadow:0 4px 12px rgba(183,156,240,.2)}
+  .dm-tip-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:#9B8FA8;line-height:1.4}
+  .dm-tip-body b{font-size:12.5px;color:#5A4A60}
+  .dm-tip-btn{flex-shrink:0;border:none;border-radius:999px;padding:7px 12px;font-family:var(--font-sans);font-size:10.5px;font-weight:800;color:#fff;background:linear-gradient(120deg,#FF9DC0,#C6A0F0);cursor:pointer;white-space:nowrap}
+  .dm-reply-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid #F2E9F0;background:#FFFBFE;flex-shrink:0}
+  .dm-reply-bar-inner{flex:1;min-width:0;border-left:3px solid #B79CF0;padding-left:10px}
+  .dm-reply-bar-label{display:block;font-size:10px;font-weight:800;color:#B79CF0;text-transform:uppercase;letter-spacing:.06em}
+  .dm-reply-bar-text{display:block;font-size:12px;color:#5A4A60;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .dm-reply-bar-x{width:30px;height:30px;border:none;border-radius:50%;background:#F3ECF6;color:#9B8FA8;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .dm-reply-in{display:flex;gap:8px;align-items:stretch;margin:4px 6px 6px;padding:6px 8px;border-radius:10px;background:rgba(0,0,0,.06);font-size:11px;line-height:1.35}
+  .dm-reply-in.mine{background:rgba(255,255,255,.18)}
+  .dm-reply-in-bar{width:3px;border-radius:999px;background:#B79CF0;flex-shrink:0}
+  .dm-reply-in.mine .dm-reply-in-bar{background:rgba(255,255,255,.85)}
+  .dm-reply-in-text{opacity:.85;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .dm-burn-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;border-top:1px solid #F2E9F0;background:#FFFBFE;flex-shrink:0}
+  .dm-burn-opt{display:inline-flex;align-items:center;gap:4px;border:1px solid #EBD9F0;background:#fff;color:#7B6A86;font-size:10px;font-weight:800;padding:6px 10px;border-radius:999px;cursor:pointer;flex:0 0 auto}
+  .dm-burn-opt.on{background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff;border-color:transparent}
+  .dm-burn-timers{display:flex;flex-wrap:wrap;gap:4px;width:100%;margin-top:2px}
+  .dm-burn-sec{border:1px solid #EBD9F0;background:#fff;color:#9B8FA8;font-size:10px;font-weight:800;padding:4px 8px;border-radius:999px;cursor:pointer}
+  .dm-burn-sec.on{background:#EFE9FF;color:#8C6BD8;border-color:#D8C8F0}
+  .dm-burn-badge{display:inline-flex;align-items:center;font-size:9px;font-weight:900;letter-spacing:.04em;background:#EFE9FF;color:#8C6BD8;padding:3px 8px;border-radius:999px;margin-bottom:4px;align-self:flex-start;line-height:1.2}
+  .dm-burn-badge.mine{align-self:flex-end;background:rgba(183,156,240,.35);color:#fff;border:1px solid rgba(255,255,255,.35)}
+  .dm-bubble{position:relative}
+  .dm-typing-text{font-size:18px;font-weight:800;letter-spacing:.12em;color:#C9B8C6;line-height:1}
+  .dm-view-once-card{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:22px 16px;min-width:180px;min-height:120px;background:linear-gradient(145deg,#2A2030,#1A1420);color:#fff;border-radius:14px;text-align:center;cursor:pointer}
+  .dm-view-once-card b{font-size:13px}
+  .dm-view-once-card span{font-size:11px;opacity:.8;line-height:1.4}
+  .dm-bubble.locked-once{cursor:pointer;padding:4px;background:transparent;border:none;box-shadow:none}
+  .dm-expired,.dm-opened-once{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#9B8FA8;background:#F5EFF8!important;border:1px dashed #E0D4EA!important;box-shadow:none!important;padding:10px 14px!important}
+  .dm-bubble.mine.dm-expired,.dm-bubble.mine.dm-opened-once{color:rgba(255,255,255,.85);background:rgba(255,255,255,.15)!important;border-color:rgba(255,255,255,.25)!important}
+  .user-profile-scroll{padding-top:0}
+  .user-profile-actions{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+
+  /* voice call */
+  .call-screen{position:absolute;inset:0;z-index:35;display:flex;flex-direction:column;background:linear-gradient(180deg,#1a1030 0%,#2d1b4e 45%,#1f1635 100%);color:#fff;animation:fade .25s}
+  .call-top{padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top,0px));display:flex;justify-content:flex-end}
+  .call-back{width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;cursor:pointer}
+  .call-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:20px;text-align:center}
+  .call-avatar-ring{padding:4px;border-radius:50%;background:linear-gradient(135deg,#FF9DC0,#B79CF0,#7FB8F0);margin-bottom:8px}
+  .call-name{font-family:var(--font-display);font-size:26px;font-weight:700;margin:0;color:#fff}
+  .call-status{font-size:14px;color:rgba(255,255,255,.72);margin:0 0 6px;font-weight:600;letter-spacing:.04em}
+  .call-controls{display:flex;justify-content:center;align-items:flex-start;gap:28px;padding:24px 20px;padding-bottom:max(28px,env(safe-area-inset-bottom,0px))}
+  .call-ctrl-wrap{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:72px}
+  .call-ctrl{display:flex;align-items:center;justify-content:center;border:none;background:rgba(255,255,255,.14);color:#fff;width:64px;height:64px;border-radius:50%;cursor:pointer;flex-shrink:0;transition:transform .12s,background .15s}
+  .call-ctrl-label{font-size:10px;font-weight:700;color:rgba(255,255,255,.88);text-align:center;line-height:1.2;max-width:76px}
+  .call-ctrl.on{background:rgba(255,255,255,.28)}
+  .call-ctrl.end{background:#E85D7A;box-shadow:0 8px 24px rgba(232,93,122,.45)}
+  .call-ctrl:active{transform:scale(.94)}
+  .call-screen--video{background:#0d0818;justify-content:flex-end}
+  .call-video-stage{flex:1;min-height:0;position:relative;overflow:hidden;display:flex;flex-direction:column}
+  .call-video-remote{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .call-video-remote-img{width:100%;height:100%;object-fit:cover;opacity:.55;filter:blur(2px)}
+  .call-video-remote-emoji{font-size:120px;opacity:.35}
+  .call-video-remote-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(13,8,24,.55) 0%,rgba(13,8,24,.25) 40%,rgba(13,8,24,.85) 100%)}
+  .call-video-remote-meta{position:absolute;bottom:20px;left:0;right:0;text-align:center;z-index:2;padding:0 16px}
+  .call-video-remote-meta b{display:block;font-family:var(--font-display);font-size:22px;margin-bottom:4px}
+  .call-video-remote-meta span{font-size:13px;color:rgba(255,255,255,.75);font-weight:600}
+  .call-video-local{position:absolute;top:max(56px,env(safe-area-inset-top,0px) + 44px);right:16px;width:96px;height:128px;object-fit:cover;border-radius:16px;border:2px solid rgba(255,255,255,.35);box-shadow:0 8px 24px rgba(0,0,0,.35);z-index:3;background:#1a1030}
+  .call-video-local.off{opacity:.35;filter:grayscale(1)}
+  .call-video-error{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2;display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:14px;background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:700;max-width:calc(100% - 32px);text-align:center}
+  .call-video-top{position:absolute;top:0;left:0;right:0;padding:12px 16px;padding-top:max(12px,env(safe-area-inset-top,0px));display:flex;align-items:center;justify-content:space-between;z-index:4}
+  .call-controls--video{flex-shrink:0;position:relative;z-index:5;gap:22px;padding:16px 12px;padding-bottom:max(20px,env(safe-area-inset-bottom,0px));background:linear-gradient(180deg,rgba(13,8,24,0) 0%,rgba(13,8,24,.92) 28%,#0d0818 100%)}
+  .call-controls--video .call-ctrl{width:60px;height:60px}
+  .call-controls--video .call-ctrl-wrap{min-width:68px}
+  .call-controls--video .call-ctrl-label{font-size:9px;max-width:68px}
+  .call-screen.ringing .call-avatar-ring.pulsing{animation:callPulse 1.4s ease-in-out infinite}
+  .call-video-remote.pulsing{animation:callPulse 1.4s ease-in-out infinite}
+  .call-status-ringing{color:#B8F5D4;font-weight:700;letter-spacing:.06em}
+  .call-ring-indicator{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;gap:8px;z-index:3}
+  .call-ring-indicator span{width:10px;height:10px;border-radius:50%;background:rgba(95,214,160,.85);animation:callRingDot 1.2s ease-in-out infinite}
+  .call-ring-indicator span:nth-child(2){animation-delay:.15s}
+  .call-ring-indicator span:nth-child(3){animation-delay:.3s}
+  .call-ring-indicator--voice{bottom:-8px;top:auto;transform:translateX(-50%)}
+  .call-video-local.waiting{opacity:.88;border-color:rgba(183,156,240,.55)}
+  @keyframes callPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+  @keyframes callRingDot{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
+  .city-autocomplete{position:relative;margin-bottom:10px}
+  .city-autocomplete-drop{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:12;background:#fff;border:1px solid rgba(183,156,240,.28);border-radius:16px;box-shadow:0 12px 32px rgba(120,90,140,.16);max-height:220px;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;padding:6px}
+  .city-autocomplete-drop::-webkit-scrollbar{display:none}
+  .city-autocomplete-opt{display:block;width:100%;border:none;background:transparent;text-align:left;padding:14px 16px;font-family:var(--font-sans);font-size:15px;font-weight:600;color:var(--text-primary);cursor:pointer;border-radius:12px;min-height:48px;line-height:1.25}
+  .city-autocomplete-opt.on,.city-autocomplete-opt:active{background:#F5EEFF;color:#8C6BD8}
+  .dt-wheels{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:6px 0 8px}
+  .dt-wheel{height:132px;overflow-y:auto;scroll-snap-type:y mandatory;border:1px solid rgba(183,156,240,.22);border-radius:12px;background:#FFFBFE;-webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none}
+  .dt-wheel::-webkit-scrollbar{display:none}
+  .dt-wheel-item{display:flex;align-items:center;justify-content:center;width:100%;min-height:40px;border:none;background:transparent;font-family:var(--font-sans);font-size:13px;font-weight:700;color:var(--text-secondary);cursor:pointer;scroll-snap-align:center}
+  .dt-wheel-item.on{background:linear-gradient(135deg,#EFE9FF,#F5E8FF);color:#8C6BD8}
+  .dt-wheels-preview{text-align:center;font-size:13px;font-weight:700;color:#8C6BD8;margin:0 0 12px;letter-spacing:-.01em}
+  .party-banner-upload{display:block;width:100%;height:120px;border-radius:16px;border:2px dashed rgba(183,156,240,.35);background:linear-gradient(135deg,#FFF8FC,#F5EEFF);margin-bottom:12px;cursor:pointer;overflow:hidden;position:relative}
+  .party-banner-upload span{display:grid;place-items:center;height:100%;font-size:12px;font-weight:700;color:#9B8FA8}
+  .party-price-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:4px}
+  .party-price-input{margin-bottom:0!important}
+  .party-currency-select{margin-bottom:0!important;min-width:88px;padding-right:28px}
+  .party-map-wrap{margin:10px 0 14px;border-radius:16px;overflow:hidden;border:1px solid rgba(183,156,240,.25);height:200px}
+  .party-pin-map{width:100%;height:200px;z-index:0}
+  .party-map-pin{width:28px;height:28px;background:linear-gradient(135deg,#FF9DC0,#C6A0F0);border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(120,80,110,.35)}
+  .party-secret-map-note{font-size:11px;margin:0 0 10px;padding:8px 10px;border-radius:10px;background:#FFF8FC;border:1px solid #F0E6F0;line-height:1.45}
+  .party-host-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+  .party-host-actions .btn{flex:1;min-width:120px}
+  .btn.soft.danger{color:#C45A6A;background:#FFF0F3;border-color:#F5D4DC}
+  .party-price-tag{font-size:14px;font-weight:800;color:#8C6BD8;margin:6px 0}
+  .party-map-pending{font-size:11.5px;margin-top:12px;padding:10px;border-radius:12px;background:#F8F4FA;text-align:center}
+  .party-detail-hero{min-height:140px;display:grid;place-items:center}
+
+  /* ---- Echelon polished design system ---- */
+  .appbody--ig,.appbody--ig button,.appbody--ig input,.appbody--ig textarea,.appbody--ig select{font-family:var(--font-sans);letter-spacing:-.018em}
+  .appbody--ig .wordmark,.appbody--ig .feed-brand,.appbody--ig .stat-hero-value,.appbody--ig .spark-match-card h2{font-family:var(--font-display)}
+  @keyframes ech-rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes ech-pulse-soft{0%,100%{transform:scale(1)}50%{transform:scale(1.02)}}
+  .ech-kicker{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;line-height:1.2}
+  .ech-kicker--section{display:inline-flex;align-items:center;gap:5px;margin:0 max(12px,env(safe-area-inset-left)) 10px max(12px,env(safe-area-inset-right))}
+  .ech-glass-card{background:rgba(255,255,255,.82);border:1px solid rgba(183,156,240,.14);border-radius:18px;box-shadow:0 6px 22px rgba(120,90,140,.07)}
+  .ech-screen-head{padding:12px max(12px,env(safe-area-inset-left)) 10px max(12px,env(safe-area-inset-right));display:flex;flex-direction:column;gap:0;background:transparent}
+  .ech-screen-head--row{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+  .ech-screen-head-main{display:flex;align-items:center;gap:10px;min-width:0;flex:1}
+  .ech-screen-head-titles{min-width:0}
+  .ech-screen-head-titles h1{margin:0;font-size:18px;font-weight:800;color:#5A4A60;letter-spacing:-.03em;line-height:1.2}
+  .ech-screen-head-titles p{margin:2px 0 0;font-size:11px;color:#9B8FA8;font-weight:600;line-height:1.3}
+  .ech-screen-back{width:36px;height:36px;border:none;border-radius:12px;background:rgba(239,233,255,.7);color:#6B5080;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .ech-screen-back:active{transform:scale(.96)}
+  .ech-page-hint{margin:0 max(12px,env(safe-area-inset-left)) 14px max(12px,env(safe-area-inset-right));font-size:12px;font-weight:600;color:#9B8FA8;text-align:center}
+  .ech-empty-card{text-align:center;padding:28px 18px;margin:0 0 12px;background:rgba(255,255,255,.82);border:1px solid rgba(183,156,240,.14);border-radius:0;border-left:none;border-right:none;box-shadow:none;animation:ech-rise .3s ease}
+  .ech-cta-soft{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:calc(100% - 24px);margin:8px max(12px,env(safe-area-inset-left)) 0 max(12px,env(safe-area-inset-right));border:1px solid rgba(183,156,240,.22);border-radius:14px;padding:12px;background:rgba(255,255,255,.78);color:#6B5080;font-size:13px;font-weight:700;cursor:pointer}
+  .ech-messages-scroll .ech-cta-soft{width:100%;margin:8px 0 0;border-radius:0;border-left:none;border-right:none;border-top:1px solid #ECE8EF}
+  .ech-cta-soft:active{transform:scale(.98)}
+  .ech-stat-hero{margin:0 max(12px,env(safe-area-inset-left)) 14px max(12px,env(safe-area-inset-right));padding:16px;border-radius:20px}
+  .ech-messages-screen,.ech-friends-screen,.ech-lens-screen,.ech-settings-screen,.ech-spark-screen{display:flex;flex-direction:column;height:100%;min-height:0;background:transparent}
+  .ech-messages-screen .ech-screen-head,.ech-friends-screen .ech-screen-head{padding-top:10px}
+  .ech-messages-search,.ech-friends-search{margin:0 0 12px;border-radius:0;border-left:none;border-right:none}
+  .ech-messages-scroll,.ech-friends-scroll{flex:1;min-height:0;padding:0 0 72px!important}
+  .ech-lens-scroll,.ech-settings-scroll{flex:1;min-height:0;padding:0 max(12px,env(safe-area-inset-left)) 72px max(12px,env(safe-area-inset-right))!important}
+  .ech-messages-screen .ech-status-bar{display:flex;align-items:center;gap:10px;margin:0 0 12px;padding:12px 14px;border-radius:0;border:none;background:rgba(255,255,255,.82);box-shadow:none}
+  .ech-status-input{flex:1;border:none;background:transparent;font-size:14px;font-weight:600;color:#5A4A60;outline:none;min-width:0}
+  .ech-status-input::placeholder{color:#B5A8C0;font-weight:500}
+  .msg-row-status{display:block;font-size:12px;font-weight:700;color:#8C6BD8;line-height:1.3;margin:1px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dm-head-meta .muted{color:#9B8FA8}
+  .ech-msg-row{display:flex;align-items:center;gap:14px;width:100%;border:none;border-bottom:1px solid #ECE8EF;border-radius:0;padding:12px max(14px,env(safe-area-inset-left)) 12px max(14px,env(safe-area-inset-right));background:#fff;cursor:pointer;text-align:left;box-shadow:none;transition:background .12s;animation:ech-rise .28s ease}
+  .ech-msg-row:active{transform:scale(.985)}
+  .ech-msg-row--unread{border-color:rgba(183,156,240,.28);background:linear-gradient(135deg,rgba(255,241,250,.95),rgba(239,233,255,.9));box-shadow:0 8px 22px rgba(140,100,160,.1)}
+  .ech-msg-row .msg-row-preview{color:#8C6BD8;font-weight:600}
+  .ech-msg-row .msg-row-name{color:#5A4A60;font-weight:800}
+  .ech-lens-segments,.ech-spark-segments{margin:0 max(12px,env(safe-area-inset-left)) 12px max(12px,env(safe-area-inset-right))}
+  .ech-spark-head-wrap{display:flex;flex-direction:column;gap:8px;padding-bottom:4px}
+  .ech-spark-head-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+  .ech-spark-head-actions .spark-filter-btn.on{background:linear-gradient(135deg,#EFE9FF,#FFE8F2);color:#6B5080}
+  .ech-lens-screen .lens-hud{margin:0 0 8px;border-radius:0;box-shadow:none}
+  .ech-lens-screen .lens-rate-panel{padding:4px 0 20px}
+  .ech-settings-screen .sectionlabel{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin:16px 0 10px}
+  .ech-settings-screen .card{border:1px solid rgba(183,156,240,.14);border-radius:18px;box-shadow:0 6px 20px rgba(120,90,140,.06);background:rgba(255,255,255,.88)}
+  .ech-settings-screen .card b{color:#5A4A60;font-weight:800}
+  .ech-settings-screen .muted{color:#9B8FA8}
+  .ech-settings-screen .toggle .switch.on{background:linear-gradient(135deg,#B79CF0,#C9A0F0)}
+  .ech-settings-head .ech-screen-head-titles{flex:1;text-align:center}
+  .ech-settings-head .ech-screen-head-titles h1{font-size:16px}
+  .appbody--ig .friend-row,.appbody--ig .card.row,.appbody--ig .spark-match-row{animation:ech-rise .25s ease}
+  .appbody--ig .spark-stack>.spark-card:first-child{animation:ech-pulse-soft 5s ease-in-out infinite}
+  .appbody--ig{padding-bottom:76px;background:#fff}
+  .feed-scroll--ech{padding:0 0 76px!important;background:#fff}
+  .feed-scroll--ech .feed-list{gap:0;padding:0}
+  .feed-post--focus{margin:0;border-radius:0;border:none;border-bottom:none;box-shadow:none;overflow:hidden;background:#fff;animation:fade .25s}
+  .feed-post--focus .feed-post-media-wrap{border-radius:0;overflow:hidden}
+  .feed-post--focus .feed-post-media{aspect-ratio:4/5}
+  .feed-post-overlay-top{position:absolute;top:12px;left:12px;right:12px;z-index:6;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .feed-post-overlay-top-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+  .feed-post-overlay-author--top{position:static;max-width:min(68%,calc(100% - 120px));padding:5px 11px 5px 8px}
+  .feed-post-overlay-type{display:grid;place-items:center;flex-shrink:0;opacity:.92}
+  .feed-post-overlay-btn{width:34px;height:34px;border:1px solid rgba(255,255,255,.22);border-radius:12px;background:rgba(20,12,28,.38);backdrop-filter:blur(12px);color:#fff;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+  .feed-post-overlay-sent{width:34px;height:34px;border-radius:12px;background:rgba(20,12,28,.32);color:rgba(255,255,255,.85);display:grid;place-items:center}
+  .feed-post-overlay-sent--following{background:rgba(95,214,160,.35);color:#eafff5}
+  .feed-post-overlay-sent--pending{background:rgba(183,156,240,.35);color:#fff}
+  .feed-post-overlay-author{position:absolute;left:12px;bottom:12px;z-index:6;display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.18);background:rgba(20,12,28,.4);backdrop-filter:blur(14px);color:#fff;padding:5px 11px 5px 5px;border-radius:999px;font-size:11px;font-weight:700;cursor:pointer;max-width:calc(100% - 24px);box-shadow:0 4px 16px rgba(0,0,0,.2)}
+  .feed-post-overlay-author span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .feed-post-overlay-score{font-style:normal;display:inline-flex;align-items:center;gap:2px;font-size:10px;font-weight:800;color:#FFD56B;margin-left:2px}
+  .feed-post-bar{padding:10px max(14px,env(safe-area-inset-left)) 12px max(14px,env(safe-area-inset-right));background:#fff}
+  .feed-post-actions--icon .feed-action span{font-size:11px;font-weight:800;color:#8A7A98}
+  .feed-post-actions--icon .feed-action{padding:4px 8px;gap:5px}
+  .feed-post-caption--compact{margin:6px 0 0;font-size:12px;line-height:1.45;color:#5A4A60;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .ech-feed-head{padding:10px max(12px,env(safe-area-inset-left)) 8px max(12px,env(safe-area-inset-right));display:flex;flex-direction:column;gap:8px;background:transparent}
+  .ech-feed-head-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .ech-feed-brand{display:flex;align-items:center;gap:8px;min-width:0}
+  .ech-feed-wordmark{letter-spacing:-.04em;opacity:.92}
+  .ech-feed-head-actions{display:flex;align-items:center;gap:4px}
+  .ech-feed-iconbtn{width:38px;height:38px;border:none;border-radius:12px;background:rgba(255,255,255,.72);color:#6B5080;display:grid;place-items:center;cursor:pointer;position:relative;box-shadow:0 2px 10px rgba(120,90,140,.08)}
+  .ech-feed-notif-dot{position:absolute;top:8px;right:8px;width:7px;height:7px;border-radius:50%;background:#FF7EB3;font-style:normal;box-shadow:0 0 0 2px #fff}
+  .ech-feed-segments{display:flex;gap:6px;padding:2px 0;background:transparent;border-radius:0;border:none;box-shadow:none}
+  .ech-feed-segment{flex:1;border:none;background:transparent;border-radius:11px;padding:8px 6px;display:flex;flex-direction:column;align-items:center;gap:3px;color:#8A7A98;cursor:pointer;font-size:10px;font-weight:700;line-height:1;min-width:0}
+  .ech-feed-segment.on{background:#F3EEFF;color:#5A4A60;box-shadow:none}
+  .ech-feed-compose{flex:0 0 auto;min-width:52px;color:#8C6BD8}
+  .ech-feed-compose:disabled{opacity:.45;cursor:not-allowed}
+  .ech-feed-compose:not(:disabled):active{transform:scale(.96)}
+  .ech-score-chrome{display:flex;align-items:center;gap:6px}
+  .ech-score-chrome--compact{gap:4px}
+  .ech-score-chip{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:-.02em}
+  .ech-lens-toggle{width:34px;height:34px;border:none;border-radius:12px;background:rgba(239,233,255,.95);color:#5A4A60;display:grid;place-items:center;cursor:pointer}
+  .ech-lens-toggle.on{background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff}
+  .ech-momentum-wrap{margin:0 0 0;padding:10px max(14px,env(safe-area-inset-left)) 12px max(14px,env(safe-area-inset-right));border-radius:0;background:#fff;border:none;box-shadow:none}
+  .ech-momentum-head{margin-bottom:8px}
+  .ech-momentum-head .ech-kicker{color:#8C6BD8;font-weight:800}
+  .ech-momentum-strip{display:flex;gap:10px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .ech-momentum-strip::-webkit-scrollbar{display:none}
+  .ech-momentum-item{flex:0 0 68px;border:none;background:transparent;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;padding:0}
+  .ech-momentum-card{width:60px;height:72px;border-radius:16px;border:2px solid rgba(183,156,240,.28);overflow:hidden;display:grid;place-items:center;background:#fff;position:relative;box-shadow:0 4px 14px rgba(120,90,140,.08)}
+  .ech-momentum-card.add{border-style:dashed;background:rgba(255,255,255,.7)}
+  .ech-momentum-card.fresh{border-color:#B79CF0;border-width:2.5px;box-shadow:0 0 0 3px rgba(183,156,240,.32),0 4px 14px rgba(120,90,140,.1)}
+  .ech-momentum-card.seen{opacity:.72;border-color:rgba(183,156,240,.2)}
+  .ech-momentum-card.live{border-color:#FF7EB3;box-shadow:0 0 0 2px rgba(255,126,179,.2)}
+  .ech-momentum-thumb{width:100%;height:100%;object-fit:cover;border-radius:12px;display:block}
+  .ech-momentum-add{display:grid;place-items:center;width:100%;height:100%}
+  .ech-momentum-name{font-size:10px;font-weight:700;color:#5A4A60;max-width:68px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
+  .ech-dock{position:fixed;left:0;right:0;bottom:max(8px,env(safe-area-inset-bottom));width:100%;padding:0 max(12px,env(safe-area-inset-left)) 0 max(12px,env(safe-area-inset-right));z-index:100;pointer-events:none;box-sizing:border-box}
+  .ech-dock-inner{pointer-events:auto;display:flex;align-items:stretch;justify-content:space-between;gap:2px;padding:8px 10px;border-radius:20px;background:rgba(255,255,255,.94);border:none;box-shadow:0 8px 28px rgba(90,74,96,.08);backdrop-filter:blur(16px)}
+  .ech-dock-item{flex:1;min-width:0;border:none;background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 2px;border-radius:14px;color:#A89AB2;cursor:pointer;transition:background .15s,color .15s,transform .12s}
+  .ech-dock-item:active{transform:scale(.96)}
+  .ech-dock-item.on{color:#6B5080;background:linear-gradient(135deg,rgba(239,233,255,.9),rgba(255,232,242,.85))}
+  .ech-dock-item--spark.on{color:#D44D7A;background:linear-gradient(135deg,rgba(255,232,238,.95),rgba(255,214,232,.85))}
+  .ech-dock-label{font-size:9px;font-weight:700;letter-spacing:-.01em;line-height:1;opacity:.72;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+  .ech-dock-label.on{opacity:1;font-weight:800}
+  .ech-dock-avatar{display:block;border-radius:9px;overflow:hidden;opacity:.82}
+  .ech-dock-avatar.on{opacity:1;box-shadow:0 0 0 2px #B79CF0}
+  .ech-profile-screen{display:flex;flex-direction:column;height:100%;min-height:0;background:#fff}
+  .ech-profile-scroll{flex:1;min-height:0;padding:0 0 72px}
+  .ech-profile-toolbtn{width:34px;height:34px;border:none;border-radius:11px;background:#F7F3FB;color:#6B5080;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .ech-profile-lens{width:34px;height:34px;border:none;border-radius:11px;background:#F7F3FB;color:#6B5080;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .ech-profile-lens.on{background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff}
+  .ech-profile-hero{margin:0 max(12px,env(safe-area-inset-left)) 10px max(12px,env(safe-area-inset-right));padding:16px;border-radius:22px;box-shadow:0 10px 32px rgba(90,74,96,.1)}
+  .ech-profile-hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .ech-profile-avatar-block{position:relative;flex-shrink:0}
+  .ech-profile-cam{position:absolute;right:0;bottom:0;width:22px;height:22px;border-radius:8px;border:2px solid #fff;background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff;display:grid;place-items:center;cursor:pointer;z-index:2;box-shadow:0 2px 6px rgba(90,74,96,.18)}
+  .ech-profile-score-block{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .ech-profile-identity{margin-top:14px}
+  .ech-profile-identity h2{margin:0 0 3px;font-size:17px;font-weight:800;color:#5A4A60;display:flex;align-items:center}
+  .ech-profile-handle{display:block;font-size:12px;color:#9B8FA8;font-weight:600}
+  .ech-profile-bio{margin:10px 0 0;font-size:12px;line-height:1.5;color:#6B5080}
+  .ech-profile-category,.ech-profile-ai{display:inline-block;margin-top:8px;padding:4px 10px;border-radius:8px;background:rgba(255,255,255,.55);font-size:10px;font-weight:700;color:#8A7A98}
+  .ech-profile-link{display:inline-block;margin-top:8px;font-size:12px;font-weight:700;color:#8C6BD8;text-decoration:none}
+  .ech-profile-stats{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;margin:0 max(12px,env(safe-area-inset-left)) 12px max(12px,env(safe-area-inset-right));padding:14px 10px;text-align:center;border-radius:18px;box-shadow:0 6px 22px rgba(120,90,140,.07)}
+  .ech-profile-stats b{display:block;font-size:17px;font-weight:800;color:#5A4A60}
+  .ech-profile-stats span{display:block;font-size:10px;color:#9B8FA8;font-weight:600;margin-top:2px}
+  .ech-profile-stat-div{width:1px;height:28px;background:rgba(183,156,240,.25)}
+  .ech-profile-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
+  .ech-profile-action{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid rgba(183,156,240,.25);border-radius:14px;padding:11px 12px;background:#fff;color:#5A4A60;font-size:13px;font-weight:700;cursor:pointer}
+  .ech-profile-action--primary{background:linear-gradient(135deg,#B79CF0,#C9A0F0);border-color:transparent;color:#fff}
+  .ech-profile-section{margin-bottom:18px}
+  .ech-section-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;padding:0 max(12px,env(safe-area-inset-right)) 0 max(12px,env(safe-area-inset-left))}
+  .ech-section-head h3{margin:0;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#9B7FD4}
+  .ech-section-link{border:none;border-radius:12px;padding:6px 10px;background:rgba(239,233,255,.75);color:#8C6BD8;font-size:10px;font-weight:700;display:inline-flex;align-items:center;gap:4px;cursor:pointer}
+  .ech-profile-section--grid .ech-section-head{margin-bottom:8px}
+  .ech-profile-section--grid{padding:0}
+  .ech-album-shelf{display:flex;gap:8px;overflow-x:auto;padding:0 max(10px,env(safe-area-inset-left)) 4px max(10px,env(safe-area-inset-right));-webkit-overflow-scrolling:touch}
+  .ech-album-card{position:relative;flex:0 0 108px;height:136px;border:none;border-radius:16px;overflow:hidden;background:#1a1228;cursor:pointer;box-shadow:0 8px 20px rgba(90,74,96,.12)}
+  .ech-album-card img,.ech-album-fallback{width:100%;height:100%;object-fit:cover;display:grid;place-items:center;font-size:28px;font-weight:800;color:#fff}
+  .ech-album-title{position:absolute;left:0;right:0;bottom:0;padding:8px 8px 10px;background:linear-gradient(180deg,transparent,rgba(0,0,0,.72));color:#fff;font-size:11px;font-weight:700;text-align:left}
+  .ech-album-card--new{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#F5EEFF,#FFE8F2);color:#8C6BD8;border:2px dashed rgba(183,156,240,.35)}
+  .portfolio-grid--ech{grid-template-columns:repeat(3,1fr);gap:2px}
+  .portfolio-wrap--ech{padding:0!important}
+  .portfolio-wrap--ech .portfolio-tile{border-radius:0;overflow:hidden}
+  .portfolio-wrap--ech .portfolio-score{font-size:9px;padding:3px 6px}
+  .ech-profile-hold{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:12px 14px;background:#FFF4EC;color:#C44D6E;font-size:12px}
+  .ech-score-chart-section{margin:8px 0 16px;padding:0 max(12px,env(safe-area-inset-left)) 0 max(12px,env(safe-area-inset-right))}
+  .ech-score-chart-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+  .ech-score-chart-head h3{margin:0 0 4px;font-size:14px;font-weight:800;color:#5A4A60;letter-spacing:-.02em}
+  .ech-score-chart-delta{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px}
+  .ech-score-chart-delta.up{color:#4FA98C;background:rgba(79,169,140,.12)}
+  .ech-score-chart-delta.down{color:#C44D6E;background:rgba(196,77,110,.12)}
+  .ech-score-range-wrap{position:relative;flex-shrink:0}
+  .ech-score-range-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(183,156,240,.24);border-radius:12px;padding:8px 12px;background:linear-gradient(135deg,#FFF8FC,#EFE9FF);color:#6B5080;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(140,100,160,.08)}
+  .ech-score-range-btn svg{transition:transform .15s ease}
+  .ech-score-range-btn svg.open{transform:rotate(180deg)}
+  .ech-score-range-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:156px;border-radius:14px;background:#fff;border:1px solid rgba(183,156,240,.18);box-shadow:0 14px 36px rgba(120,90,140,.16);padding:6px;z-index:30;animation:echDropIn .18s ease}
+  @keyframes echDropIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .ech-score-range-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;border:none;background:transparent;padding:9px 12px;border-radius:10px;font-size:12px;font-weight:600;color:#5A4A60;cursor:pointer;text-align:left}
+  .ech-score-range-item.on{background:linear-gradient(135deg,#EFE9FF,#FFE8F2);color:#6B5080}
+  .ech-score-chart-card{padding:10px 6px 4px;border-radius:18px;background:linear-gradient(135deg,#FFF8FC,#F0EBFF);border:1px solid rgba(183,156,240,.16);box-shadow:0 8px 22px rgba(120,90,140,.06)}
+  .ech-score-chart-empty{margin:0;padding:28px 12px;text-align:center;font-size:12px}
+  .ech-discover-screen{display:flex;flex-direction:column;height:100%;min-height:0;background:#fff}
+  .ech-discover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:12px max(12px,env(safe-area-inset-left)) 6px max(12px,env(safe-area-inset-right))}
+  .ech-discover-title h1{margin:0;font-size:18px;font-weight:800;color:#5A4A60;letter-spacing:-.03em}
+  .ech-discover-title p{margin:2px 0 0;font-size:11px;color:#9B8FA8;font-weight:600}
+  .ech-discover-search{display:flex;align-items:center;gap:8px;margin:0 max(12px,env(safe-area-inset-left)) 12px max(12px,env(safe-area-inset-right));padding:12px 14px;background:#fff;border:1px solid #E4DEE8;border-radius:16px;box-shadow:none}
+  .ech-discover-search input{flex:1;border:none;background:transparent;font-family:var(--font-sans);font-size:14px;font-weight:600;color:#5A4A60;outline:none;letter-spacing:-.015em}
+  .ech-discover-search input::placeholder{color:#9B8FA8;font-weight:600}
+  .ech-discover-clear{border:none;background:transparent;padding:4px;cursor:pointer;color:#9B8FA8}
+  .ech-discover-scroll{flex:1;min-height:0;padding:0 0 72px!important}
+  .ech-discover-masonry{display:grid;grid-template-columns:repeat(2,1fr);gap:2px;padding:0;margin:0;width:100%}
+  .ech-discover-tile{position:relative;aspect-ratio:3/4;border:none;padding:0;border-radius:0;overflow:hidden;background:#1a1228;cursor:pointer;box-shadow:none}
+  .ech-discover-tile img,.ech-discover-tile video{width:100%;height:100%;object-fit:cover;display:block}
+  .ech-discover-type{position:absolute;top:8px;left:8px;width:26px;height:26px;border-radius:8px;background:rgba(20,12,28,.55);backdrop-filter:blur(8px);color:#fff;display:grid;place-items:center;z-index:2}
+  .ech-discover-meta{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(180deg,transparent,rgba(12,8,20,.82));font-family:var(--font-sans);font-size:9px;font-weight:800;color:rgba(255,255,255,.92)}
+  .ech-discover-meta-item,.ech-discover-meta-score{display:inline-flex;align-items:center;gap:3px}
+  .ech-discover-meta-score.mine{color:#FFD0E4}
+  .feed-post-audio-toggle{position:absolute;bottom:12px;left:12px;top:auto;z-index:6;width:34px;height:34px;border:1px solid rgba(255,255,255,.2);border-radius:12px;background:rgba(20,12,28,.45);backdrop-filter:blur(12px);color:#fff;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+  .feed-post-audio-toggle.on{background:rgba(183,156,240,.45);border-color:rgba(255,255,255,.35)}
+  .feed-post-media-wrap:not(:has(.feed-post-overlay-author--top)) .feed-post-audio-toggle{top:12px;bottom:auto}
+  .feed-post-overlay-btn--danger{background:rgba(255,90,120,.42);border-color:rgba(255,180,200,.35)}
+  .post-tile-delete{position:absolute;top:6px;right:6px;z-index:3;width:28px;height:28px;border-radius:8px;border:none;background:rgba(0,0,0,.52);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .post-tile-delete:active{transform:scale(.94)}
+  .reel-side-btn--danger span{display:none}
+  .ech-discover-users{margin:0 0 10px;padding:0 max(10px,env(safe-area-inset-left)) 0 max(10px,env(safe-area-inset-right))}
+  .ech-discover-users h3{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin:0 0 8px}
+  .ech-discover-users ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+  .ech-discover-user-card{display:flex;align-items:center;gap:12px;width:100%;border:1px solid rgba(183,156,240,.18);border-radius:16px;padding:10px 12px;background:#fff;cursor:pointer;text-align:left;box-shadow:0 6px 16px rgba(120,90,140,.06)}
+  .ech-discover-user-card b{display:block;font-size:14px;color:#5A4A60}
+  .ech-discover-user-card span{font-size:12px;color:#9B8FA8}
+  .ech-discover-empty{text-align:center;color:#9B8FA8;padding:40px 20px}
+  .ech-discover-tabs{display:flex;gap:6px;margin:0 max(12px,env(safe-area-inset-left)) 10px max(12px,env(safe-area-inset-right));padding:4px;background:rgba(255,255,255,.72);border-radius:14px;border:1px solid rgba(183,156,240,.14)}
+  .ech-discover-tabs button{flex:1;border:none;border-radius:11px;padding:9px 10px;background:transparent;color:#9B8FA8;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:11px;font-weight:700}
+  .ech-discover-tabs button.on{background:linear-gradient(135deg,#EFE9FF,#FFE8F2);color:#6B5080;box-shadow:0 4px 12px rgba(140,100,160,.1)}
+  .ech-parties-panel{padding:0 0 12px}
+  .ech-parties-note{display:flex;align-items:center;gap:10px;margin:0 max(10px,env(safe-area-inset-left)) 10px max(10px,env(safe-area-inset-right));padding:12px;border-radius:14px;background:#FFF8FC;border:1px solid rgba(183,156,240,.2);font-size:13px;color:#6B5080}
+  .ech-parties-toolbar{padding:0 max(10px,env(safe-area-inset-left)) 10px max(10px,env(safe-area-inset-right))}
+  .ech-parties-search{display:flex;align-items:center;gap:8px;padding:12px;background:#fff;border:1px solid rgba(183,156,240,.2);border-radius:14px;margin-bottom:10px}
+  .ech-parties-search input{flex:1;border:none;background:transparent;font-size:14px;color:#5A4A60;outline:none}
+  .ech-parties-host{width:100%;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:none;border-radius:14px;padding:12px;background:linear-gradient(135deg,#B79CF0,#C9A0F0);color:#fff;font-size:14px;font-weight:800;cursor:pointer}
+  .ech-parties-gate{font-size:12px;margin:6px 0 0;text-align:center}
+  .ech-parties-filters{margin:0 max(10px,env(safe-area-inset-left)) 12px max(10px,env(safe-area-inset-right));padding:14px;border-radius:16px;background:linear-gradient(135deg,#FFF8FC,#F0EBFF);border:1px solid rgba(183,156,240,.18)}
+  .ech-parties-range-head{display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px}
+  .ech-parties-sort{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .ech-parties-sort button{border:none;border-radius:999px;padding:8px 12px;background:rgba(255,255,255,.8);color:#6B5080;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+  .ech-parties-sort button.on{background:#5A4A60;color:#fff}
+  .ech-parties-list{display:flex;flex-direction:column;gap:10px;padding:0 max(10px,env(safe-area-inset-left)) 0 max(10px,env(safe-area-inset-right))}
+  .ech-party-card{width:100%;border:none;padding:0;border-radius:16px;overflow:hidden;background:#fff;text-align:left;cursor:pointer;box-shadow:0 8px 22px rgba(90,74,96,.08);border:1px solid rgba(183,156,240,.14)}
+  .ech-party-banner{position:relative;min-height:120px;display:grid;place-items:center;background-size:cover;background-position:center}
+  .ech-party-banner span{font-size:40px}
+  .ech-party-dist,.ech-party-req{position:absolute;top:10px;padding:5px 8px;border-radius:999px;font-size:10px;font-weight:800;display:inline-flex;align-items:center;gap:4px}
+  .ech-party-dist{left:10px;background:rgba(90,74,96,.72);color:#fff}
+  .ech-party-req{right:10px;background:rgba(255,255,255,.92);color:#5A4A60}
+  .ech-party-req.lock{color:#9B8FA8}
+  .ech-party-meta{display:flex;align-items:center;gap:10px;padding:12px 14px}
+  .ech-party-meta b{display:block;font-size:14px;color:#5A4A60}
+  .ech-party-meta p{margin:2px 0 0;font-size:11.5px}
+  .ech-party-meta>div{flex:1;min-width:0}
+  .ech-post-options-backdrop{position:fixed;inset:0;z-index:99990;background:rgba(45,35,55,.42);backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;animation:fade .2s}
+  .ech-post-options-backdrop--center{align-items:center;padding:20px max(10px,env(safe-area-inset-left)) max(20px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-right))}
+  .ech-post-options-sheet{width:100%;max-width:100%;font-family:var(--font-sans);background:linear-gradient(180deg,#FFFDFE,#F8F4FC);border-radius:22px 22px 0 0;padding:8px max(10px,env(safe-area-inset-left)) max(18px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-right))}
+  .ech-post-options-grab{width:40px;height:4px;border-radius:999px;background:rgba(183,156,240,.45);margin:6px auto 14px}
+  .ech-post-options-top{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .ech-post-options-chip{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:14px 12px;border:1px solid rgba(183,156,240,.16);border-radius:16px;background:#fff;color:#5A4A60;cursor:pointer;font-size:11px;font-weight:700;box-shadow:0 4px 14px rgba(120,90,140,.05)}
+  .ech-post-options-chip.on{border-color:#8C6BD8;color:#8C6BD8;background:linear-gradient(135deg,#FFF8FC,#EFE9FF)}
+  .ech-post-options-item-label{font-size:12px;font-weight:600;flex:1;text-align:left}
+  .ech-post-options-list{list-style:none;margin:0 0 10px;padding:0;border-radius:16px;overflow:hidden;border:1px solid rgba(183,156,240,.16);background:#fff}
+  .ech-post-options-item{display:flex;align-items:center;gap:12px;width:100%;border:none;border-bottom:1px solid rgba(183,156,240,.1);background:transparent;padding:14px 16px;font-family:var(--font-sans);font-size:13px;font-weight:700;color:#5A4A60;cursor:pointer;text-align:left;letter-spacing:-.01em}
+  .ech-post-options-list li:last-child .ech-post-options-item{border-bottom:none}
+  .ech-post-options-item.danger{color:#D44D7A}
+  .ech-post-options-item span{flex:1}
+  .ech-post-options-prefs{display:flex;align-items:center;gap:12px;width:100%;border:1px solid rgba(183,156,240,.16);border-radius:16px;padding:14px 16px;background:#fff;font-size:14px;font-weight:700;color:#5A4A60;cursor:pointer;text-align:left}
+  .ech-post-options-prefs span{flex:1}
+  .ech-post-qr-card{width:min(100%,360px);background:#fff;border-radius:22px;padding:22px max(16px,env(safe-area-inset-left)) 20px max(16px,env(safe-area-inset-right));text-align:center;box-shadow:0 20px 50px rgba(90,74,96,.18);border:1px solid rgba(183,156,240,.2)}
+  .ech-post-qr-card h3{margin:10px 0 14px;font-size:16px;font-weight:800;color:#5A4A60;letter-spacing:-.02em}
+  .ech-post-qr-img{border-radius:14px;border:1px solid rgba(183,156,240,.15)}
+  .ech-post-qr-handle{margin:12px 0 4px;font-size:16px;font-weight:800;color:#5A4A60;font-family:var(--font-display)}
+  .ech-post-qr-url{margin:0 0 10px;font-size:12px;color:#9B8FA8;word-break:break-all}
+  .ech-post-options-close{width:100%;border:1px solid rgba(183,156,240,.35);border-radius:14px;padding:12px;background:#fff;color:#5A4A60;font-size:14px;font-weight:800;cursor:pointer}
+  .ech-post-qr-loading{min-height:220px;display:grid;place-items:center}
+  .ech-about-head{display:flex;align-items:center;gap:14px;margin-bottom:12px}
+  .ech-about-bio{font-size:13px;line-height:1.5;color:#6B5080;margin:0 0 12px}
+  .ech-about-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:12px;border-radius:14px;background:linear-gradient(135deg,#FFF8FC,#F0EBFF);border:1px solid rgba(183,156,240,.16);text-align:center}
+  .ech-about-stats b{display:block;font-size:16px;color:#5A4A60}
+  .ech-about-stats span{font-size:11px;color:#9B8FA8;font-weight:600}
+  .ech-media-viewer{position:fixed;inset:0;z-index:99995;display:flex;flex-direction:column;background:#000;color:#fff;overflow:hidden;font-family:var(--font-sans)}
+  .ech-media-viewer-stage{flex:1;min-height:0;position:relative;background:#000}
+  .ech-media-viewer-media{position:absolute;inset:0}
+  .ech-media-viewer-media .feed-post-media,.ech-media-viewer-media .post-img,.ech-media-viewer-media video,.ech-media-viewer-media img{width:100%;height:100%;object-fit:cover;border-radius:0}
+  .ech-media-viewer-top{position:absolute;top:0;left:0;right:0;z-index:8;display:flex;align-items:center;gap:8px;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) 10px max(10px,env(safe-area-inset-left));background:linear-gradient(180deg,rgba(0,0,0,.55),transparent)}
+  .ech-media-viewer-back,.ech-media-viewer-iconbtn{border:none;background:rgba(30,20,40,.5);color:#fff;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(10px);flex-shrink:0}
+  .ech-media-viewer-iconbtn--state{cursor:default;background:rgba(95,214,160,.28);color:#eafff5}
+  .ech-media-viewer-iconbtn--danger{background:rgba(255,59,122,.32);color:#fff}
+  .ech-media-viewer-top-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+  .ech-media-viewer-author-chip{flex:1;min-width:0;border:none;background:rgba(30,20,40,.45);color:#fff;border-radius:999px;padding:5px 11px 5px 8px;display:inline-flex;align-items:center;gap:7px;cursor:pointer;backdrop-filter:blur(10px);font-family:var(--font-sans)}
+  .ech-media-viewer-type{display:grid;place-items:center;flex-shrink:0;opacity:.92}
+  .ech-media-viewer-author-chip b{font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.02em}
+  .ech-media-viewer-sheet{flex-shrink:0;background:#fff;border-top:1px solid #ECE8EF;padding:10px max(14px,env(safe-area-inset-left)) max(12px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right));font-family:var(--font-sans)}
+  .ech-media-viewer-sheet .feed-post-actions{margin:0 0 2px}
+  .ech-media-viewer-rate-row{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 0 4px}
+  .ech-media-viewer-rate-kicker{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#9B7FD4}
+  .ech-rate-overlay--sheet{position:static;right:auto;bottom:auto;left:auto;width:100%;max-width:100%;justify-content:center;background:linear-gradient(135deg,#FFF8FC,#F0EBFF);border:1px solid rgba(183,156,240,.18);box-shadow:0 4px 14px rgba(120,90,140,.06);padding:10px 14px;min-height:44px}
+  .ech-rate-overlay--sheet.rated{border-color:rgba(255,213,107,.35)}
+  .ech-rate-overlay--sheet .ech-rate-overlay-locked{color:#6B5080;font-size:10px;max-width:none}
+  .ech-media-avg-rating{position:absolute;right:10px;bottom:10px;z-index:6;display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;background:rgba(8,6,14,.58);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px);pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.28)}
+  .ech-media-avg-rating--corner{transform:scale(.88);transform-origin:bottom right}
+  .ech-media-avg-rating--viewer{right:12px;bottom:12px;transform:scale(.78);transform-origin:bottom right}
+  .ech-media-avg-rating .ech-rate-stars{gap:2px;width:auto}
+  .ech-media-avg-rating .ech-rate-star{padding:0;margin:0;min-width:16px;width:16px;height:16px}
+  .ech-media-avg-rating .ech-rate-stars--pill .ech-star-svg,.ech-media-avg-rating .ech-rate-stars--pill .ech-star-svg.filled{width:16px!important;height:16px!important;min-width:16px;min-height:16px}
+  .ech-media-avg-rating-num{font-size:10px;font-weight:800;color:#FFD56B;letter-spacing:-.02em}
+  .portfolio-media .ech-media-avg-rating,.ech-discover-tile .ech-media-avg-rating{bottom:36px}
+  .ech-media-viewer-media .ech-rate-overlay--corner{position:absolute;right:12px;bottom:12px;left:auto;z-index:7;transform:scale(.58);transform-origin:bottom right}
+  .ech-media-viewer-media .ech-rate-overlay--viewer-mine{bottom:52px}
+  .ech-media-viewer-media .ech-media-avg-rating--viewer{bottom:12px}
+  .ech-rate-overlay--corner.rated{border-color:rgba(255,213,107,.32)}
+  .ech-media-viewer-caption{margin-top:8px}
+  .ech-spark-screen{background:transparent}
+  .ech-pulse-screen{display:flex;flex-direction:column;height:100%;min-height:0;background:transparent}
+  .ech-pulse-head{display:flex;align-items:center;gap:10px;padding:10px max(12px,env(safe-area-inset-left));background:rgba(255,255,255,.72);border-bottom:1px solid rgba(183,156,240,.12)}
+  .ech-pulse-title{flex:1;display:flex;align-items:center;gap:8px;min-width:0}
+  .ech-pulse-title h1{margin:0;font-size:15px;font-weight:800;color:#5A4A60}
+  .ech-pulse-back,.ech-pulse-acct{width:36px;height:36px;border:none;border-radius:12px;background:rgba(239,233,255,.7);color:#6B5080;display:grid;place-items:center;cursor:pointer}
+  .ech-pulse-filters{display:flex;gap:8px;padding:10px max(12px,env(safe-area-inset-left));overflow-x:auto}
+  .ech-pulse-chip{border:none;border-radius:12px;padding:8px 12px;background:rgba(255,255,255,.78);color:#8A7A98;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;white-space:nowrap;border:1px solid rgba(183,156,240,.12)}
+  .ech-pulse-chip.on{background:linear-gradient(135deg,#B79CF0,#C9A0F0);color:#fff;border-color:transparent}
+  .ech-pulse-scroll{flex:1;min-height:0;padding:0 max(10px,env(safe-area-inset-left)) 72px max(10px,env(safe-area-inset-right))}
+  .ech-pulse-empty-wrap{display:flex;align-items:center;justify-content:center;min-height:min(50vh,320px)}
+  .ech-pulse-empty{text-align:center;color:#9B8FA8;font-size:15px;font-weight:600;margin:0}
+  .ech-pulse-group h3{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;padding:12px 0 8px;margin:0}
+  .ech-pulse-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+  .ech-pulse-card{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px;border-radius:18px;background:#fff;border:1px solid rgba(183,156,240,.14);border-left:4px solid #B79CF0;box-shadow:0 8px 20px rgba(120,90,140,.06)}
+  .ech-pulse-card .ig-notif-row-left{display:flex;gap:12px;flex:1;min-width:0}
+  .ech-pulse-card .ig-notif-row-text p{margin:0;font-size:12px;line-height:1.4;color:#5A4A60}
+  .ig-notif-btn--primary{background:linear-gradient(135deg,#B79CF0,#C9A0F0)!important}
+  .ech-notes-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:12px 14px}
+  .ech-notes-input{flex:1;border:none;background:transparent;font-size:14px;color:#5A4A60;outline:none}
+  /* ---- In-photo rating overlay (compact corner pill) ---- */
+  .ech-rate-overlay{position:absolute;right:10px;bottom:10px;left:auto;z-index:7;display:flex;align-items:center;justify-content:center;padding:7px 11px;border-radius:999px;background:rgba(8,6,14,.58);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px);pointer-events:auto;-webkit-tap-highlight-color:transparent;box-shadow:0 6px 18px rgba(0,0,0,.28);min-height:34px}
+  .ech-rate-overlay.rated{background:rgba(8,6,14,.66);border-color:rgba(255,213,107,.32);padding:7px 11px}
+  .feed-post-media-wrap:has(.ech-rate-overlay) .feed-post-overlay-author--top{max-width:min(58%,calc(100% - 148px))}
+  .story-slide{position:relative}
+  .story-slide .ech-rate-overlay{bottom:max(14px,env(safe-area-inset-bottom));right:12px}
+  .reel-slide-media{position:absolute;inset:0}
+  .reel-slide-media .ech-rate-overlay{z-index:6;bottom:88px}
+  .reel-slide-overlay{padding-bottom:78px}
+  .ech-rate-overlay-locked{font-size:9px;font-weight:600;color:rgba(255,255,255,.82);text-align:center;padding:2px 4px;max-width:120px;line-height:1.25}
+  .ech-rate-overlay .ech-rate-stars{gap:3px;width:auto}
+  .ech-rate-overlay .ech-rate-star{padding:0;margin:0;min-width:20px;width:20px;height:20px;display:grid;place-items:center}
+  .ech-rate-overlay .ech-rate-stars--pill .ech-star-svg,.ech-rate-overlay .ech-rate-stars--pill .ech-star-svg.filled{width:20px!important;height:20px!important;min-width:20px;min-height:20px}
+  .ech-rate-overlay .ech-rate-star.on .ech-star-svg.filled,.ech-rate-overlay.rated .ech-star-svg.filled{filter:drop-shadow(0 0 8px rgba(255,213,107,.75)) drop-shadow(0 1px 4px rgba(200,148,26,.5))}
+  .ech-rate-overlay .ech-rate-stars.disabled{opacity:1}
+  .ech-rate-overlay .ech-rate-star:not(.on) .ech-star-svg.on-dark{filter:drop-shadow(0 0 4px rgba(255,255,255,.15))}
+  .ech-rate-strip{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:10px 0 4px;padding:12px 14px;border-radius:16px;background:linear-gradient(135deg,rgba(255,248,252,.95),rgba(239,233,255,.9));border:1px solid rgba(183,156,240,.2);box-shadow:0 6px 20px rgba(140,100,160,.08)}
+  .ech-rate-strip--viewer{margin:0 0 12px;background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.18);backdrop-filter:blur(12px)}
+  .ech-rate-kicker{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;text-align:center}
+  .ech-rate-kicker--light{color:rgba(255,255,255,.82)}
+  .ech-rate-done{display:inline-flex;align-items:center;justify-content:center;gap:6px;font-size:12px;font-weight:800;color:#6B5080;padding:4px 0}
+  .ech-rate-done--light{color:rgba(255,255,255,.92)}
+  .ech-rate-locked{font-size:11px;font-weight:600;color:#9B8FA8;text-align:center;padding:4px 0}
+  .ech-rate-stars{display:flex;align-items:flex-end;justify-content:center;gap:4px;width:100%}
+  .ech-rate-stars--pill{gap:3px}
+  .ech-rate-stars--xs{gap:2px}
+  .ech-rate-stars--sm{gap:2px}
+  .ech-rate-stars--xl{gap:8px;padding:4px 0}
+  .ech-rate-stars.disabled{opacity:.45;pointer-events:none}
+  .ech-rate-star{display:flex;flex-direction:column;align-items:center;gap:4px;border:none;background:transparent;padding:6px 4px;cursor:pointer;border-radius:14px;transition:transform .14s ease,background .14s ease;-webkit-tap-highlight-color:transparent}
+  .ech-rate-star:active{transform:scale(.92)}
+  .ech-star-defs{position:absolute;pointer-events:none}
+  .ech-star-svg{display:block;overflow:visible;transition:transform .14s ease,filter .14s ease}
+  .ech-star-svg.filled{filter:drop-shadow(0 1px 4px rgba(200,148,26,.45)) drop-shadow(0 0 12px rgba(255,224,138,.4))}
+  .ech-star-svg.on-dark:not(.filled){filter:drop-shadow(0 0 5px rgba(255,255,255,.12))}
+  .ech-rate-star:not(.on) .ech-star-svg{color:#C8BED8;opacity:.95}
+  .ech-rate-star.on .ech-star-svg.filled{filter:drop-shadow(0 2px 6px rgba(200,148,26,.5)) drop-shadow(0 0 14px rgba(255,224,138,.45))}
+  .ech-rate-star.burst{animation:echRateBurst .52s cubic-bezier(.2,1,.2,1)}
+  .ech-rate-star.burst .ech-star-svg{transform:scale(1.18)}
+  .ech-rate-star-label{font-size:9px;font-weight:800;color:#9B8FA8;letter-spacing:.02em;text-transform:uppercase;line-height:1}
+  .ech-rate-star.on .ech-rate-star-label{color:#8C6BD8}
+  .ech-rate-stars--xl .ech-rate-star{padding:10px 8px;min-width:56px;background:rgba(255,255,255,.55);border:1px solid rgba(183,156,240,.14)}
+  .ech-rate-stars--xl .ech-rate-star.on{background:linear-gradient(135deg,#FFF8E8,#FFE8F2);border-color:rgba(232,184,74,.35);box-shadow:0 8px 24px rgba(255,200,100,.2)}
+  @keyframes echRateBurst{0%{transform:scale(1)}35%{transform:scale(1.14)}100%{transform:scale(1)}}
+  .ech-rate-sheet .sheet-grab{margin-bottom:10px}
+  .ech-rate-modal{text-align:center;padding:4px 0 8px}
+  .ech-rate-modal-hero{margin-bottom:18px}
+  .ech-rate-modal-hero h3{margin:12px 0 4px;font-size:20px;font-weight:800;color:#5A4A60;letter-spacing:-.03em}
+  .ech-rate-modal-sub{margin:0;font-size:12px;font-weight:600;color:#9B8FA8}
+  .ech-rate-modal-hint{margin:14px 0 0;font-size:11px;font-weight:700;color:#B79CF0;letter-spacing:.02em}
+  .ech-rate-modal-block{display:flex;align-items:flex-start;gap:10px;margin:16px 0;padding:14px;border-radius:16px;background:#FFF8FC;border:1px solid rgba(183,156,240,.2);text-align:left;font-size:12px;line-height:1.45;color:#6B5080}
+  .ech-rate-modal-forced{margin:14px 0 0;font-size:10px;color:#9B8FA8;line-height:1.45}
+  .ech-prox-rate-card{margin-bottom:12px;padding:14px;border-radius:18px;background:rgba(255,255,255,.88);border:1px solid rgba(183,156,240,.14);box-shadow:0 6px 20px rgba(120,90,140,.06)}
+  .ech-prox-rate-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+  .ech-prox-rate-stars{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid rgba(183,156,240,.12)}
+  .story-rate-strip{position:relative;z-index:5;display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px 16px max(14px,env(safe-area-inset-bottom));background:linear-gradient(180deg,transparent,rgba(0,0,0,.72))}
+  .story-rate-kicker{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.78)}
+  .story-rate-strip .ech-rate-stars{gap:6px}
+  .story-rate-strip .ech-rate-star:not(.on) .ech-star-svg{color:#B8A8C8}
+  .story-rate-strip .ech-rate-star.on .ech-star-svg.filled{filter:drop-shadow(0 0 8px rgba(255,213,107,.5))}
+  .feed-rated-badge{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:800}
+
+  .ech-post-options-sheet--compact{padding:6px max(10px,env(safe-area-inset-left)) max(14px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-right))}
+  .ech-post-options-quick{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+  .ech-post-options-qbtn{min-width:0;width:100%;border:1px solid rgba(183,156,240,.16);border-radius:14px;padding:10px 6px;background:#fff;display:flex;flex-direction:column;align-items:center;gap:4px;color:#6B5080;font-family:var(--font-sans);font-size:10px;font-weight:700;cursor:pointer;letter-spacing:-.01em}
+  .ech-post-options-qbtn.on{border-color:#8C6BD8;color:#8C6BD8;background:linear-gradient(135deg,#FFF8FC,#EFE9FF)}
+  .ech-post-options-list--compact .ech-post-options-item{padding:11px 12px;font-size:13px;font-weight:600}
+  .ech-post-options-list--compact .ech-post-options-item span{flex:1;text-align:left}
+  .ech-algorithm-sheet{padding-top:4px}
+  .ech-algo-section{margin-bottom:14px}
+  .ech-algo-toggles{display:flex;flex-direction:column;gap:6px}
+  .ech-algo-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;border:1px solid rgba(183,156,240,.14);border-radius:14px;padding:11px 12px;background:rgba(255,255,255,.88);font-size:13px;font-weight:600;color:#5A4A60;cursor:pointer}
+  .ech-algo-toggle em{width:36px;height:20px;border-radius:999px;background:#E8E0EE;position:relative}
+  .ech-algo-toggle em::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
+  .ech-algo-toggle em.on{background:linear-gradient(135deg,#B79CF0,#C9A0F0)}
+  .ech-algo-toggle em.on::after{transform:translateX(16px)}
+  .ech-algo-mix{margin-top:6px}
+  .ech-algo-chips{display:flex;flex-wrap:wrap;gap:6px}
+  .ech-algo-chip{border:1px solid rgba(183,156,240,.2);border-radius:999px;padding:7px 12px;background:#fff;color:#6B5080;font-size:11px;font-weight:700;cursor:pointer}
+  .ech-algo-chip.on{background:linear-gradient(135deg,#EFE9FF,#FFE8F2);color:#6B5080;border-color:rgba(183,156,240,.35)}
+  .ech-algo-chip--mute.on{background:#FFF4F6;color:#C44D6E;border-color:rgba(196,77,110,.25)}
+  .ech-algo-save{width:100%;border:none;border-radius:14px;padding:13px;background:linear-gradient(135deg,#B79CF0,#C9A0F0);color:#fff;font-size:14px;font-weight:800;cursor:pointer;margin-top:4px}
+  .ech-profile-compact{margin:0;padding:12px max(14px,env(safe-area-inset-left)) 14px max(14px,env(safe-area-inset-right));border-radius:0;background:#fff;border:none;border-bottom:1px solid #ECE8EF;box-shadow:none}
+  .ech-profile-topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;min-width:0}
+  .ech-profile-page-label{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;flex-shrink:0}
+  .ech-profile-topbar-actions{display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto}
+  .ech-profile-inline{display:flex;align-items:center;gap:12px;width:100%;min-width:0}
+  .ech-profile-inline-main{flex:1;min-width:0;overflow:hidden}
+  .ech-profile-inline-id{display:flex;flex-direction:column;gap:1px;margin-bottom:4px;min-width:0}
+  .ech-profile-inline-id h2{margin:0;font-size:15px;font-weight:800;color:#1A1520;letter-spacing:-.02em;display:flex;align-items:center;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ech-profile-inline-id .ech-profile-handle{font-size:11px;color:#8A7A98;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ech-profile-inline-stats{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:10px;font-weight:600;color:#8A7A98}
+  .ech-profile-inline-stats b{color:#1A1520;font-weight:800;font-size:11px}
+  .ech-profile-stat-dot{color:#C8BED4;font-weight:700}
+  .ech-profile-inline-score{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;padding-left:4px}
+  .ech-profile-score-num{font-size:18px;font-weight:800;letter-spacing:-.03em;line-height:1;font-family:var(--font-display)}
+  .ech-profile-bio--inline{margin:8px 0 0;font-size:12px;line-height:1.45;color:#6B5080}
+  .ech-profile-link--inline{display:inline-block;margin-top:6px;font-size:11px;font-weight:700;color:#8C6BD8;text-decoration:none}
+  .ech-privacy-sheet{font-family:var(--font-sans)}
+  .ech-privacy-head{margin-bottom:12px}
+  .ech-privacy-head h3{margin:0 0 4px;font-size:17px;font-weight:800;color:#1A1520;font-family:var(--font-display)}
+  .ech-privacy-head p{margin:0;font-size:11px;line-height:1.45}
+  .ech-privacy-field{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+  .ech-privacy-field span{font-size:12px;font-weight:700;color:#5A4A60}
+  .ech-privacy-field input{border:1px solid #E4DEE8;border-radius:12px;padding:10px 12px;font-size:13px;font-weight:600;color:#1A1520;background:#fff;font-family:var(--font-sans)}
+  .ech-privacy-field input::placeholder{color:#9B8FA8}
+  .ech-privacy-hint{font-size:11px;margin:8px 0 0;line-height:1.45}
+  .ech-user-profile-screen{position:absolute;inset:0 0 76px 0;z-index:45;display:flex;flex-direction:column;min-height:0;background:#fff}
+  .ech-user-profile-head{display:flex;align-items:center;gap:8px;padding:10px max(12px,env(safe-area-inset-left)) 8px max(12px,env(safe-area-inset-right))}
+  .ech-user-profile-scroll{flex:1;min-height:0;padding:0 max(12px,env(safe-area-inset-left)) 120px max(12px,env(safe-area-inset-right))}
+  .ech-user-profile-id{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin-bottom:10px;border-radius:16px;background:rgba(255,255,255,.85);border:1px solid rgba(183,156,240,.14)}
+  .ech-user-avatar-btn{border:none;background:transparent;padding:0;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;flex-shrink:0}
+  .ech-user-avatar-btn.has-story .avatar-ring{border-color:#B79CF0;box-shadow:0 0 0 2px rgba(183,156,240,.35)}
+  .ech-user-story-hint{font-size:9px;font-weight:800;color:#9B7FD4;text-transform:uppercase;letter-spacing:.06em}
+  .ech-user-profile-meta{flex:1;min-width:0}
+  .ech-user-profile-meta b{display:block;font-size:14px;font-weight:800;color:#5A4A60}
+  .ech-user-profile-meta span{display:block;font-size:11px;color:#9B8FA8;font-weight:600}
+  .ech-user-profile-meta p{margin:4px 0 0;font-size:11px;line-height:1.4;color:#6B5080}
+  .ech-user-profile-content{margin-top:4px}
+  .ech-user-quickbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:space-around;gap:4px;flex-wrap:wrap;padding:8px max(10px,env(safe-area-inset-left)) 10px max(10px,env(safe-area-inset-right));background:rgba(255,255,255,.94);border-top:1px solid rgba(183,156,240,.14);backdrop-filter:blur(12px);z-index:2}
+  .ech-user-qbtn--block.on{color:#8C6BD8}
+  .ech-user-qbtn.on{color:#8C6BD8}
+  .ech-user-qbtn{flex:1;min-width:0;border:none;background:transparent;display:flex;flex-direction:column;align-items:center;gap:2px;color:#6B5080;font-size:9px;font-weight:700;cursor:pointer;padding:4px 2px}
+  .ech-user-qbtn--state{cursor:default;opacity:.85;color:#8C6BD8}
+
+
+  /* ---- mobile: full-screen native feel ---- */
+  @media (max-width:480px),(max-height:740px) and (max-width:640px){
+    .stage{min-height:100dvh;height:100dvh;padding:0;gap:0;justify-content:stretch;background:#fff}
+    .stage-note{display:none}
+    .phone{width:100%;max-width:100%;height:100%;min-height:100%;max-height:none;border-radius:0;box-shadow:none}
+    .statusbar{
+      height:calc(48px + env(safe-area-inset-top,0px));
+      padding-top:env(safe-area-inset-top,0px);
+      padding-left:max(10px,env(safe-area-inset-left,0px));
+      padding-right:max(10px,env(safe-area-inset-right,0px));
+    }
+    .statusbar-wordmark{display:none}
+    .langtabs-compact .langtab{width:24px;height:20px;font-size:8px}
+    .wordmark.sm{font-size:17px}
+    .mini-score{font-size:12px;padding:4px 9px}
+    .lensbtn{width:30px;height:30px;border-radius:10px}
+    .tabbar{
+      height:calc(62px + env(safe-area-inset-bottom,0px));
+      padding-bottom:max(4px,env(safe-area-inset-bottom,0px));
+      padding-left:env(safe-area-inset-left,0px);
+      padding-right:env(safe-area-inset-right,0px);
+    }
+    .tab{font-size:10px;gap:2px}
+    .tab svg{width:18px;height:18px}
+    .rating-toast{top:calc(48px + env(safe-area-inset-top,0px) + 8px);left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px))}
+    .scroll-pad{height:calc(72px + env(safe-area-inset-bottom,0px))}
+    .lensfilm{inset:0}
+    .onb-stage{padding:6px 16px 10px}
+    .onb-footer{padding:0 16px max(16px,env(safe-area-inset-bottom,0px))}
+    .onb-card{padding:22px 16px 20px;border-radius:24px}
+    .onb-h{font-size:19px}
+    .onb-wordmark{font-size:28px}
+    .onb-face-scan{width:120px;height:120px}
+    .onb-face-emoji{font-size:60px}
+    .gearbtn{top:6px;right:6px;min-width:46px;min-height:46px;border-radius:14px}
+    .gearbtn-label{font-size:7px}
+    .story-viewer-foot{padding-bottom:max(18px,env(safe-area-inset-bottom,0px))}
+    .sheet{padding-bottom:max(26px,env(safe-area-inset-bottom,0px))}
+    .compose-row{gap:8px}
+    .post-img{height:min(52vw,220px)}
+    .card{padding:12px;margin-bottom:10px;border-radius:18px}
+    .btn{padding:13px;font-size:14px}
+    .cookie-banner{padding:10px;padding-bottom:max(10px,env(safe-area-inset-bottom,0px))}
+    .cookie-banner-actions{flex-direction:column;align-items:stretch}
+    .cookie-banner-actions .btn{width:100%}
+  }
+
+  @media (max-width:380px){
+    .wordmark.sm{font-size:15px}
+    .mini-score{display:none}
+    .statusbar{gap:6px}
+    .compose-row{grid-template-columns:1fr}
+  }
+  `}</style>
+    );
+  }

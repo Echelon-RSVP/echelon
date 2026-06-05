@@ -1,0 +1,13 @@
+api/config.local.php
+AUTH-INTEGRATION-GUIDE.md
+node_modules/
+dist/
+.env
+.env.*
+*.p8
+*.p12
+*.mobileprovision
+.DS_Store
+ssl-local/
+deploy-ftp.config.json
+deploy-api.config.json

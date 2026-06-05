@@ -1,0 +1,102 @@
+# Free iOS build from Windows (GitHub Actions)
+
+Codemagic is **not required**. Use **GitHub Actions** (free on public repos, or included minutes on private repos).
+
+You need a **free GitHub account** and your **$99/year Apple Developer** membership. No Mac, no paid CI.
+
+## One-time setup (~20 minutes)
+
+### 1. Push this project to GitHub
+
+```powershell
+cd "C:\Users\migue\OneDrive\Documentos\echelon"
+git init
+git add .
+git commit -m "Echelon iOS App Store"
+git branch -M main
+```
+
+Create a repo at https://github.com/new (public = unlimited free Actions minutes).
+
+```powershell
+git remote add origin https://github.com/YOUR_USER/echelon.git
+git push -u origin main
+```
+
+Tip: a **public** repo avoids burning through private-repo macOS minute quotas.
+
+### 2. Create App Store Connect API key (browser)
+
+1. https://appstoreconnect.apple.com → **Users and Access** → **Integrations** → **App Store Connect API**
+2. **+** → Name: `GitHub Actions` → Access: **App Manager**
+3. Download the `.p8` file once
+4. Copy **Issuer ID** and **Key ID**
+
+### 3. Find your Team ID
+
+https://developer.apple.com/account → **Membership** → **Team ID** (10 characters, e.g. `AB12CD34EF`)
+
+### 4. Add 4 GitHub secrets
+
+Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+
+| Secret name | Value |
+|-------------|-------|
+| `APPLE_TEAM_ID` | Your 10-character Team ID |
+| `APPSTORE_ISSUER_ID` | Issuer ID from App Store Connect |
+| `APPSTORE_KEY_ID` | Key ID from the API key |
+| `APPSTORE_PRIVATE_KEY` | Full contents of the `.p8` file (including `BEGIN` / `END` lines) |
+
+No certificate files. No Codemagic. Xcode automatic signing creates the profile in the cloud.
+
+### 5. Apple Developer portal checklist
+
+- App ID **rsvp.echelon.app** exists
+- **Sign in with Apple** enabled on that App ID (if you use Apple login)
+- App record created in App Store Connect
+
+## Build (every time, from Windows)
+
+1. https://github.com/YOUR_USER/echelon → **Actions**
+2. **iOS App Store build** → **Run workflow** → **Run workflow**
+3. Wait ~12–20 minutes
+4. Build appears in App Store Connect → **TestFlight** (processing may take 5–30 min more)
+5. Version page → **Build** → **+** → select the build
+
+You can also download the IPA from the workflow **Artifacts** tab.
+
+## Local prep before pushing (optional)
+
+```powershell
+npm run build
+npm run ios:prepare
+npm run cap:sync:ios
+```
+
+## Helper script
+
+Prints secret names and opens the right pages:
+
+```powershell
+.\scripts\setup-github-ios-build.ps1
+```
+
+## Cost
+
+| Service | Cost |
+|---------|------|
+| GitHub Actions (public repo) | **Free** |
+| GitHub Actions (private repo) | Free tier minutes (macOS counts 10×) |
+| Apple Developer Program | **$99/year** (required by Apple for App Store) |
+| Codemagic | Not needed |
+
+## Troubleshooting
+
+| Error | Fix |
+|-------|-----|
+| `No signing certificate` | Check `APPLE_TEAM_ID` and that bundle ID `rsvp.echelon.app` is registered |
+| API key rejected | Paste full `.p8` into `APPSTORE_PRIVATE_KEY`, including header lines |
+| `pod install` failed | Re-run workflow; rare CocoaPods CDN glitch |
+| Blank app in TestFlight | Confirm https://echelon.rsvp/app/ loads on iPhone Safari |
+
+Support: hi@echelon.rsvp

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#FFFBFE">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" sizes="32x32" href="/app/icons/favicon-32.png" />
+  <title>Documentation · echelon</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    :root { --text:#121212; --muted:#737373; --accent:#8C6BD8; --border:#efefef; }
+    * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+    body {
+      font-family:"Plus Jakarta Sans",system-ui,sans-serif; color:var(--text); background:#FFFBFE;
+      line-height:1.6; min-height:100dvh; display:flex; flex-direction:column;
+    }
+    .docs-top {
+      position:sticky; top:0; z-index:10; background:rgba(255,251,254,.94);
+      backdrop-filter:blur(14px); border-bottom:1px solid var(--border);
+      padding:12px max(14px,env(safe-area-inset-left)) max(12px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right));
+    }
+    .docs-top-inner { max-width:720px; margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:12px; position:relative; }
+    .docs-close { width:36px; height:36px; border-radius:12px; border:1px solid var(--border); background:#fff; color:#6B5080; font-size:18px; font-weight:700; cursor:pointer; display:grid; place-items:center; text-decoration:none; flex-shrink:0; box-shadow:0 4px 14px rgba(120,90,140,.1); }
+    .docs-brand { font-size:20px; font-weight:800; text-decoration:none; letter-spacing:-.04em; background:linear-gradient(135deg,#B79CF0,#FF8FB1); -webkit-background-clip:text; background-clip:text; color:transparent; }
+    .docs-open-app { font-size:11px; font-weight:800; text-decoration:none; color:#8C6BD8; border:1px solid rgba(183,156,240,.35); border-radius:999px; padding:7px 12px; background:#fff; white-space:nowrap; }
+    .langtabs { display:flex; gap:6px; flex-shrink:0; }
+    .langtab { border:none; background:#fff; border:1px solid var(--border); color:#737373; font-weight:800; font-size:11px; padding:5px 9px; border-radius:999px; cursor:pointer; }
+    .langtab.on { background:linear-gradient(135deg,#B79CF0,#FF8FB1); color:#fff; border-color:transparent; }
+    .docs-wrap { flex:1; max-width:720px; width:100%; margin:0 auto; padding:20px max(16px,env(safe-area-inset-left)) 48px max(16px,env(safe-area-inset-right)); }
+    .docs-hero {
+      margin-bottom:20px; padding:20px 18px; border-radius:20px;
+      background:linear-gradient(135deg,#B79CF0 0%,#FF8FB1 55%,#FFD56B 100%); color:#fff;
+    }
+    .docs-hero h1 { font-size:clamp(1.35rem,4vw,1.75rem); font-weight:800; letter-spacing:-.03em; margin-bottom:8px; }
+    .docs-hero p { font-size:14px; opacity:.94; max-width:52ch; }
+    .docs-score-banner {
+      margin-bottom:18px; padding:14px 16px; border-radius:18px;
+      background:linear-gradient(135deg,#FFF8E6,#FFF0F6); border:1px solid rgba(232,184,74,.28);
+      font-size:13px; font-weight:600; color:#6B5080;
+    }
+    .docs-score-banner b { display:block; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:#9B7FD4; margin-bottom:4px; }
+    .docs-nav {
+      display:flex; flex-wrap:wrap; gap:8px; margin-bottom:22px;
+    }
+    .docs-nav a {
+      font-size:12px; font-weight:700; color:#8C6BD8; text-decoration:none;
+      padding:7px 12px; border-radius:999px; background:#F8F2FF; border:1px solid rgba(183,156,240,.2);
+    }
+    .docs-section {
+      margin-bottom:12px; padding:16px 18px; border-radius:18px; background:#fff;
+      border:1px solid rgba(183,156,240,.14); box-shadow:0 4px 16px rgba(120,90,140,.05);
+    }
+    .docs-section--core { border-color:rgba(140,107,216,.28); box-shadow:0 6px 20px rgba(140,107,216,.08); }
+    .docs-section h2 { font-size:15px; font-weight:800; letter-spacing:-.02em; margin-bottom:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .docs-core-pill { font-size:9px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; padding:3px 8px; border-radius:999px; background:rgba(140,107,216,.12); color:#8C6BD8; }
+    .docs-section p { font-size:14px; color:var(--muted); line-height:1.55; }
+    .docs-tip-card { width:100%; display:flex; align-items:flex-start; gap:10px; padding:14px 16px; margin-bottom:16px; border-radius:18px; border:1px solid rgba(183,156,240,.2); background:linear-gradient(135deg,#FFF8FC,#F3EEFF); cursor:pointer; text-align:left; font:inherit; }
+    .docs-tip-card b { display:block; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#9B7FD4; margin-bottom:6px; }
+    .docs-tip-card p { margin:0; font-size:13px; color:#6B5080; font-weight:600; }
+    .docs-quiz { margin-bottom:18px; padding:16px 18px; border-radius:18px; background:linear-gradient(135deg,#FFF0F6,#EFE9FF); border:1px solid rgba(255,143,177,.22); }
+    .docs-quiz b { display:block; font-size:14px; color:#5A4A60; margin-bottom:10px; }
+    .docs-quiz-row { display:flex; gap:8px; }
+    .docs-quiz-btn { flex:1; border:1px solid rgba(183,156,240,.25); background:#fff; border-radius:12px; padding:10px; font-size:13px; font-weight:800; color:#6B5080; cursor:pointer; }
+    .docs-quiz-btn.picked { background:linear-gradient(135deg,#B79CF0,#FF8FB1); color:#fff; border-color:transparent; }
+    .docs-quiz-result { margin-top:10px; font-size:13px; font-weight:700; }
+    .docs-quiz-result.right { color:#2E8B57; }
+    .docs-quiz-result.wrong { color:#C44D6E; }
+    .docs-section-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px; border:none; background:transparent; padding:0; cursor:pointer; text-align:left; font:inherit; }
+    .docs-section-toggle h2 { margin:0; font-size:15px; font-weight:800; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .docs-chevron { color:#9B8FA8; transition:transform .18s ease; font-size:14px; }
+    .docs-chevron.open { transform:rotate(180deg); }
+    .docs-section-body { padding-top:8px; }
+    .docs-section.open { border-color:rgba(140,107,216,.28); box-shadow:0 8px 22px rgba(140,107,216,.08); }
+    .docs-extra { color:#8C6BD8 !important; font-weight:600 !important; }
+    .docs-legal {
+      margin-top:24px; padding:16px 18px; border-radius:18px; background:rgba(248,242,255,.7);
+      border:1px solid rgba(183,156,240,.16);
+    }
+    .docs-legal h2 { font-size:13px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:#9B7FD4; margin-bottom:10px; }
+    .docs-legal-links { display:flex; flex-wrap:wrap; gap:8px 14px; }
+    .docs-legal-links a { font-size:13px; font-weight:700; color:var(--accent); }
+    .docs-footer { text-align:center; padding:24px 20px max(28px,env(safe-area-inset-bottom)); border-top:1px solid var(--border); color:var(--muted); font-size:12px; font-weight:600; }
+  </style>
+</head>
+<body>
+  <header class="docs-top">
+    <div class="docs-top-inner">
+      <a href="/app/" class="docs-brand">echelon</a>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div class="langtabs" id="lang-tabs" role="tablist" aria-label="Language"></div>
+        <a href="/app/" class="docs-open-app" data-i18n="docs.openApp">Open app</a>
+        <a href="/app/" class="docs-close" aria-label="Close">×</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="docs-wrap">
+    <section class="docs-hero">
+      <h1 id="docs-page-title">Documentation</h1>
+      <p id="docs-page-lead"></p>
+    </section>
+    <button type="button" class="docs-tip-card" id="docs-tip-card">
+      <div>
+        <b data-i18n="docs.tipTitle">Tap for another tip</b>
+        <p id="docs-tip-text"></p>
+      </div>
+    </button>
+    <div class="docs-score-banner" id="docs-score-core"></div>
+    <div class="docs-quiz">
+      <b data-i18n="docs.quizQ">Can a 3.20 account rate someone at 3.21?</b>
+      <div class="docs-quiz-row">
+        <button type="button" class="docs-quiz-btn" data-quiz="yes" data-i18n="docs.quizYes">Yes</button>
+        <button type="button" class="docs-quiz-btn" data-quiz="no" data-i18n="docs.quizNo">No</button>
+      </div>
+      <p id="docs-quiz-result" class="docs-quiz-result" hidden></p>
+    </div>
+    <nav class="docs-nav" id="docs-nav" aria-label="Sections"></nav>
+    <div id="docs-sections"></div>
+    <section class="docs-legal">
+      <h2 data-i18n="docs.moreTitle">More</h2>
+      <div class="docs-legal-links" id="docs-legal-links"></div>
+    </section>
+  </main>
+
+  <footer class="docs-footer" data-i18n="home.footer.tagline">Reputation as currency, by design.</footer>
+
+  <script src="/app/i18n.js"></script>
+  <script src="/app/docs-page.js"></script>
+</body>
+</html>

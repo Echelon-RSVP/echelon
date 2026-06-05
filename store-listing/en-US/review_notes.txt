@@ -1,0 +1,28 @@
+Echelon is a social reputation app. Users sign in, browse a feed, message friends, discover people, and rate other users (limited to once per 24 hours per person when eligible).
+
+Demo account (email login):
+Email: review@echelon.rsvp
+Password: EchelonReview2026!
+
+Sign in steps:
+1. Open the app and tap Sign in.
+2. Choose email/password (not Sign in with Apple for the demo account).
+3. Enter the credentials above. The account is pre-onboarded with friends, posts, and messages.
+
+How to test:
+1. Feed: scroll posts, open a post, like or comment. Stories row at top (Momentum).
+2. Messages: open a chat with Naomi or Iris, send a text message.
+3. Profile: view portfolio, score graph, and settings.
+4. Match (Spark): swipe profile cards.
+5. Map/Discover: optional location permission for nearby users.
+
+Permissions:
+- Camera/microphone: chat media and stories.
+- Photo library: attach images.
+- Location: optional, for nearby discovery.
+
+User safety: users can block, mute, report posts, and delete their own messages.
+
+The iOS app loads https://echelon.rsvp/app/ inside a native shell.
+
+Support: hi@echelon.rsvp

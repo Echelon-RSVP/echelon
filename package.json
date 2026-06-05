@@ -1,0 +1,48 @@
+{
+  "name": "echelon",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "node scripts/generate-icons.mjs && vite build",
+    "preview": "vite preview",
+    "setup-db": "node setup-db.mjs",
+    "deploy:api": "node deploy-api.mjs",
+    "deploy:app": "npm run build && node deploy-ftp.mjs",
+    "deploy:home": "node deploy-home.mjs",
+    "migrate:prod": "node run-migrations.mjs",
+    "seed:meta-reviewer": "node seed-meta-reviewer.mjs",
+    "seed:appstore-reviewer": "node seed-appstore-reviewer.mjs",
+    "seed:test-user": "node seed-test-user.mjs",
+    "meta:test": "node scripts/meta-initiate-testing.mjs",
+    "meta:test:open": "node scripts/meta-initiate-testing.mjs --open",
+    "ios:prepare": "node scripts/ios-inject-appstore-meta.mjs",
+    "cap:sync:ios": "node scripts/cap-sync-ios.mjs",
+    "appstore:prep": "powershell -ExecutionPolicy Bypass -File scripts/prepare-appstore.ps1",
+    "appstore:screenshots": "node scripts/generate-appstore-screenshots.mjs",
+    "ios:build:free": "powershell -ExecutionPolicy Bypass -File scripts/setup-github-ios-build.ps1"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.2.0",
+    "@capacitor/ios": "^7.2.0",
+    "@types/leaflet": "^1.9.21",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^0.511.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "recharts": "^2.15.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.2.0",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "basic-ftp": "^6.0.1",
+    "playwright": "^1.52.0",
+    "sharp": "^0.34.5",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

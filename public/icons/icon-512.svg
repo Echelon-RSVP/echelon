@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Echelon">
+  <defs>
+    <linearGradient id="bg" x1="6%" y1="4%" x2="94%" y2="96%">
+      <stop offset="0%" stop-color="#FF9DC0"/>
+      <stop offset="42%" stop-color="#C6A0F0"/>
+      <stop offset="100%" stop-color="#7FB8F0"/>
+    </linearGradient>
+    <linearGradient id="depth" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6B5A9A" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="38%" r="52%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="55%" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shine" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.42"/>
+      <stop offset="38%" stop-color="#ffffff" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.98"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.62"/>
+    </linearGradient>
+    <filter id="letterShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#4A3058" flood-opacity="0.32"/>
+    </filter>
+    <filter id="starGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#ffffff" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+
+  <!-- App icon canvas (iOS / Meta safe rounded square) -->
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="228" fill="url(#depth)"/>
+  <rect width="1024" height="1024" rx="228" fill="url(#glow)"/>
+
+  <!-- Reputation score ring (~4.2 / 5.0 fill) -->
+  <circle cx="512" cy="512" r="372" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="26"/>
+  <circle
+    cx="512" cy="512" r="372"
+    fill="none"
+    stroke="url(#ring)"
+    stroke-width="26"
+    stroke-linecap="round"
+    stroke-dasharray="1968 2338"
+    transform="rotate(-92 512 512)"
+  />
+
+  <!-- Star accent at ring apex -->
+  <g transform="translate(512 140)" filter="url(#starGlow)">
+    <path
+      d="M0 -34 L9.5 10.5 L36 10.5 L15.5 28.5 L24.5 73 L0 50.5 L-24.5 73 L-15.5 28.5 L-36 10.5 L-9.5 10.5 Z"
+      fill="#ffffff"
+      opacity="0.96"
+    />
+  </g>
+
+  <!-- Glass highlight -->
+  <rect width="1024" height="470" rx="228" fill="url(#shine)"/>
+
+  <!-- Brand mark -->
+  <text
+    x="512" y="668"
+    text-anchor="middle"
+    font-family="Georgia, 'Times New Roman', 'Palatino Linotype', serif"
+    font-size="500"
+    font-weight="700"
+    fill="#ffffff"
+    filter="url(#letterShadow)"
+  >e</text>
+</svg>

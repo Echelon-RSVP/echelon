@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#FCF6FA">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Echelon" />
+  <link rel="manifest" href="/app/manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/app/icons/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/app/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="/app/icons/apple-touch-icon.png" />
+  <title>Echelon | Measurable Authenticity</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Quicksand:wght@500;600;700&display=swap');
+
+    :root {
+      --bg-light: #FCF6FA;
+      --text-main: #5A4A60;
+      --text-muted: #9B8FA8;
+      --pink-grad: linear-gradient(135deg, #FF9DC0, #B79CF0);
+      --gold-grad: linear-gradient(135deg, #FFE9A8, #FFD1E1);
+      --glass-bg: rgba(255, 255, 255, 0.35);
+      --glass-border: rgba(255, 255, 255, 0.6);
+      --glass-shadow: 0 32px 64px rgba(150, 110, 140, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-font-smoothing: antialiased;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+      color: var(--text-main);
+      background-color: var(--bg-light);
+      overflow-x: hidden;
+      line-height: 1.6;
+      scroll-behavior: smooth;
+      overscroll-behavior-y: none;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    h1, h2, h3, h4, .font-brand {
+      font-family: 'Quicksand', sans-serif;
+    }
+
+    ::selection {
+      background: #FFD1E1;
+      color: #5A4A60;
+    }
+
+    .aurora-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: -2;
+      pointer-events: none;
+      background-color: #fdfafc;
+      overflow: hidden;
+    }
+
+    .aurora-blob {
+      position: absolute;
+      filter: blur(80px);
+      border-radius: 50%;
+      animation: floatBlob 20s infinite alternate ease-in-out;
+      opacity: 0.6;
+      mix-blend-mode: multiply;
+    }
+
+    .blob-1 { top: -10%; left: -10%; width: 60vw; height: 60vw; background: #FFE3EE; animation-delay: 0s; }
+    .blob-2 { top: 40%; right: -20%; width: 70vw; height: 70vw; background: #E4ECFF; animation-delay: -5s; }
+    .blob-3 { bottom: -20%; left: 20%; width: 50vw; height: 50vw; background: #FFF0DD; animation-delay: -10s; }
+
+    @keyframes floatBlob {
+      0% { transform: translate(0, 0) scale(1); }
+      33% { transform: translate(5%, -5%) scale(1.1); }
+      66% { transform: translate(-5%, 5%) scale(0.9); }
+      100% { transform: translate(0, 0) scale(1); }
+    }
+
+    .ambient-grid {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-size: 40px 40px;
+      background-image: 
+        linear-gradient(to right, rgba(255,255,255,0.6) 1px, transparent 1px), 
+        linear-gradient(to bottom, rgba(255,255,255,0.6) 1px, transparent 1px);
+      mask-image: radial-gradient(ellipse at center, black 20%, transparent 80%);
+      -webkit-mask-image: radial-gradient(ellipse at center, black 20%, transparent 80%);
+    }
+
+    #cursor-glow {
+      position: fixed;
+      width: 500px;
+      height: 500px;
+      background: radial-gradient(circle, rgba(255,255,255,0.8) 0%, rgba(255,157,192,0.1) 40%, transparent 70%);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: -1;
+      transform: translate(-50%, -50%);
+      transition: top 0.15s ease-out, left 0.15s ease-out;
+      mix-blend-mode: screen;
+    }
+
+    header {
+      background: rgba(255, 255, 255, 0.4);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-bottom: 1px solid var(--glass-border);
+      box-shadow: 0 4px 30px rgba(0,0,0,0.02);
+    }
+
+    .text-gradient {
+      background: var(--pink-grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .btn-glass {
+      background: rgba(255, 255, 255, 0.5);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      box-shadow: 0 8px 32px rgba(180, 150, 190, 0.15);
+      transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+      color: var(--text-main);
+    }
+    .btn-glass:hover {
+      background: rgba(255, 255, 255, 0.9);
+      transform: translateY(-3px) scale(1.02);
+      box-shadow: 0 16px 40px rgba(180, 150, 190, 0.25);
+    }
+    .btn-glass:active { transform: scale(0.96); }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #FF9DC0, #B79CF0);
+      color: white;
+      box-shadow: 0 12px 28px rgba(255, 157, 192, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 16px 36px rgba(183, 156, 240, 0.5);
+      transform: translateY(-3px) scale(1.02);
+      filter: brightness(1.05);
+    }
+    .btn-primary:active { transform: scale(0.96); }
+
+    .btn-apple {
+      background: #0d0d0f;
+      color: #fff;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
+      transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .btn-apple:hover {
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+      transform: translateY(-3px) scale(1.02);
+    }
+    .btn-apple:active { transform: scale(0.96); }
+
+    .hero-perspective {
+      perspective: 1200px;
+    }
+
+    .hero-visual-card {
+      width: 340px;
+      height: 480px;
+      background: linear-gradient(145deg, rgba(255,255,255,0.7), rgba(255,255,255,0.2));
+      border-radius: 48px;
+      backdrop-filter: blur(40px);
+      -webkit-backdrop-filter: blur(40px);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--glass-shadow), inset 0 0 0 2px rgba(255,255,255,0.5), inset 0 0 40px rgba(255,255,255,0.8);
+      position: relative;
+      transform-style: preserve-3d;
+      transition: transform 0.1s ease-out;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .hero-visual-card::before {
+      content: '';
+      position: absolute;
+      inset: -30px;
+      background: conic-gradient(from 180deg, #F4C84B, #FF9DC0, #7FB8F0, #B79CF0, #F4C84B);
+      border-radius: 50%;
+      filter: blur(50px);
+      opacity: 0.5;
+      z-index: -1;
+      animation: spin 12s linear infinite;
+    }
+
+    .card-content-3d {
+      transform: translateZ(80px); /* Pushes content out from the glass */
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .score-ring {
+      width: 200px;
+      height: 200px;
+      border-radius: 50%;
+      border: 8px solid transparent;
+      background: linear-gradient(white, white) padding-box, 
+                  linear-gradient(135deg, #F4C84B, #FF9DC0, #7FB8F0) border-box;
+      display: grid;
+      place-items: center;
+      margin-bottom: 24px;
+      position: relative;
+      box-shadow: inset 0 0 30px rgba(244, 200, 75, 0.2), 0 20px 40px rgba(255, 157, 192, 0.3);
+    }
+
+    .score-ring::after {
+      content: '';
+      position: absolute;
+      inset: -16px;
+      border-radius: 50%;
+      border: 2px dashed rgba(217, 166, 37, 0.5);
+      animation: spin 25s linear infinite reverse;
+    }
+
+    .marquee-container {
+      width: 100vw;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.6);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255,255,255,0.8);
+      border-bottom: 1px solid rgba(255,255,255,0.8);
+      padding: 14px 0;
+      position: relative;
+      display: flex;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.03);
+    }
+
+    .marquee-content {
+      display: flex;
+      white-space: nowrap;
+      animation: scrollMarquee 35s linear infinite;
+    }
+
+    .marquee-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-main);
+      border-right: 1px solid rgba(155, 143, 168, 0.2);
+    }
+
+    @keyframes scrollMarquee {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+
+    .glass-panel {
+      background: rgba(255, 255, 255, 0.4);
+      backdrop-filter: blur(32px);
+      -webkit-backdrop-filter: blur(32px);
+      border: 1px solid var(--glass-border);
+      border-radius: 40px;
+      box-shadow: var(--glass-shadow), inset 0 0 0 1px rgba(255,255,255,0.5);
+      transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(50px) scale(0.95);
+      transition: all 1s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .reveal.active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-20px); }
+    }
+
+    .sparkle {
+      position: absolute;
+      color: #FF9DC0;
+      animation: twinkle 2s infinite ease-in-out alternate;
+      pointer-events: none;
+      z-index: -1;
+    }
+    @keyframes twinkle {
+      0% { opacity: 0.2; transform: scale(0.6) rotate(0deg); }
+      100% { opacity: 1; transform: scale(1.2) rotate(20deg); }
+    }
+
+    .langtabs { display: flex; flex-wrap: nowrap; gap: 2px; align-items: center; padding: 2px; border-radius: 999px; background: rgba(255,255,255,.55); border: 1px solid rgba(255,255,255,.85); backdrop-filter: blur(8px); }
+    .langtab {
+      min-width: 0; width: 28px; height: 24px; padding: 0; border-radius: 999px;
+      border: none; background: transparent;
+      color: #8B7A96; font-weight: 700; font-size: 9px; cursor: pointer; letter-spacing: .03em;
+      transition: transform .12s, background .12s, box-shadow .12s;
+    }
+    .langtab.on {
+      background: linear-gradient(135deg, #FF9DC0, #B79CF0);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(183,156,240,.28);
+    }
+    .langtab:active { transform: scale(.94); }
+
+    .legal-footer-links { display: flex; flex-wrap: wrap; gap: 10px 18px; justify-content: center; align-items: center; margin: 20px 0 14px; font-size: 13px; font-weight: 700; }
+    .legal-footer-links a { color: #8C6BD8; text-decoration: underline; white-space: nowrap; }
+    .legal-footer-links a:hover { color: #6B4FA8; }
+    .home-footer-tagline { font-size: 13px; font-weight: 700; color: #8B7A95; margin-bottom: 8px; max-width: 28rem; margin-left: auto; margin-right: auto; }
+    .home-footer-copy { font-size: 11px; color: #9B8FA8; letter-spacing: 0.02em; max-width: 32rem; margin-left: auto; margin-right: auto; }
+
+    .cookie-banner-home { position: fixed; bottom: 0; left: 0; right: 0; z-index: 100; padding: 16px; pointer-events: none; }
+    .cookie-banner-home-inner { pointer-events: auto; max-width: 720px; margin: 0 auto; background: rgba(255,251,254,.97); border: 1px solid rgba(235,217,240,.9); border-radius: 20px; padding: 18px 20px; box-shadow: 0 -8px 40px rgba(120,80,110,.2); backdrop-filter: blur(14px); }
+    .cookie-banner-home-inner h3 { font-family: Quicksand; font-size: 16px; color: #5A4A60; margin-bottom: 8px; }
+    .cookie-banner-home-inner p { font-size: 13px; color: #7B6A86; line-height: 1.55; margin-bottom: 10px; }
+    .cookie-banner-home-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; margin-top: 12px; }
+    .cookie-btn { padding: 10px 16px; border-radius: 14px; font-weight: 800; font-size: 13px; cursor: pointer; border: none; transition: transform .12s; }
+    .cookie-btn:active { transform: scale(.96); }
+    .cookie-btn-ghost { background: rgba(255,255,255,.8); border: 1px solid #EBD9F0; color: #7B6A86; }
+    .cookie-btn-primary { background: linear-gradient(135deg, #FF9DC0, #B79CF0); color: #fff; box-shadow: 0 8px 20px rgba(183,156,240,.35); }
+    .cookie-pref-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #F1E8F0; font-size: 13px; }
+    .cookie-banner-links { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; font-weight: 700; }
+    .cookie-banner-links a { color: #8C6BD8; text-decoration: underline; }
+
+    .legal-modal-home { display: none; position: fixed; inset: 0; z-index: 110; background: rgba(90,74,96,.45); backdrop-filter: blur(6px); padding: 24px 16px; overflow: auto; }
+    .legal-modal-home.open { display: flex; align-items: flex-start; justify-content: center; }
+    .legal-modal-home-panel { background: #FFFBFE; border-radius: 24px; max-width: 720px; width: 100%; max-height: min(85vh, 800px); overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(100,70,90,.25); }
+    .legal-modal-home-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid #F1E8F0; }
+    .legal-modal-home-head h2 { font-family: Quicksand; margin: 0; font-size: 20px; color: #5A4A60; }
+    .legal-modal-home-close { background: #F5EFF8; border: none; width: 36px; height: 36px; border-radius: 12px; cursor: pointer; font-size: 18px; color: #7B6A86; }
+    .legal-modal-home-body { overflow: auto; padding: 16px 20px 28px; }
+    .legal-modal-home-body h2 { font-family: Quicksand; font-size: 15px; color: #5A4A60; margin: 18px 0 8px; }
+    .legal-modal-home-body p, .legal-modal-home-body li { font-size: 14px; line-height: 1.65; color: #6B5A76; margin-bottom: 10px; }
+    .legal-modal-home-body ul { padding-left: 20px; margin-bottom: 12px; }
+    .legal-updated { font-size: 12px; color: #9B8FA8; margin-bottom: 16px; }
+
+    .mobile-app-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 7px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+      text-decoration: none;
+    }
+
+    .a2hs-hero-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 18px 22px;
+      border-radius: 22px;
+      border: 2px solid rgba(255,255,255,.95);
+      background: linear-gradient(135deg, #FFE9F2 0%, #E8E0FF 55%, #DCE8FF 100%);
+      box-shadow: 0 16px 40px rgba(150,110,150,.2), inset 0 1px 0 rgba(255,255,255,.9);
+      font-family: 'Nunito', sans-serif;
+      font-weight: 900;
+      font-size: 1.15rem;
+      color: #4A3A58;
+      cursor: pointer;
+      transition: transform .12s;
+      text-align: center;
+    }
+    .a2hs-hero-btn:active { transform: scale(.98); }
+    .a2hs-hero-btn span.a2hs-sub {
+      font-size: .78rem;
+      font-weight: 700;
+      color: #8B7A96;
+      line-height: 1.35;
+    }
+
+    .a2hs-install-modal { display: none; position: fixed; inset: 0; z-index: 120; background: rgba(90,74,96,.45); backdrop-filter: blur(6px); padding: 24px 16px; align-items: flex-end; justify-content: center; }
+    .a2hs-install-modal.open { display: flex; }
+    .a2hs-install-panel { width: min(100%, 420px); background: #FFFBFE; border-radius: 28px 28px 0 0; padding: 18px 20px max(24px, env(safe-area-inset-bottom)); box-shadow: 0 -20px 60px rgba(100,70,90,.25); }
+    .a2hs-install-panel h3 { font-family: Quicksand; font-size: 20px; color: #5A4A60; margin: 0 0 8px; text-align: center; }
+    .a2hs-install-panel p.lead { font-size: 13px; color: #8B7A96; text-align: center; margin: 0 0 14px; line-height: 1.5; }
+    .a2hs-install-steps { list-style: none; padding: 0; margin: 0 0 14px; display: flex; flex-direction: column; gap: 10px; }
+    .a2hs-install-steps li { font-size: 13.5px; font-weight: 700; color: #5A4A60; padding: 12px 14px; border-radius: 16px; background: #FBF4FB; border: 1px solid #F1E5F1; line-height: 1.45; }
+
+    .hero-mobile-card {
+      display: none;
+      width: min(280px, 88vw);
+      margin: 0 auto 24px;
+      padding: 20px 18px;
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.55);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border: 1px solid var(--glass-border);
+      box-shadow: var(--glass-shadow);
+      text-align: center;
+    }
+
+    .hero-mobile-score {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      margin: 0 auto 12px;
+      border: 6px solid transparent;
+      background: linear-gradient(white, white) padding-box,
+                  linear-gradient(135deg, #F4C84B, #FF9DC0, #7FB8F0) border-box;
+      display: grid;
+      place-items: center;
+      font-family: 'Quicksand', sans-serif;
+      font-size: 2.25rem;
+      font-weight: 700;
+      color: #D9A625;
+    }
+
+    @media (max-width: 767px) {
+      .aurora-bg { height: 100dvh; }
+      header { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+      .hero-mobile-card { display: block; }
+      .marquee-item { font-size: 12px; padding: 4px 16px; }
+      .glass-panel { border-radius: 28px; }
+      .glass-panel:hover { transform: none; }
+      .cookie-banner-home {
+        padding: 12px;
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
+      }
+      .cookie-banner-home-inner { padding: 16px; border-radius: 18px; }
+      .cookie-banner-home-actions { flex-direction: column; align-items: stretch; }
+      .cookie-banner-home-actions .cookie-btn { width: 100%; text-align: center; justify-content: center; }
+      .legal-modal-home { padding: 16px 12px; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+      .sparkle { display: none; }
+    }
+
+    @media (max-width: 480px) {
+      .hero-mobile-score { width: 100px; height: 100px; font-size: 1.85rem; }
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .glass-panel:hover {
+        transform: translateY(-12px);
+        background: rgba(255, 255, 255, 0.6);
+        box-shadow: 0 40px 80px rgba(150, 110, 140, 0.2), inset 0 0 0 1px rgba(255,255,255,0.8);
+      }
+    }
+
+    .brand-lockup { text-decoration: none; color: inherit; }
+    .brand-logo {
+      border-radius: 14px;
+      box-shadow: 0 8px 22px rgba(150, 110, 150, 0.18), inset 0 0 0 2px rgba(255,255,255,0.85);
+      object-fit: cover;
+    }
+
+    .hero-logo-wrap {
+      position: relative;
+      width: 88px;
+      height: 88px;
+      margin: 0 auto 20px;
+    }
+    @media (min-width: 768px) {
+      .hero-logo-wrap { margin: 0 0 24px; }
+    }
+    .hero-logo-glow {
+      position: absolute;
+      inset: -16px;
+      border-radius: 28px;
+      background: conic-gradient(from 200deg, #FFE9A8, #FF9DC0, #B79CF0, #7FB8F0, #FFE9A8);
+      filter: blur(20px);
+      opacity: 0.55;
+      animation: heroLogoGlow 6s ease-in-out infinite alternate;
+    }
+    .hero-logo {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      border-radius: 22px;
+      box-shadow: 0 14px 36px rgba(150, 110, 150, 0.22), inset 0 0 0 2px rgba(255,255,255,0.85);
+      object-fit: cover;
+    }
+    @keyframes heroLogoGlow {
+      0% { transform: scale(0.92) rotate(0deg); opacity: 0.45; }
+      100% { transform: scale(1.06) rotate(12deg); opacity: 0.62; }
+    }
+
+    .hero-card-logo {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      margin-bottom: 14px;
+      box-shadow: 0 8px 20px rgba(150, 110, 150, 0.15);
+    }
+
+    .how-step-num {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      font-family: 'Quicksand', sans-serif;
+      font-weight: 800;
+      font-size: 1.1rem;
+      color: #fff;
+      background: linear-gradient(135deg, #FF9DC0, #B79CF0);
+      box-shadow: 0 8px 20px rgba(255, 157, 192, 0.35);
+      margin-bottom: 16px;
+    }
+
+    .faq-list {
+      max-width: 760px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .faq-item {
+      background: rgba(255, 255, 255, 0.5);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      padding: 0 20px;
+      box-shadow: 0 12px 32px rgba(150, 110, 140, 0.08);
+    }
+    .faq-item summary {
+      cursor: pointer;
+      list-style: none;
+      font-weight: 800;
+      font-size: 1rem;
+      color: #5A4A60;
+      padding: 18px 28px 18px 0;
+      position: relative;
+    }
+    .faq-item summary::-webkit-details-marker { display: none; }
+    .faq-item summary::after {
+      content: '+';
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #B79CF0;
+      transition: transform 0.2s;
+    }
+    .faq-item[open] summary::after { transform: translateY(-50%) rotate(45deg); }
+    .faq-item p {
+      margin: 0 0 18px;
+      font-size: 0.95rem;
+      line-height: 1.65;
+      color: #8B7A96;
+      font-weight: 500;
+    }
+    .faq-docs-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 28px;
+      font-weight: 800;
+      color: #9B7CC0;
+      text-decoration: none;
+      padding: 12px 20px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.55);
+      border: 1px solid var(--glass-border);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .faq-docs-link:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 28px rgba(150, 110, 140, 0.12);
+    }
+
+  </style>
+</head>
+<body class="relative">
+
+  <div class="aurora-bg">
+    <div class="aurora-blob blob-1"></div>
+    <div class="aurora-blob blob-2"></div>
+    <div class="aurora-blob blob-3"></div>
+  </div>
+  <div class="ambient-grid"></div>
+  <div id="cursor-glow"></div>
+
+  <!-- Sparkles -->
+  <div class="sparkle" style="top: 15%; left: 10%; font-size: 24px; animation-delay: 0s;">✨</div>
+  <div class="sparkle" style="top: 35%; right: 15%; font-size: 32px; color: #7FB8F0; animation-delay: 0.5s;">✦</div>
+  <div class="sparkle" style="bottom: 10%; left: 20%; font-size: 20px; color: #F4C84B; animation-delay: 1s;">✨</div>
+  <div class="sparkle" style="top: 60%; left: 80%; font-size: 28px; color: #B79CF0; animation-delay: 1.5s;">✦</div>
+
+  <header class="fixed top-0 w-full px-4 py-3 sm:px-6 sm:py-4 md:px-12 md:py-5 flex justify-between items-center z-50 transition-all duration-300" id="navbar" style="padding-top: max(12px, env(safe-area-inset-top));">
+    <a href="#" class="brand-lockup flex items-center gap-2.5 sm:gap-3">
+      <img src="/app/icons/icon-192.png" alt="" width="40" height="40" class="brand-logo w-9 h-9 sm:w-10 sm:h-10" />
+      <span class="font-brand text-xl sm:text-2xl md:text-3xl font-bold tracking-tight text-gradient">echelon</span>
+    </a>
+    <div class="flex gap-2 sm:gap-3 md:gap-6 items-center">
+      <div id="lang-tabs" class="langtabs" role="tablist" aria-label="Language"></div>
+      <a href="/app" class="mobile-app-btn md:hidden btn-primary" data-i18n="home.nav.app">App</a>
+      <div class="hidden md:flex gap-6 lg:gap-8 items-center">
+        <a href="#features" class="font-semibold text-gray-500 hover:text-purple-600 transition-colors" data-i18n="home.nav.features">Features</a>
+        <a href="#how" class="font-semibold text-gray-500 hover:text-purple-600 transition-colors" data-i18n="home.nav.how">How it works</a>
+        <a href="#faq" class="font-semibold text-gray-500 hover:text-purple-600 transition-colors" data-i18n="home.nav.faq">FAQ</a>
+        <a href="/app/docs.html" class="font-semibold text-gray-500 hover:text-purple-600 transition-colors" data-i18n="home.nav.docs">Guide</a>
+        <a href="#elite" class="font-semibold text-gray-500 hover:text-purple-600 transition-colors" data-i18n="home.nav.elite">Elite Access</a>
+        <a href="/app" class="btn-primary px-6 py-2.5 rounded-full font-bold text-sm tracking-wide" data-i18n="home.nav.app">
+          Visit App
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <section class="min-h-[100dvh] flex flex-col md:flex-row items-center justify-center px-4 sm:px-6 md:px-12 pt-24 sm:pt-28 md:pt-32 pb-16 sm:pb-20 relative max-w-[1400px] mx-auto gap-8 sm:gap-12 md:gap-20">
+    
+    <div class="flex-1 max-w-2xl z-10 text-center md:text-left reveal active">
+      <div class="hero-logo-wrap">
+        <div class="hero-logo-glow" aria-hidden="true"></div>
+        <img src="/app/icons/icon-192.png" alt="" width="88" height="88" class="hero-logo" />
+      </div>
+      <span class="inline-block px-4 py-1.5 sm:px-5 sm:py-2 bg-white/50 backdrop-blur-lg border border-white rounded-full text-[10px] sm:text-xs font-extrabold tracking-widest text-purple-600 uppercase mb-5 sm:mb-8 shadow-sm" data-i18n="home.hero.badge">
+        Welcome to the Top Tier
+      </span>
+      <h1 class="text-[2rem] leading-[1.08] sm:text-5xl md:text-7xl lg:text-8xl font-bold sm:leading-[1.05] mb-4 sm:mb-6 tracking-tight text-gray-800">
+        <span data-i18n="home.hero.title">Where your best self is finally</span> <span class="text-gradient" data-i18n="home.hero.measurable">measurable</span>.
+      </h1>
+      <p class="text-base sm:text-lg md:text-2xl text-gray-500 mb-6 sm:mb-10 leading-relaxed font-medium px-1 sm:px-0" data-i18n="home.hero.lead">
+        Join the curated community of radiant individuals. Unlock the life you deserve, pristine social harmony, and real world perks.
+      </p>
+
+      <div class="hero-mobile-card reveal active">
+        <img src="/app/icons/icon-192.png" alt="" width="48" height="48" class="hero-card-logo mx-auto" />
+        <div class="hero-mobile-score">4.92</div>
+        <div class="text-sm font-extrabold tracking-widest text-yellow-600 mb-2">ELITE TIER</div>
+        <p class="text-xs text-gray-500 font-semibold">Iris Moon rated you ★★★★★</p>
+      </div>
+      
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-5 justify-center md:justify-start">
+        <button type="button" id="a2hs-hero-btn" class="a2hs-hero-btn">
+          <span data-i18n="home.hero.install">Add to Home Screen 📲</span>
+          <span class="a2hs-sub" data-i18n="home.hero.installSub">Install Echelon like an app. One tap to open.</span>
+        </button>
+        <a href="/app/" class="btn-glass flex items-center gap-3 px-6 sm:px-8 py-3.5 sm:py-4 rounded-2xl font-extrabold text-base sm:text-lg w-full sm:w-auto justify-center" data-i18n="home.hero.visit">
+          Open in browser ✨
+        </a>
+        <a href="#download" class="btn-glass hidden sm:flex items-center gap-3 px-6 sm:px-8 py-3.5 sm:py-4 rounded-2xl font-extrabold text-base sm:text-lg w-full sm:w-auto justify-center">
+          <svg viewBox="0 0 16 19" class="w-5 h-5 fill-gray-700"><path d="M13.18 14.62c-.27.62-.4.9-.74 1.45-.48.77-1.16 1.73-2 1.74-.75.01-.94-.49-1.96-.48-1.02 0-1.23.49-1.98.48-.84-.01-1.48-.87-1.96-1.64-1.34-2.16-1.48-4.7-.65-6.05.58-.96 1.5-1.52 2.36-1.52.88 0 1.43.48 2.16.48.7 0 1.13-.48 2.15-.48.77 0 1.59.42 2.17 1.14-1.9 1.04-1.6 3.76.25 4.45z"/><path d="M10.4 4.2c.42-.54.74-1.3.65-2.07-.68.05-1.48.48-1.95 1.04-.42.5-.78 1.26-.68 2 .73.06 1.5-.42 1.98-.97z"/></svg>
+          <span data-i18n="home.hero.download">Download iOS</span>
+        </a>
+      </div>
+      <p class="text-sm text-gray-400 mt-6 font-semibold flex items-center gap-2 justify-center md:justify-start">
+        <span class="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+        <span data-i18n="home.hero.live">Live evaluation active</span>
+      </p>
+    </div>
+
+    <!-- 3D Glass Card Parallax -->
+    <div class="flex-1 flex justify-center hero-perspective hidden md:flex reveal active">
+      <div class="hero-visual-card" id="tilt-card" style="animation: float 8s ease-in-out infinite;">
+        <div class="card-content-3d">
+          <img src="/app/icons/icon-192.png" alt="" width="56" height="56" class="hero-card-logo" />
+          <div class="score-ring">
+            <span class="font-brand text-7xl font-bold text-yellow-600">4.92</span>
+          </div>
+          <h3 class="text-xl font-extrabold tracking-widest text-yellow-600 mb-3 bg-yellow-100/50 px-4 py-1 rounded-full">ELITE TIER</h3>
+          <div class="bg-white/60 backdrop-blur-md rounded-2xl p-4 mt-2 border border-white/80 shadow-sm w-64">
+            <p class="text-sm text-gray-600 font-bold flex items-center gap-2 mb-1">
+              <span class="text-xl">😍</span> Iris Moon rated you
+            </p>
+            <p class="text-yellow-500 text-lg">★★★★★</p>
+            <p class="text-xs text-gray-500 font-semibold mt-1">"Radiant and perfectly polite ✨"</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="marquee-container">
+    <div class="marquee-content">
+      <!-- Repeated content for infinite loop illusion -->
+      <div class="marquee-item"><span class="text-xl">😍</span> <b>Iris Moon</b> rated Theo 5.0: "so authentic ✨"</div>
+      <div class="marquee-item"><span class="text-xl">📈</span> <b>Marcus Bell</b> reached HIGH tier!</div>
+      <div class="marquee-item"><span class="text-xl">😐</span> <b>Rosa Klein</b> dipped to 2.9: "a little flat"</div>
+      <div class="marquee-item"><span class="text-xl">🥂</span> <b>Priya Sundara</b> unlocked Fine Dining Access.</div>
+      <div class="marquee-item"><span class="text-xl">🥰</span> <b>Naomi Vale</b> received a +0.12 Elite Boost.</div>
+      <div class="marquee-item"><span class="text-xl">🧊</span> <b>Sam Okafor</b> received 1 star: "draining"</div>
+      
+      <!-- Duplicate for seamless scroll -->
+      <div class="marquee-item"><span class="text-xl">😍</span> <b>Iris Moon</b> rated Theo 5.0: "so authentic ✨"</div>
+      <div class="marquee-item"><span class="text-xl">📈</span> <b>Marcus Bell</b> reached HIGH tier!</div>
+      <div class="marquee-item"><span class="text-xl">😐</span> <b>Rosa Klein</b> dipped to 2.9: "a little flat"</div>
+      <div class="marquee-item"><span class="text-xl">🥂</span> <b>Priya Sundara</b> unlocked Fine Dining Access.</div>
+      <div class="marquee-item"><span class="text-xl">🥰</span> <b>Naomi Vale</b> received a +0.12 Elite Boost.</div>
+      <div class="marquee-item"><span class="text-xl">🧊</span> <b>Sam Okafor</b> received 1 star: "draining"</div>
+    </div>
+  </div>
+
+  <section id="features" class="py-16 sm:py-24 md:py-32 px-4 sm:px-6 md:px-12 max-w-[1400px] mx-auto relative z-10">
+    <div class="text-center mb-10 sm:mb-16 md:mb-20 reveal">
+      <h2 class="text-3xl sm:text-5xl md:text-6xl font-bold text-gray-800 mb-4 sm:mb-6 tracking-tight px-2" data-i18n="home.features.title">A perfectly curated reality.</h2>
+      <p class="text-base sm:text-xl text-gray-500 max-w-3xl mx-auto font-medium leading-relaxed px-2" data-i18n="home.features.lead">When everyone is held accountable in real time, the world becomes a warmer, brighter, and more polite place to exist.</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 sm:gap-8 md:gap-10">
+      
+      <!-- Card 1 -->
+      <div class="glass-panel p-7 sm:p-10 md:p-12 reveal tilt-feature">
+        <div class="absolute -top-10 -right-10 w-40 h-40 bg-pink-200 rounded-full mix-blend-multiply filter blur-3xl opacity-60"></div>
+        <div class="w-20 h-20 rounded-3xl flex items-center justify-center mb-8 shadow-lg relative z-10" style="background: linear-gradient(135deg, #FF9DC0, #B79CF0);">
+          <svg class="w-10 h-10 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-bold mb-3 sm:mb-4 text-gray-800 relative z-10" data-i18n="home.features.c1t">Radical Transparency</h3>
+        <p class="text-gray-500 font-medium leading-relaxed text-base sm:text-lg relative z-10" data-i18n="home.features.c1d">Activate the AR Lens Overlay to see everyone's score floating in real time. Know exactly who you are interacting with before you even speak.</p>
+      </div>
+
+      <!-- Card 2 -->
+      <div class="glass-panel p-7 sm:p-10 md:p-12 reveal tilt-feature" style="transition-delay: 0.1s;">
+        <div class="absolute -top-10 -right-10 w-40 h-40 bg-yellow-200 rounded-full mix-blend-multiply filter blur-3xl opacity-60"></div>
+        <div class="w-20 h-20 rounded-3xl flex items-center justify-center mb-8 shadow-lg relative z-10" style="background: linear-gradient(135deg, #FFE9A8, #FFD1E1);">
+          <svg class="w-10 h-10 text-yellow-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/></svg>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-bold mb-3 sm:mb-4 text-gray-800 relative z-10" data-i18n="home.features.c2t">Curated Lifestyle</h3>
+        <p class="text-gray-500 font-medium leading-relaxed text-base sm:text-lg relative z-10" data-i18n="home.features.c2d">Your score is your key. Elite members unlock priority travel lanes, fine dining reservations, and exclusive housing communities seamlessly.</p>
+      </div>
+
+      <!-- Card 3 -->
+      <div class="glass-panel p-7 sm:p-10 md:p-12 reveal tilt-feature" style="transition-delay: 0.2s;">
+        <div class="absolute -top-10 -right-10 w-40 h-40 bg-green-200 rounded-full mix-blend-multiply filter blur-3xl opacity-60"></div>
+        <div class="w-20 h-20 rounded-3xl flex items-center justify-center mb-8 shadow-lg relative z-10" style="background: linear-gradient(135deg, #7FD4B4, #BFE08A);">
+          <svg class="w-10 h-10 text-green-800" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20.42 4.58a5.4 5.4 0 0 0-7.65 0l-.77.78-.77-.78a5.4 5.4 0 0 0-7.65 0C1.46 6.7 1.33 10.28 4 13l8 8 8-8c2.67-2.72 2.54-6.3.42-8.42z"/></svg>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-bold mb-3 sm:mb-4 text-gray-800 relative z-10" data-i18n="home.features.c3t">Instant Harmony</h3>
+        <p class="text-gray-500 font-medium leading-relaxed text-base sm:text-lg relative z-10" data-i18n="home.features.c3d">Keep your interactions warm, polite, and accountable. Our proprietary algorithm ensures the world stays beautifully kind.</p>
+      </div>
+
+      <!-- Card 4 -->
+      <div class="glass-panel p-7 sm:p-10 md:p-12 reveal tilt-feature" style="transition-delay: 0.3s;">
+        <div class="absolute -top-10 -right-10 w-40 h-40 bg-purple-200 rounded-full mix-blend-multiply filter blur-3xl opacity-60"></div>
+        <div class="w-20 h-20 rounded-3xl flex items-center justify-center mb-8 shadow-lg relative z-10" style="background: linear-gradient(135deg, #B79CF0, #FF9DC0);">
+          <svg class="w-10 h-10 text-white" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+        </div>
+        <h3 class="text-2xl sm:text-3xl font-bold mb-3 sm:mb-4 text-gray-800 relative z-10" data-i18n="home.features.c4t">Earned ratings</h3>
+        <p class="text-gray-500 font-medium leading-relaxed text-base sm:text-lg relative z-10" data-i18n="home.features.c4d">Only members with a higher score can rate someone lower. Every star shifts the curve, so warmth and accountability stay meaningful.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <section id="how" class="py-16 sm:py-24 md:py-28 px-4 sm:px-6 md:px-12 max-w-[1200px] mx-auto relative z-10">
+    <div class="text-center mb-10 sm:mb-16 reveal">
+      <h2 class="text-3xl sm:text-5xl md:text-6xl font-bold text-gray-800 mb-4 sm:mb-6 tracking-tight px-2" data-i18n="home.how.title">Three steps to measurable you</h2>
+      <p class="text-base sm:text-xl text-gray-500 max-w-3xl mx-auto font-medium leading-relaxed px-2" data-i18n="home.how.lead">Sign in, establish your baseline, then let the community refine your score every day.</p>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
+      <div class="glass-panel p-7 sm:p-9 reveal">
+        <div class="how-step-num">1</div>
+        <h3 class="text-xl sm:text-2xl font-bold mb-3 text-gray-800" data-i18n="home.how.s1t">Sign in &amp; scan</h3>
+        <p class="text-gray-500 font-medium leading-relaxed" data-i18n="home.how.s1d">Apple, Gmail, or email. One quick face scan sets your starting Echelon Score™.</p>
+      </div>
+      <div class="glass-panel p-7 sm:p-9 reveal" style="transition-delay: 0.1s;">
+        <div class="how-step-num">2</div>
+        <h3 class="text-xl sm:text-2xl font-bold mb-3 text-gray-800" data-i18n="home.how.s2t">Rate with hierarchy</h3>
+        <p class="text-gray-500 font-medium leading-relaxed" data-i18n="home.how.s2d">Higher scores rate lower ones. Thoughtful stars move the needle; noise stays filtered out.</p>
+      </div>
+      <div class="glass-panel p-7 sm:p-9 reveal" style="transition-delay: 0.2s;">
+        <div class="how-step-num">3</div>
+        <h3 class="text-xl sm:text-2xl font-bold mb-3 text-gray-800" data-i18n="home.how.s3t">Unlock perks</h3>
+        <p class="text-gray-500 font-medium leading-relaxed" data-i18n="home.how.s3d">Travel lanes, dining, gatherings, and premium feed tiers follow your score.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq" class="py-16 sm:py-24 md:py-28 px-4 sm:px-6 md:px-12 max-w-[1000px] mx-auto relative z-10">
+    <div class="text-center mb-10 sm:mb-14 reveal">
+      <h2 class="text-3xl sm:text-5xl font-bold text-gray-800 mb-4 tracking-tight" data-i18n="home.faq.title">Frequently asked questions</h2>
+    </div>
+    <div class="faq-list reveal">
+      <details class="faq-item">
+        <summary data-i18n="faq.q1">How is my Echelon Score™ calculated?</summary>
+        <p data-i18n="faq.a1">Your score is a holistic reflection of how the community experiences you.</p>
+      </details>
+      <details class="faq-item">
+        <summary data-i18n="faq.q2">Why do high-tier ratings count more?</summary>
+        <p data-i18n="faq.a2">Esteemed members have demonstrated sustained warmth, so their perception carries proportionally greater signal.</p>
+      </details>
+      <details class="faq-item">
+        <summary data-i18n="faq.q3">Why did my score drop after a kind interaction?</summary>
+        <p data-i18n="faq.a3">Sometimes growth feels uncomfortable. A dip is simply an invitation to lean further into positivity.</p>
+      </details>
+      <details class="faq-item">
+        <summary data-i18n="faq.q4">Can I see who rated me low?</summary>
+        <p data-i18n="faq.a4">We protect every member's right to honest, frictionless expression.</p>
+      </details>
+      <details class="faq-item">
+        <summary data-i18n="faq.q5">Does Echelon ever delete a rating?</summary>
+        <p data-i18n="faq.a5">Ratings are authentic sentiment and are therefore permanent-ish.</p>
+      </details>
+    </div>
+    <div class="text-center reveal">
+      <a href="/app/docs.html" class="faq-docs-link" data-i18n="home.faq.docs">Read the full in-app guide →</a>
+    </div>
+  </section>
+
+  <section id="elite" class="py-14 sm:py-20 md:py-24 px-4 sm:px-6 md:px-12 text-center max-w-6xl mx-auto relative z-10">
+    <div class="reveal">
+      <h2 class="text-3xl sm:text-5xl md:text-6xl font-bold text-gray-800 mb-8 sm:mb-12 md:mb-16 tracking-tight px-2" data-i18n="home.elite.title">Beloved by the best of us.</h2>
+    </div>
+    
+    <div class="flex flex-col sm:flex-row flex-wrap justify-center gap-5 sm:gap-8">
+      
+      <div class="glass-panel p-6 sm:p-8 w-full sm:max-w-md text-left reveal">
+        <div class="flex items-center gap-5 mb-6">
+          <div class="w-16 h-16 rounded-full bg-gradient-to-br from-yellow-200 to-pink-200 flex items-center justify-center text-4xl border-4 border-white shadow-md relative">
+            😍
+            <div class="absolute -bottom-2 -right-2 bg-white rounded-full p-1 shadow-sm">
+              <svg viewBox="0 0 24 24" class="w-4 h-4 fill-yellow-500"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+            </div>
+          </div>
+          <div>
+            <div class="font-extrabold text-xl text-gray-800">Iris Moon</div>
+            <div class="text-yellow-600 font-bold text-sm bg-yellow-100/50 px-3 py-1 rounded-full inline-block mt-1">
+              4.9 Elite
+            </div>
+          </div>
+        </div>
+        <p class="text-gray-600 font-medium text-lg leading-relaxed">"Since reaching Elite, life just flows. Doors open, smiles are brighter. Echelon is not just an app. It is a commitment to a beautiful existence."</p>
+      </div>
+
+      <div class="glass-panel p-6 sm:p-8 w-full sm:max-w-md text-left reveal" style="transition-delay: 0.1s;">
+        <div class="flex items-center gap-5 mb-6">
+          <div class="w-16 h-16 rounded-full bg-gradient-to-br from-blue-100 to-purple-200 flex items-center justify-center text-4xl border-4 border-white shadow-md relative">
+            😁
+            <div class="absolute -bottom-2 -right-2 bg-white rounded-full p-1 shadow-sm">
+              <svg viewBox="0 0 24 24" class="w-4 h-4 fill-purple-500"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+            </div>
+          </div>
+          <div>
+            <div class="font-extrabold text-xl text-gray-800">Theo Brightman</div>
+            <div class="text-purple-600 font-bold text-sm bg-purple-100/50 px-3 py-1 rounded-full inline-block mt-1">
+              4.5 High
+            </div>
+          </div>
+        </div>
+        <p class="text-gray-600 font-medium text-lg leading-relaxed">"The priority travel lane alone is worth every warm interaction. Echelon keeps me motivated to always show up as my very best self."</p>
+      </div>
+
+    </div>
+  </section>
+
+  <footer id="download" class="pt-16 sm:pt-24 md:pt-32 pb-12 sm:pb-16 md:pb-20 text-center relative mt-10 sm:mt-16 md:mt-20 bg-white/40 backdrop-blur-2xl border-t border-white/60" style="padding-bottom: max(48px, env(safe-area-inset-bottom));">
+    <div class="max-w-3xl mx-auto px-4 sm:px-6 reveal">
+      <h2 class="text-2xl sm:text-4xl md:text-5xl font-bold text-gray-800 mb-6 sm:mb-8 tracking-tight" data-i18n="home.footer.title">Ready to be measured?</h2>
+      
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3 sm:gap-5 mb-10 sm:mb-16">
+        <button type="button" id="a2hs-footer-btn" class="a2hs-hero-btn" style="max-width:420px;margin:0 auto">
+          <span data-i18n="home.hero.install">Add to Home Screen 📲</span>
+          <span class="a2hs-sub" data-i18n="home.hero.installSub">Install Echelon like an app. One tap to open.</span>
+        </button>
+        <a href="/app/" class="btn-glass flex items-center gap-3 px-8 sm:px-10 py-4 sm:py-5 rounded-2xl font-extrabold text-lg sm:text-xl w-full sm:w-auto justify-center" data-i18n="home.hero.visit">
+          Open in browser ✨
+        </a>
+      </div>
+      
+      <a href="#" class="brand-lockup flex items-center justify-center gap-3 mb-6">
+        <img src="/app/icons/icon-192.png" alt="" width="44" height="44" class="brand-logo" />
+        <span class="font-brand text-2xl font-bold tracking-tight text-gradient">echelon</span>
+      </a>
+      <nav class="legal-footer-links" aria-label="Legal">
+        <a href="/privacy.html" data-i18n="legal.privacy">Privacy Policy</a>
+        <a href="/terms.html" data-i18n="legal.terms">Terms &amp; Conditions</a>
+        <a href="/cookies.html" data-i18n="legal.cookies">Cookie Policy</a>
+        <a href="/data-deletion.html" data-i18n="legal.dataDeletion">Data deletion</a>
+        <a href="/cookies.html#settings" data-i18n="legal.cookieSettings">Cookie settings</a>
+      </nav>
+      <p class="text-sm text-gray-500 font-bold mb-3 max-w-lg mx-auto" data-i18n="home.footer.consent">By downloading or visiting the app, you consent to continuous, real time evaluation and public display of your metric identity.</p>
+      <p class="home-footer-tagline" data-i18n="home.footer.tagline">Reputation as currency, by design.</p>
+      <p class="home-footer-email"><a href="mailto:hi@echelon.rsvp">hi@echelon.rsvp</a></p>
+      <p class="home-footer-copy" data-i18n="home.footer.copy">© 2026 Fortune Comet, Unipessoal Lda (VAT PT516161440). All rights reserved.</p>
+    </div>
+  </footer>
+
+  <div id="cookie-banner" class="cookie-banner-home" role="dialog" aria-labelledby="cookie-title" hidden>
+    <div class="cookie-banner-home-inner">
+      <h3 id="cookie-title" data-i18n="cookie.banner.title">We value your privacy</h3>
+      <p data-i18n="cookie.banner.text">We use strictly necessary storage and, with your consent, functional preferences.</p>
+      <div class="cookie-banner-links" style="margin:0 0 4px">
+        <a href="/privacy.html" data-i18n="legal.privacy">Privacy Policy</a>
+        <a href="/cookies.html" data-i18n="legal.cookies">Cookie Policy</a>
+      </div>
+      <div id="cookie-prefs-panel" hidden>
+        <label class="cookie-pref-row"><span data-i18n="cookie.functional">Functional storage</span><input type="checkbox" id="cookie-functional" checked></label>
+        <label class="cookie-pref-row muted" style="opacity:.7"><span data-i18n="cookie.analytics">Analytics</span><input type="checkbox" disabled></label>
+      </div>
+      <div class="cookie-banner-home-actions">
+        <button type="button" class="cookie-btn cookie-btn-ghost" id="cookie-reject" data-i18n="cookie.reject">Reject non-essential</button>
+        <button type="button" class="cookie-btn cookie-btn-ghost" id="cookie-manage" data-i18n="cookie.manage">Manage preferences</button>
+        <button type="button" class="cookie-btn cookie-btn-primary" id="cookie-accept" data-i18n="cookie.acceptAll">Accept all</button>
+        <button type="button" class="cookie-btn cookie-btn-primary" id="cookie-save" hidden data-i18n="cookie.save">Save preferences</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="a2hs-modal" class="a2hs-install-modal" aria-hidden="true">
+    <div class="a2hs-install-panel">
+      <h3 data-i18n="pwa.addToHome">Add to Home Screen</h3>
+      <p class="lead" data-i18n="pwa.helpLead">Install Echelon on your home screen for one-tap access:</p>
+      <ol class="a2hs-install-steps" id="a2hs-steps"></ol>
+      <a href="/app/?install=1" class="btn-primary flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl font-extrabold text-base w-full" data-i18n="home.hero.visit">Open in browser ✨</a>
+      <button type="button" id="a2hs-close" class="cookie-btn cookie-btn-ghost" style="width:100%;margin-top:10px" data-i18n="legal.close">Close</button>
+    </div>
+  </div>
+
+  <script src="/i18n.js"></script>
+  <script src="/legal.js"></script>
+  <script>
+    let homeLang = 'en';
+
+    function initCookieBanner() {
+      const L = window.EchelonLegal;
+      const banner = document.getElementById('cookie-banner');
+      if (!L || L.hasCookieConsent()) return;
+      banner.hidden = false;
+      const prefs = document.getElementById('cookie-prefs-panel');
+      const manage = document.getElementById('cookie-manage');
+      const save = document.getElementById('cookie-save');
+      const accept = document.getElementById('cookie-accept');
+      const reject = document.getElementById('cookie-reject');
+      const functional = document.getElementById('cookie-functional');
+      let managing = false;
+
+      const hide = (consent) => {
+        L.saveCookieConsent(consent);
+        banner.hidden = true;
+      };
+
+      manage.addEventListener('click', () => {
+        managing = !managing;
+        prefs.hidden = !managing;
+        manage.hidden = managing;
+        accept.hidden = managing;
+        reject.hidden = managing;
+        save.hidden = !managing;
+      });
+
+      accept.addEventListener('click', () => hide({ functional: true, analytics: false }));
+      reject.addEventListener('click', () => hide({ functional: false, analytics: false }));
+      save.addEventListener('click', () => hide({ functional: functional.checked, analytics: false }));
+    }
+
+    // Language tabs + IP-based default when no preference saved
+    (async function initLang() {
+      const I = window.EchelonI18n;
+      const L = window.EchelonLegal;
+      if (!I) return;
+      const tabsEl = document.getElementById('lang-tabs');
+      let lang = localStorage.getItem(I.LANG_KEY);
+      if (!lang || !I.LANGS.some((l) => l.id === lang)) {
+        const consent = L?.getCookieConsent();
+        const fromIp = consent?.functional ? await I.detectLangFromIp() : null;
+        lang = fromIp || I.langFromBrowser();
+        localStorage.setItem(I.LANG_KEY, lang);
+      }
+      homeLang = lang;
+
+      function renderTabs() {
+        if (!tabsEl) return;
+        tabsEl.innerHTML = '';
+        I.LANGS.forEach(({ id, label }) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'langtab' + (lang === id ? ' on' : '');
+          btn.textContent = label;
+          btn.setAttribute('role', 'tab');
+          btn.setAttribute('aria-selected', lang === id ? 'true' : 'false');
+          btn.addEventListener('click', () => {
+            lang = id;
+            homeLang = id;
+            I.saveLang(id, true);
+            I.applyHomeI18n(lang);
+            renderTabs();
+          });
+          tabsEl.appendChild(btn);
+        });
+      }
+      I.applyHomeI18n(lang);
+      renderTabs();
+      initCookieBanner();
+      initA2hsButtons();
+    })();
+
+    function initA2hsButtons() {
+      const modal = document.getElementById('a2hs-modal');
+      const stepsEl = document.getElementById('a2hs-steps');
+      const closeBtn = document.getElementById('a2hs-close');
+      if (!modal || !stepsEl) return;
+
+      const I = window.EchelonI18n;
+      const t = (k) => (I && I.t ? I.t(homeLang, k) : k);
+      const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+
+      function renderSteps() {
+        stepsEl.innerHTML = isIos
+          ? `<li>${t('pwa.iosStep1')}</li><li>${t('pwa.iosStep2')}</li>`
+          : `<li>${t('pwa.androidStep')}</li>`;
+      }
+
+      function openModal() {
+        renderSteps();
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+      }
+      function closeModal() {
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+
+      async function onInstallClick() {
+        if (isStandalone) {
+          window.location.href = '/app/';
+          return;
+        }
+        window.location.href = '/app/?install=1';
+      }
+
+      ['a2hs-hero-btn', 'a2hs-footer-btn'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', onInstallClick);
+      });
+      closeBtn?.addEventListener('click', closeModal);
+      modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+      if (isStandalone) {
+        ['a2hs-hero-btn', 'a2hs-footer-btn'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        });
+      }
+    }
+
+    // Check if device supports hover/fine pointer
+    const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
+
+    // 1. Mouse Tracking Parallax for Hero Card
+    if (!isTouchDevice) {
+      document.addEventListener('mousemove', (e) => {
+        const card = document.getElementById('tilt-card');
+        if (!card) return;
+        
+        // Calculate mouse position relative to the center of the window
+        const xAxis = (window.innerWidth / 2 - e.pageX) / 40;
+        const yAxis = (window.innerHeight / 2 - e.pageY) / 40;
+        
+        card.style.transform = `rotateY(${xAxis}deg) rotateX(${yAxis}deg)`;
+      });
+
+      document.addEventListener('mouseleave', () => {
+        const card = document.getElementById('tilt-card');
+        if (card) card.style.transform = `rotateY(0deg) rotateX(0deg)`;
+      });
+
+      // Subtle tilt for feature cards
+      const featureCards = document.querySelectorAll('.tilt-feature');
+      featureCards.forEach(card => {
+        card.addEventListener('mousemove', (e) => {
+          const rect = card.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+          const centerX = rect.width / 2;
+          const centerY = rect.height / 2;
+          const rotateX = ((y - centerY) / centerY) * -5;
+          const rotateY = ((x - centerX) / centerX) * 5;
+          
+          card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-12px)`;
+        });
+        
+        card.addEventListener('mouseleave', () => {
+          card.style.transform = `perspective(1000px) rotateX(0deg) rotateY(0deg) translateY(0px)`;
+        });
+      });
+    }
+
+    // 2. Cursor Aura Follower (Desktop only)
+    const cursorGlow = document.getElementById('cursor-glow');
+    if (!isTouchDevice) {
+      document.addEventListener('mousemove', (e) => {
+        cursorGlow.style.left = e.clientX + 'px';
+        cursorGlow.style.top = e.clientY + 'px';
+      });
+    } else {
+      cursorGlow.style.display = 'none';
+    }
+
+    // 3. Scroll Reveal Animations
+    const observerOptions = {
+      root: null,
+      rootMargin: '0px',
+      threshold: 0.15
+    };
+
+    const observer = new IntersectionObserver((entries, observer) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('active');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, observerOptions);
+
+    document.querySelectorAll('.reveal').forEach((el) => {
+      observer.observe(el);
+    });
+
+    // 4. Navbar Blur on Scroll
+    const navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 50) {
+        navbar.style.background = 'rgba(255, 255, 255, 0.6)';
+        navbar.style.boxShadow = '0 10px 30px rgba(0,0,0,0.05)';
+      } else {
+        navbar.style.background = 'rgba(255, 255, 255, 0.4)';
+        navbar.style.boxShadow = '0 4px 30px rgba(0,0,0,0.02)';
+      }
+    });
+  </script>
+
+</body>
+</html>

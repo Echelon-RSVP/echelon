@@ -7,6 +7,8 @@ dist/
 *.p8
 *.p12
 *.mobileprovision
+.ios-signing/
+scripts/test-asc-api.mjs
 .DS_Store
 ssl-local/
 deploy-ftp.config.json

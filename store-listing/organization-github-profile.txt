@@ -1,0 +1,64 @@
+GitHub organization: Echelon-RSVP
+Paste at: https://github.com/organizations/Echelon-RSVP/settings/profile
+
+=== General (organization profile) ===
+
+Organization display name:
+Echelon RSVP
+
+Email (will be public):
+hi@echelon.rsvp
+
+Description:
+Echelon is where your best self is finally measurable. Social reputation app: feed, stories, messages, ratings, and discovery. iOS + web at echelon.rsvp.
+
+URL:
+https://echelon.rsvp/
+
+Social account 1:
+https://echelon.rsvp/
+
+Location (optional):
+Portugal
+
+=== Repository About (echelon repo) ===
+https://github.com/Echelon-RSVP/echelon/settings
+
+Description:
+Echelon · social reputation app (Capacitor iOS + PWA)
+
+Website:
+https://echelon.rsvp/
+
+Topics (add on repo main page):
+social-networking, reputation, capacitor, ios, react, pwa
+
+=== Organization Actions secrets (optional, shared by all repos) ===
+https://github.com/organizations/Echelon-RSVP/settings/secrets/actions
+
+Same 4 secrets as the repo (if you want every repo in the org to build iOS):
+
+APPLE_TEAM_ID = 4W6N6K8TQ9
+APPSTORE_KEY_ID = JC9JDQ4AJ3
+APPSTORE_ISSUER_ID = 28ac4946-339a-4837-9504-aaa5a981a137
+APPSTORE_PRIVATE_KEY = (full .p8 contents, never commit to git)
+
+Repository secrets already work for echelon alone. Org secrets are only needed for multiple repos.
+
+=== App / product reference ===
+
+App name: Echelon RSVP (App Store)
+Bundle ID: rsvp.echelon.app
+SKU: echelon-ios-001
+Support: https://echelon.rsvp/app/
+Privacy: https://echelon.rsvp/app/docs.html#privacy
+Category: Social Networking
+Copyright: 2026 Echelon
+
+Subtitle: Your reputation, measured
+
+Promotional text:
+Your reputation, measured in real time. Post, connect, and grow your Echelon score.
+
+Review demo login:
+review@echelon.rsvp / EchelonReview2026!

@@ -106,6 +106,7 @@ Prints secret names and opens the right pages:
 | `No signing certificate` | Check `APPLE_TEAM_ID` and that bundle ID `rsvp.echelon.app` is registered |
 | API key rejected | Paste full `.p8` into `APPSTORE_PRIVATE_KEY`, including `BEGIN` / `END` lines |
 | `pod install` failed | Re-run workflow; rare CocoaPods CDN glitch |
+| TestFlight upload: `iOS 26 SDK` required | Workflow uses `macos-26` + Xcode 26. Apple no longer accepts builds made with Xcode 16 / iOS 18 SDK. |
 | Blank app in TestFlight | Confirm https://echelon.rsvp/app/ loads on iPhone Safari |
 
 Support: hi@echelon.rsvp

@@ -1,6 +1,6 @@
 /**
- * Inject DEVELOPMENT_TEAM + App Store distribution signing for CI archives.
- * Set APPLE_TEAM_ID in the environment (GitHub secret).
+ * Inject DEVELOPMENT_TEAM for CI automatic signing (App target only).
+ * Do not set CODE_SIGN_IDENTITY here; xcodebuild overrides break CocoaPods targets.
  */
 import fs from "fs";
 import path from "path";
@@ -20,7 +20,9 @@ if (!team) {
 
 let text = fs.readFileSync(pbx, "utf8");
 const teamLine = `DEVELOPMENT_TEAM = ${team};`;
-const distLine = 'CODE_SIGN_IDENTITY = "Apple Distribution";';
+
+// Remove any prior CI distribution overrides that conflict with automatic signing.
+text = text.replace(/\n\t\t\t\tCODE_SIGN_IDENTITY = "Apple Distribution";\n/g, "\n");
 
 if (text.includes("DEVELOPMENT_TEAM")) {
   text = text.replace(/DEVELOPMENT_TEAM = [^;]+;/g, teamLine);
@@ -31,21 +33,5 @@ if (text.includes("DEVELOPMENT_TEAM")) {
   );
 }
 
-// Project-level Release must not force "iPhone Developer" during archive.
-text = text.replace(
-  /CODE_SIGN_IDENTITY = "iPhone Developer";/g,
-  distLine,
-);
-
-// App target Release: App Store archive needs distribution profile (no registered devices).
-if (!text.includes('504EC3181FED79650016851F /* Release */')) {
-  console.warn("patch-ios-signing: Release target block not found.");
-} else if (!text.match(/504EC318[\s\S]*?CODE_SIGN_IDENTITY = "Apple Distribution"/)) {
-  text = text.replace(
-    /(504EC3181FED79650016851F \/\* Release \*\/ = \{[\s\S]*?CODE_SIGN_STYLE = Automatic;\n)/,
-    `$1\t\t\t\t${distLine}\n`,
-  );
-}
-
 fs.writeFileSync(pbx, text);
-console.log(`patch-ios-signing: DEVELOPMENT_TEAM = ${team}, Release = Apple Distribution`);
+console.log(`patch-ios-signing: DEVELOPMENT_TEAM = ${team}`);

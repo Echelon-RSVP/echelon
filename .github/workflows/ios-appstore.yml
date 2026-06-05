@@ -43,6 +43,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           node scripts/patch-ios-plist.mjs
+          node scripts/patch-ios-icon.mjs
           node scripts/patch-ios-signing.mjs
 
       - name: Install CocoaPods

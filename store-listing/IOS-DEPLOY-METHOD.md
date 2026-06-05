@@ -88,6 +88,7 @@ gh run watch --repo OWNER/REPO
 | `scripts/patch-ios-signing.mjs` | Injects `DEVELOPMENT_TEAM`; clears Release identity for automatic signing |
 | `scripts/patch-pods-signing.mjs` | `CODE_SIGNING_ALLOWED=NO` on all Pod targets |
 | `scripts/patch-ios-plist.mjs` | Permission strings for App Store review |
+| `scripts/patch-ios-icon.mjs` | Copies `public/icons/icon-1024.png` into `AppIcon.appiconset` |
 | `scripts/register-asc-device.mjs` | Registers `CI_DEVICE_UDID` via App Store Connect API |
 | `scripts/ios-inject-appstore-meta.mjs` | App Store distribution meta in web build |
 | `scripts/cap-sync-ios.mjs` | Capacitor sync wrapper |

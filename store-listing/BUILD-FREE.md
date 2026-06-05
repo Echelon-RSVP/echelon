@@ -4,6 +4,8 @@ Codemagic is **not required**. Use **GitHub Actions** (free on public repos, or 
 
 You need a **free GitHub account** and your **$99/year Apple Developer** membership. No Mac, no paid CI.
 
+**Full method reference (for future apps):** [IOS-DEPLOY-METHOD.md](IOS-DEPLOY-METHOD.md) documents secrets, runner requirements, repo files, and every lesson from the Echelon setup.
+
 ## One-time setup (~20 minutes)
 
 ### 1. Push this project to GitHub
@@ -36,7 +38,7 @@ Tip: a **public** repo avoids burning through private-repo macOS minute quotas. 
 
 https://developer.apple.com/account → **Membership** → **Team ID** (10 characters, e.g. `AB12CD34EF`)
 
-### 4. Add 4 GitHub secrets
+### 4. Add 5 GitHub secrets
 
 Add secrets at **organization** level (already done for Echelon-RSVP) or per repo:
 

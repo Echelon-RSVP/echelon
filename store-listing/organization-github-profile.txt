@@ -57,6 +57,9 @@ Secrets (do not commit values to git):
 - APPSTORE_KEY_ID
 - APPSTORE_ISSUER_ID
 - APPSTORE_PRIVATE_KEY
+- CI_DEVICE_UDID
+
+Full deploy method: store-listing/IOS-DEPLOY-METHOD.md
 
 Visibility: Public repositories (works for echelon while repo stays public).
 Note: Org secrets on free plans are limited to public repos.

@@ -18,8 +18,17 @@ const sizes = [
   { name: "apple-touch-icon.png", size: 180 },
 ];
 
+// App Store rejects icons with alpha; flatten on brand gradient base.
+const iconBg = "#FF9DC0";
+
 for (const { name, size } of sizes) {
-  await sharp(svg).resize(size, size).png({ compressionLevel: 9 }).toFile(join(outDir, name));
+  let pipeline = sharp(svg).resize(size, size).flatten({ background: iconBg });
+  if (name === "icon-1024.png" || name === "apple-touch-icon.png") {
+    pipeline = pipeline.png({ compressionLevel: 9, force: true });
+  } else {
+    pipeline = pipeline.png({ compressionLevel: 9 });
+  }
+  await pipeline.toFile(join(outDir, name));
   console.log("Wrote", name);
 }
 

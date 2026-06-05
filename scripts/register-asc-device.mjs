@@ -1,12 +1,12 @@
 /**
- * Register a placeholder iOS device in App Store Connect so automatic
- * development provisioning can succeed on CI (no physical Mac/iPhone required).
+ * Register an iOS device in App Store Connect (required for automatic signing).
+ * Set CI_DEVICE_UDID in GitHub secrets to your iPhone UDID.
  */
 import crypto from "crypto";
 
 const API = "https://api.appstoreconnect.apple.com/v1/devices";
-const CI_UDID = process.env.CI_DEVICE_UDID || "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const CI_NAME = process.env.CI_DEVICE_NAME || "Echelon GitHub Actions CI";
+const CI_UDID = process.env.CI_DEVICE_UDID?.trim();
+const CI_NAME = process.env.CI_DEVICE_NAME?.trim() || "Echelon iPhone";
 
 function base64url(data) {
   return Buffer.from(data).toString("base64url");
@@ -36,6 +36,10 @@ async function main() {
 
   if (!keyId || !issuerId || !privateKey) {
     console.warn("register-asc-device: missing API key env, skipping.");
+    return;
+  }
+  if (!CI_UDID) {
+    console.warn("register-asc-device: CI_DEVICE_UDID not set, skipping.");
     return;
   }
 

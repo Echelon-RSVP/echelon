@@ -28,7 +28,7 @@ Tip: a **public** repo avoids burning through private-repo macOS minute quotas. 
 ### 2. Create App Store Connect API key (browser)
 
 1. https://appstoreconnect.apple.com → **Users and Access** → **Integrations** → **App Store Connect API**
-2. **+** → Name: `GitHub Actions` → Access: **App Manager** (enough for CI; workflow creates distribution cert + profile via API)
+2. **+** → Name: `GitHub Actions` → Access: **Admin** (required for cloud signing on export)
 3. Download the `.p8` file once
 4. Copy **Issuer ID** and **Key ID**
 
@@ -48,8 +48,9 @@ https://github.com/organizations/Echelon-RSVP/settings/secrets/actions
 | `APPSTORE_ISSUER_ID` | Issuer ID from App Store Connect |
 | `APPSTORE_KEY_ID` | Key ID from the API key |
 | `APPSTORE_PRIVATE_KEY` | Full contents of the `.p8` file (including `BEGIN` / `END` lines) |
+| `CI_DEVICE_UDID` | Your iPhone UDID (from Finder/iTunes; required once for automatic signing) |
 
-No certificate files. No Codemagic. Xcode automatic signing creates the profile in the cloud.
+No certificate files. No Codemagic. Admin API key + automatic signing handles archive and export in the cloud.
 
 ### 5. Apple Developer portal checklist
 
@@ -98,9 +99,9 @@ Prints secret names and opens the right pages:
 |-------|-----|
 | Exit code **65** (~30s fail) | Usually missing Xcode scheme. Re-run on latest `main` (includes shared `App.xcscheme`). |
 | Exit code **70** at `GatherProvisioningInputs` | Archive needs App Store Connect API key on the `xcodebuild archive` command. Confirm bundle ID `rsvp.echelon.app` exists in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list). |
-| Exit code **70** at **Export IPA** / `Cloud signing permission error` | Re-run on latest `main`. The workflow provisions a distribution cert + App Store profile via API and exports with manual signing (no Admin key needed). First run auto-saves `IOS_DISTRIBUTION_P12_BASE64`, `IOS_P12_PASSWORD`, `IOS_PROVISIONING_PROFILE_BASE64`, and `IOS_PROVISIONING_PROFILE_NAME` as repo secrets. |
+| Exit code **70** at **Export IPA** / `Cloud signing permission error` | API key must be **Admin**, not App Manager. Update `APPSTORE_KEY_ID` and `APPSTORE_PRIVATE_KEY`. |
 | `conflicting provisioning settings` on Capacitor/Pods | Do not pass global `CODE_SIGN_IDENTITY` to xcodebuild. Pods must have `CODE_SIGNING_ALLOWED=NO` (handled in `Podfile` + `patch-pods-signing.mjs`). |
-| `no devices` / `iOS App Development provisioning profiles` | Workflow registers a CI placeholder device automatically. Or add your iPhone UDID at [developer.apple.com/account/resources/devices/list](https://developer.apple.com/account/resources/devices/list). Ensure bundle ID `rsvp.echelon.app` exists under Identifiers. |
+| `no devices` / `iOS App Development provisioning profiles` | Add `CI_DEVICE_UDID` secret with your iPhone UDID. Or register at [developer.apple.com/account/resources/devices/list](https://developer.apple.com/account/resources/devices/list). |
 | Secret is empty | Org secrets must grant access to **echelon** repo: Organization → Settings → Secrets → each secret → Repository access |
 | `No signing certificate` | Check `APPLE_TEAM_ID` and that bundle ID `rsvp.echelon.app` is registered |
 | API key rejected | Paste full `.p8` into `APPSTORE_PRIVATE_KEY`, including `BEGIN` / `END` lines |

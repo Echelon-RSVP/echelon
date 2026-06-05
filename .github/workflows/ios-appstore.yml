@@ -1,5 +1,5 @@
 # FREE iOS build from Windows: push to GitHub, click Run workflow.
-# Needs only 4 secrets. See store-listing/BUILD-FREE.md
+# Needs 4 secrets + Admin API key. See store-listing/BUILD-FREE.md
 
 name: iOS App Store build
 
@@ -95,11 +95,13 @@ jobs:
           echo "API_KEY_PATH=$KEY_FILE" >> "$GITHUB_ENV"
           echo "App Store Connect API key configured at $KEY_FILE"
 
-      - name: Register CI device (Apple requires at least one)
+      - name: Register iOS device (required for automatic signing)
         env:
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
           APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          CI_DEVICE_UDID: ${{ secrets.CI_DEVICE_UDID }}
+          CI_DEVICE_NAME: Echelon iPhone
         run: node scripts/register-asc-device.mjs
 
       - name: Verify Xcode scheme
@@ -136,58 +138,15 @@ jobs:
             exit 1
           fi
 
-      - name: Provision distribution cert + App Store profile
-        if: success()
-        env:
-          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          APPSTORE_KEY_PATH: ${{ env.API_KEY_PATH }}
-          IOS_SIGNING_DIR: ${{ runner.temp }}/ios-signing
-          IOS_DISTRIBUTION_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_P12_BASE64 }}
-          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-          IOS_PROVISIONING_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
-          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
-        run: node scripts/provision-ios-signing.mjs
-
-      - name: Persist signing secrets (first bootstrap only)
-        if: success() && env.IOS_SIGNING_BOOTSTRAPPED == 'true'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -eo pipefail
-          META="$RUNNER_TEMP/ios-signing/signing-meta.json"
-          test -f "$META"
-          P12_B64=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$META','utf8')).p12Base64)")
-          PROFILE_B64=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$META','utf8')).profileBase64)")
-          PROFILE_NAME=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$META','utf8')).profileName)")
-          P12_PASS=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$META','utf8')).p12Password)")
-          printf '%s' "$P12_B64" | gh secret set IOS_DISTRIBUTION_P12_BASE64 --repo "${{ github.repository }}"
-          printf '%s' "$PROFILE_B64" | gh secret set IOS_PROVISIONING_PROFILE_BASE64 --repo "${{ github.repository }}"
-          printf '%s' "$PROFILE_NAME" | gh secret set IOS_PROVISIONING_PROFILE_NAME --repo "${{ github.repository }}"
-          printf '%s' "$P12_PASS" | gh secret set IOS_P12_PASSWORD --repo "${{ github.repository }}"
-          echo "Saved iOS signing secrets for future runs."
-
-      - name: Import distribution cert to keychain
-        if: success()
-        env:
-          IOS_P12_PASSWORD: ${{ env.IOS_P12_PASSWORD }}
-        run: |
-          set -eo pipefail
-          KEYCHAIN="$RUNNER_TEMP/app-signing.keychain-db"
-          security create-keychain -p "" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "" "$KEYCHAIN"
-          security import "$IOS_SIGNING_P12" -P "$IOS_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
-          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychain -d user | sed 's/^[[:space:]]*"\(.*\)".*/\1/')
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$IOS_SIGNING_PROFILE" "$HOME/Library/MobileDevice/Provisioning Profiles/"
-
-      - name: Export IPA
+      - name: Export IPA (Admin API key + cloud signing)
         if: success()
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_KEYPATH: ${{ env.API_KEY_PATH }}
         run: |
           set -eo pipefail
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
@@ -195,13 +154,8 @@ jobs:
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict>
             <key>method</key><string>app-store-connect</string>
-            <key>signingStyle</key><string>manual</string>
-            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>signingStyle</key><string>automatic</string>
             <key>teamID</key><string>${APPLE_TEAM_ID}</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>rsvp.echelon.app</key><string>${IOS_PROVISIONING_PROFILE_NAME}</string>
-            </dict>
             <key>uploadSymbols</key><true/>
           </dict></plist>
           EOF
@@ -209,6 +163,10 @@ jobs:
             -archivePath "$RUNNER_TEMP/Echelon.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$APPSTORE_KEY_ID" \
+            -authenticationKeyIssuerID "$APPSTORE_ISSUER_ID" \
             2>&1 | tee "$RUNNER_TEMP/xcodebuild-export.log"
           test -f "$RUNNER_TEMP/export/App.ipa"
 

@@ -32,9 +32,9 @@ if (text.includes("DEVELOPMENT_TEAM")) {
   );
 }
 
-// Project Release: inherited iPhone Developer forces dev profiles; automatic signing sets identity.
+// Project + target Release: inherited iPhone Developer forces dev profiles on archive.
 text = text.replace(
-  /(504EC3151FED79650016851F \/\* Release \*\/[\s\S]*?)\t\t\t\tCODE_SIGN_IDENTITY = "iPhone Developer";\n/,
+  /(name = Release;\n\t\t\tbuildSettings = \{[\s\S]*?)\t\t\t\tCODE_SIGN_IDENTITY = "iPhone Developer";\n/g,
   "$1",
 );
 

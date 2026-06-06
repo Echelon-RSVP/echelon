@@ -166,6 +166,7 @@ npm run cap:sync:ios
 |---------|-----|
 | Exit **65**, fast fail | Missing `App.xcscheme` or signing conflict. Use latest `patch-ios-signing.mjs`; no CLI `CODE_SIGN_IDENTITY`. |
 | `no devices` / Development profile | Set `CI_DEVICE_UDID` or register device in Developer portal. |
+| `maximum number of certificates` / revoke | CI created too many dev certs. Workflow runs `prune-ios-certificates.mjs` before archive; or revoke extras in [Certificates](https://developer.apple.com/account/resources/certificates/list). |
 | `Cloud signing permission error` on export | API key must be **Admin**. |
 | `conflicting provisioning settings` (Pods) | Do not pass global signing identity; run `patch-pods-signing.mjs` after `pod install`. |
 | `iOS 26 SDK` / Xcode 26 required on upload | Use `macos-26`, not `macos-15`. |

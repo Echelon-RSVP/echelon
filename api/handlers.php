@@ -695,6 +695,18 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
                 return;
             }
 
+            if (!Helpers::userIsPrivate($pdo, $friendId)) {
+                $ts = (int)(microtime(true) * 1000);
+                $id = 'fr_' . bin2hex(random_bytes(8));
+                $pdo->prepare('INSERT INTO friend_requests (id, from_user_id, to_user_id, status, ts, responded_at) VALUES (?, ?, ?, ?, ?, ?)')
+                    ->execute([$id, $me['id'], $friendId, 'accepted', $ts, $ts]);
+                $pdo->prepare('INSERT IGNORE INTO friendships (user_id, friend_id) VALUES (?, ?), (?, ?)')
+                    ->execute([$me['id'], $friendId, $friendId, $me['id']]);
+                echelon_notify($pdo, $friendId, 'follow_started', '', '', $me['id']);
+                Response::json(['ok' => true, 'friendId' => $friendId, 'requestId' => $id]);
+                return;
+            }
+
             $dup = $pdo->prepare('SELECT id, status FROM friend_requests WHERE from_user_id = ? AND to_user_id = ?');
             $dup->execute([$me['id'], $friendId]);
             $existing = $dup->fetch();

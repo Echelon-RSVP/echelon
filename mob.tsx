@@ -28,7 +28,7 @@ import React, {
   import {
     AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
   } from "recharts";
-  import { api, setToken, tryBootstrap, getToken, mediaUrl } from "./api.js";
+  import { api, setToken, tryBootstrap, getToken, mediaUrl as resolveMediaUrl } from "./api.js";
   import { startGeoWatch, geoSupported } from "./proximity.js";
   import { initAppleAuth, signInWithApple, fetchAppleConfig, tryAutoSignInWithApple, shouldAutoSignInWithApple } from "./apple-auth.js";
   import { initGoogleAuth, signInWithGmail, fetchAuthConfig } from "./web-auth.js";
@@ -182,6 +182,11 @@ import React, {
         <path d="M10.4 4.2c.42-.54.74-1.3.65-2.07-.68.05-1.48.48-1.95 1.04-.42.5-.78 1.26-.68 2 .73.06 1.5-.42 1.98-.97z" />
       </svg>
     );
+  }
+
+  function AppleLogoImg({ size = 18, className = "" }) {
+    const src = `${import.meta.env.BASE_URL || "/app/"}icons/apple-logo.png`;
+    return <img src={src} width={size} height={Math.round(size * 1.22)} alt="" aria-hidden className={className || undefined} style={{ objectFit: "contain", display: "block" }} />;
   }
 
   function WhatsAppGlyph({ size = 28 }) {
@@ -375,7 +380,7 @@ import React, {
     if (!users?.length) return;
     contactRegistry = {
       ...contactRegistry,
-      ...Object.fromEntries(users.filter(Boolean).map((u) => [u.id, { ...contactRegistry[u.id], ...u, avatarUrl: mediaUrl(u.avatarUrl) || u.avatarUrl }])),
+      ...Object.fromEntries(users.filter(Boolean).map((u) => [u.id, { ...contactRegistry[u.id], ...u, avatarUrl: resolveMediaUrl(u.avatarUrl) || u.avatarUrl }])),
     };
   };
 
@@ -1144,7 +1149,7 @@ import React, {
     return (post.likes || 0) * 12 + (author?.score || 0);
   };
 
-  const feedPostsOnly = (posts) => posts.filter((p) => !p.fromStory);
+  const feedPostsOnly = (posts) => posts.filter((p) => !p.fromStory && p.kind !== "story");
   const feedGridPostsOnly = (posts) => feedPostsOnly(posts).filter((p) => !isReelPost(p));
   const reelPostsOnly = (posts) => feedPostsOnly(posts).filter((p) => isReelPost(p));
 
@@ -1174,6 +1179,38 @@ import React, {
     if (!hasHigherScoreThan(state, author)) return false;
     return true;
   };
+
+  const postRateStarState = (state, post, author, canSeePremium, ratedPosts) => {
+    if (!post || isPostOwner(state, post)) return "hidden";
+    const alreadyRated = ratedPosts?.has?.(post.id);
+    if (alreadyRated) return "filled";
+    const eligible = isUiTestPost(post)
+      ? true
+      : !(post.premium && !canSeePremium)
+        && !state.user.locked
+        && state.user.score >= MIN_RATER_SCORE
+        && hasHigherScoreThan(state, author)
+        && (state.strangerRatings || state.friends.includes(author?.id));
+    if (!eligible) return "hidden";
+    return "empty";
+  };
+
+  function PostRateStarBadge({ state, post, author, canSeePremium, ratedPosts, className = "" }) {
+    const starState = postRateStarState(state, post, author, canSeePremium, ratedPosts);
+    if (starState === "hidden") return null;
+    const filled = starState === "filled";
+    return (
+      <span className={"post-rate-star" + (filled ? " filled" : " empty") + (className ? " " + className : "")} aria-hidden>
+        <Star size={14} fill={filled ? "#FFD56B" : "none"} color={filled ? "#E8B84A" : "rgba(255,255,255,.9)"} strokeWidth={2} />
+      </span>
+    );
+  }
+
+  const DRAW_COLORS = [
+    "#000000", "#ffffff", "#262626", "#8E8E8E", "#FF3B7A", "#FF6B6B", "#FF9F43",
+    "#FFD56B", "#F9E547", "#00C9A7", "#2ECC71", "#3498DB", "#0095F6", "#8C6BD8",
+    "#9B59B6", "#E056FD", "#FF85C0", "#A8E6CF", "#FFB347", "#87CEEB",
+  ];
 
   const postRateBlockReason = (state, post, author, canSeePremium, ratedPosts, tr) => {
     if (isUiTestPost(post)) return "";
@@ -1350,8 +1387,8 @@ import React, {
     return ids;
   };
 
-  const DRAG_STAR_PX = 22;
-  const MIN_RATING_DRAG_PX = 18;
+  const DRAG_STAR_PX = 18;
+  const MIN_RATING_DRAG_PX = 10;
 
   /** Slide finger left (lower) / right (higher) to pick 1–5 stars. */
   const starsFromHorizontalDrag = (startX, clientX, baseStars = 3) => {
@@ -1426,8 +1463,8 @@ import React, {
       .filter((c) => passesSparkFilters(state, c));
     return pool.sort(() => Math.random() - 0.5).slice(0, 24).map((c) => ({
       ...c,
-      avatarUrl: mediaUrl(c.avatarUrl) || c.avatarUrl,
-      photos: c.avatarUrl ? [{ url: mediaUrl(c.avatarUrl) || c.avatarUrl, type: "image", caption: "", scene: [c.color || "#FFE0EC", "#fff"] }] : [],
+      avatarUrl: resolveMediaUrl(c.avatarUrl) || c.avatarUrl,
+      photos: c.avatarUrl ? [{ url: resolveMediaUrl(c.avatarUrl) || c.avatarUrl, type: "image", caption: "", scene: [c.color || "#FFE0EC", "#fff"] }] : [],
       age: ageFromBirthYear(c.birthYear),
     }));
   };
@@ -1555,7 +1592,7 @@ import React, {
         const p = action.payload;
         hydrateUsers(p);
         registerUsers((p.notifications || []).map((n) => n.peer).filter(Boolean));
-        contactRegistry = Object.fromEntries((p.contacts || []).map((c) => [c.id, { ...c, avatarUrl: mediaUrl(c.avatarUrl) || c.avatarUrl }]));
+        contactRegistry = Object.fromEntries((p.contacts || []).map((c) => [c.id, { ...c, avatarUrl: resolveMediaUrl(c.avatarUrl) || c.avatarUrl }]));
         const u = p.user;
         const s = p.settings || {};
         const next = {
@@ -1580,7 +1617,7 @@ import React, {
             handle: u.handle,
             emoji: u.emoji,
             color: u.color,
-            avatarUrl: mediaUrl(u.avatarUrl) || u.avatarUrl,
+            avatarUrl: resolveMediaUrl(u.avatarUrl) || u.avatarUrl,
             score: u.score,
             locked: u.locked,
             authMethod: u.authMethod ?? state.user.authMethod,
@@ -1631,7 +1668,7 @@ import React, {
             emoji: u.emoji,
             color: u.color,
             locked: u.locked,
-            avatarUrl: mediaUrl(u.avatarUrl) ?? state.user.avatarUrl,
+            avatarUrl: resolveMediaUrl(u.avatarUrl) ?? state.user.avatarUrl,
             instagram: u.instagram ?? state.user.instagram,
           },
           history: [...state.history, { t: Date.now(), s: u.score }].slice(-48),
@@ -1959,12 +1996,17 @@ import React, {
         return { ...state, feedPosts: [post, ...state.feedPosts], modal: null };
       }
 
-      case "ADD_FEED_POST":
+      case "ADD_FEED_POST": {
+        const post = action.post;
+        if (post && (post.fromStory || post.kind === "story")) {
+          return { ...state, modal: action.keepModal ? state.modal : null };
+        }
         return {
           ...state,
-          feedPosts: action.post ? [action.post, ...state.feedPosts] : state.feedPosts,
+          feedPosts: post ? [post, ...state.feedPosts] : state.feedPosts,
           modal: action.keepModal ? state.modal : null,
         };
+      }
 
       case "UPDATE_FEED_POST":
         return {
@@ -2564,14 +2606,8 @@ import React, {
     const { state, dispatch } = useStore();
     useEffect(() => {
       if (!state.shareSuccess) return;
-      const composeMode = state.shareSuccess.composeMode || "post";
       const t = setTimeout(() => {
         dispatch({ type: "SET_SHARE_SUCCESS", message: null });
-        if (composeMode === "story") {
-          dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story", gallery: true } });
-        } else {
-          dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: composeMode, cameraOnly: true } });
-        }
       }, 2200);
       return () => clearTimeout(t);
     }, [state.shareSuccess, dispatch]);
@@ -2660,10 +2696,11 @@ import React, {
   
   function Avatar({ c, size = 44, showScore, ring }) {
     const { state } = useStore();
+    if (!c) return <div style={{ width: size, height: size, flex: "0 0 auto" }} aria-hidden />;
     const lens = showScore ?? state.lens;
-    const tier = getTier(c.score);
+    const tier = getTier(c.score ?? 3);
     const [imgFailed, setImgFailed] = useState(false);
-    const src = c.avatarUrl && !imgFailed ? mediaUrl(c.avatarUrl) : null;
+    const src = c.avatarUrl && !imgFailed ? resolveMediaUrl(c.avatarUrl) : null;
     return (
       <div style={{ position: "relative", width: size, height: size, flex: "0 0 auto" }}>
         <div
@@ -2885,6 +2922,88 @@ import React, {
       >
         <EchRateStars size="pill" value={stars} disabled onDark />
         <span className="ech-media-avg-rating-num">{avg.toFixed(1)}</span>
+      </div>
+    );
+  }
+
+  /** Press and drag left/right on media to rate (no star overlay on the image). */
+  function FeedDragRate({ enabled, onRate, onDoubleTap, className = "", style, children }) {
+    const tr = useT();
+    const wrapRef = useRef(null);
+    const [preview, setPreview] = useState(0);
+    const dragRef = useRef({ active: false, x: 0, moved: false, base: 3 });
+
+    const finishDrag = (clientX, pointerId) => {
+      if (!dragRef.current.active) return;
+      const { moved, x, base } = dragRef.current;
+      dragRef.current.active = false;
+      const stars = moved ? starsFromHorizontalDrag(x, clientX, base) : 0;
+      try { wrapRef.current?.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
+      if (moved && stars >= 1) {
+        sfx.rateCommit(stars);
+        onRate?.(stars);
+      } else if (!moved) {
+        onDoubleTap?.();
+      }
+      setPreview(0);
+    };
+
+    const onPointerDown = (e) => {
+      if (!enabled) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      dragRef.current = { active: true, x: e.clientX, moved: false, base: 3 };
+      setPreview(3);
+      try { wrapRef.current?.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+      e.preventDefault();
+    };
+
+    const onPointerMove = (e) => {
+      if (!dragRef.current.active || !enabled) return;
+      e.preventDefault();
+      const dx = Math.abs(e.clientX - dragRef.current.x);
+      if (dx > MIN_RATING_DRAG_PX) dragRef.current.moved = true;
+      if (dragRef.current.moved) {
+        setPreview(starsFromHorizontalDrag(dragRef.current.x, e.clientX, dragRef.current.base));
+      }
+    };
+
+    const mergedStyle = {
+      ...style,
+      touchAction: enabled ? "none" : (style?.touchAction || "pan-y"),
+      WebkitUserSelect: "none",
+      userSelect: "none",
+      WebkitTouchCallout: "none",
+    };
+
+    return (
+      <div
+        ref={wrapRef}
+        className={className + (enabled ? " feed-drag-rate--active" : "")}
+        style={mergedStyle}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={(e) => finishDrag(e.clientX, e.pointerId)}
+        onPointerCancel={(e) => finishDrag(e.clientX, e.pointerId)}
+      >
+        {children}
+        {preview > 0 && (
+          <div className="feed-drag-stars">
+            <div className="feed-drag-stars-row">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <Star
+                  key={n}
+                  size={36}
+                  strokeWidth={1.5}
+                  fill={n <= preview ? "#FFD56B" : "none"}
+                  color={n <= preview ? "#E8B84A" : "rgba(255,255,255,.35)"}
+                  className={n <= preview ? "lit" : ""}
+                />
+              ))}
+            </div>
+            <span className="feed-drag-stars-label">{preview} · {tr("rate.label" + preview)}</span>
+            <span className="feed-drag-stars-hint">{tr("feed.rateDragHint")}</span>
+          </div>
+        )}
       </div>
     );
   }
@@ -3457,7 +3576,7 @@ import React, {
         </button>
         {authCfg?.methods?.includes("apple") && (
           <button className="applebtn" type="button" onClick={doApple} disabled={signing}>
-            <AppleGlyph size={16} /> {tr("onb.apple")}
+            <AppleLogoImg size={18} className="applebtn-logo" /> {tr("onb.apple")}
           </button>
         )}
         <div className="onb-or"><span>{tr("onb.or")}</span></div>
@@ -3933,12 +4052,14 @@ import React, {
     onRemove,
     canvasRef,
   }) {
+    const tr = useT();
     const items = overlays?.length ? overlays : overlaysFromPost({ caption: legacyCaption, captionStyle });
-    if (!items.length) return null;
     const lastTapRef = useRef({});
     const pointersRef = useRef(new Map());
     const pinchRef = useRef(null);
     const dragRef = useRef(null);
+    const resizeRef = useRef(null);
+    if (!items.length) return null;
 
     const pointerDist = () => {
       const pts = [...pointersRef.current.values()];
@@ -3964,6 +4085,7 @@ import React, {
     const startOverlayInteraction = (id, ov, e) => {
       if (!editable || !onChange) return;
       e.stopPropagation();
+      e.preventDefault();
       onSelect?.(id);
       pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       try { e.currentTarget?.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
@@ -3979,6 +4101,7 @@ import React, {
 
       if (pointersRef.current.size >= 2) {
         dragRef.current = null;
+        resizeRef.current = null;
         pinchRef.current = { id, startDist: pointerDist(), startScale: ov.scale ?? 1 };
       } else if (editingId !== id && canvasRef?.current) {
         const rect = canvasRef.current.getBoundingClientRect();
@@ -3999,10 +4122,18 @@ import React, {
         if (pointersRef.current.size >= 2 && pinchRef.current?.id === id) {
           ev.preventDefault();
           const d = pointerDist();
-          if (d > 12 && pinchRef.current.startDist > 12) {
+          if (d > 8 && pinchRef.current.startDist > 8) {
             const next = Math.max(0.35, Math.min(3.5, pinchRef.current.startScale * (d / pinchRef.current.startDist)));
             onChange(id, { scale: next });
           }
+          return;
+        }
+        const resize = resizeRef.current;
+        if (resize?.id === id && pointersRef.current.size === 1) {
+          ev.preventDefault();
+          const delta = ((ev.clientX - resize.startX) + (ev.clientY - resize.startY)) / 2;
+          const next = Math.max(0.35, Math.min(3.5, resize.startScale + delta / 120));
+          onChange(id, { scale: next });
           return;
         }
         const drag = dragRef.current;
@@ -4018,10 +4149,37 @@ import React, {
         if (pointersRef.current.size < 2) pinchRef.current = null;
         if (pointersRef.current.size === 0) {
           dragRef.current = null;
+          resizeRef.current = null;
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
           window.removeEventListener("pointercancel", up);
         }
+      };
+      window.addEventListener("pointermove", move, { passive: false });
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    };
+
+    const startOverlayResize = (id, ov, e) => {
+      if (!editable || !onChange) return;
+      e.stopPropagation();
+      e.preventDefault();
+      onSelect?.(id);
+      onEdit?.(null);
+      resizeRef.current = { id, startX: e.clientX, startY: e.clientY, startScale: ov.scale ?? 1 };
+      try { e.currentTarget?.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+      const move = (ev) => {
+        if (resizeRef.current?.id !== id) return;
+        ev.preventDefault();
+        const delta = ((ev.clientX - resizeRef.current.startX) + (ev.clientY - resizeRef.current.startY)) / 2;
+        const next = Math.max(0.35, Math.min(3.5, resizeRef.current.startScale + delta / 120));
+        onChange(id, { scale: next });
+      };
+      const up = () => {
+        resizeRef.current = null;
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
       };
       window.addEventListener("pointermove", move, { passive: false });
       window.addEventListener("pointerup", up);
@@ -4074,7 +4232,9 @@ import React, {
           ) : isHashtag ? (
             <span className="media-overlay-hashtag">{ov.tag}</span>
           ) : (
-            <span className="media-overlay-text">{ov.text || ""}</span>
+            <span className={"media-overlay-text" + (!(ov.text || "").trim() && !editing ? " media-overlay-text--placeholder" : "")}>
+              {(ov.text || "").trim() || (editable ? "Tap to type" : "")}
+            </span>
           );
           const inlineEdit = editing || (selected && isText && !(ov.text || "").trim());
           if (editable) {
@@ -4109,6 +4269,13 @@ import React, {
                   <button type="button" className="overlay-delete-btn" aria-label="Remove" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onRemove(ov.id); }}>
                     <X size={12} />
                   </button>
+                )}
+                {selected && !inlineEdit && (
+                  <span
+                    className="overlay-resize-handle"
+                    role="presentation"
+                    onPointerDown={(e) => startOverlayResize(ov.id, ov, e)}
+                  />
                 )}
               </div>
             );
@@ -4226,7 +4393,7 @@ import React, {
     const [audioMuted, setAudioMuted] = useState(true);
     const audioRef = useRef(null);
     const item = mediaItems[carouselIdx] || mediaItems[0];
-    const src = item ? mediaUrl(item.mediaUrl) : null;
+    const src = item ? resolveMediaUrl(item.mediaUrl) : null;
     const showAudioToggle = feedMode && !locked && (musicUrl || item?.mediaType === "video");
 
     const toggleAudio = (e) => {
@@ -4296,9 +4463,6 @@ import React, {
           <span className="feed-post-badge feed-post-badge--ig" aria-hidden><Instagram size={11} /></span>
         )}
         {post.premium && !locked && <span className="feed-post-badge feed-post-badge--premium" aria-label="Radiance"><Crown size={11} /></span>}
-        {(post.avgRating ?? 0) > 0 && (
-          <MediaAvgRatingBadge avgRating={post.avgRating} className="ech-media-avg-rating--corner" />
-        )}
         {locked && (
           <div className="feed-post-lock">
             <div className="feed-post-lock-inner">
@@ -4318,19 +4482,10 @@ import React, {
     const pinned = new Set(state.igExtras?.pinnedPosts || []);
     const posts = useMemo(() => {
       if (storiesOnly) {
-        const story = state.stories.find((s) => authorIds.has(s.author));
-        return (story?.items || []).map((item, i) => ({
-          id: item.id || `story_${i}`,
-          author: story.author,
-          mediaUrl: item.mediaUrl,
-          mediaType: item.mediaType || "image",
-          caption: item.caption,
-          ts: item.ts || story.ts,
-          kind: "story",
-          fromStory: true,
-        }));
+        return [];
       }
-      let rows = (reelsOnly ? reelPostsOnly(buildFeed(state)) : feedGridPostsOnly(buildFeed(state))).filter((p) => authorIds.has(p.author));
+      let rows = (reelsOnly ? reelPostsOnly(buildFeed(state)) : feedGridPostsOnly(buildFeed(state)))
+        .filter((p) => authorIds.has(p.author) && !p.fromStory && p.kind !== "story");
       const pin = rows.filter((p) => pinned.has(p.id));
       const rest = rows.filter((p) => !pinned.has(p.id));
       return [...pin, ...rest].sort((a, b) => {
@@ -4370,7 +4525,7 @@ import React, {
       <div className="portfolio-wrap portfolio-wrap--ech">
         <div className={gridClass}>
           {posts.map((p) => {
-            const src = p.mediaUrl ? mediaUrl(p.mediaUrl) : null;
+            const src = p.mediaUrl ? resolveMediaUrl(p.mediaUrl) : null;
             const score = formatPortfolioScore(p.avgRating);
             const when = formatPortfolioDate(p.ts, now);
             const views = postViewCount(p);
@@ -4403,7 +4558,6 @@ import React, {
                       <Trash2 size={14} />
                     </button>
                   )}
-                  {showScore && <MediaAvgRatingBadge avgRating={p.avgRating} className="ech-media-avg-rating--corner" />}
                   <div className="ech-discover-meta portfolio-meta">
                     {showScore && (
                       <span className="ech-discover-meta-score">
@@ -4431,7 +4585,7 @@ import React, {
     const mine = stories.find((s) => s.author === ME_ID);
     const mineLive = mine?.isLive;
     const latestMine = mine?.items?.length ? mine.items[mine.items.length - 1] : null;
-    const mineThumb = latestMine?.mediaUrl ? mediaUrl(latestMine.mediaUrl) : null;
+    const mineThumb = latestMine?.mediaUrl ? resolveMediaUrl(latestMine.mediaUrl) : null;
     const storyUnseen = (s) => !state.storyViewed[s.id];
     const liveStories = stories.filter((s) => s.isLive && s.author !== ME_ID && state.friends.includes(s.author));
     const friendStories = stories
@@ -4442,7 +4596,7 @@ import React, {
       const seen = !isMine && state.storyViewed[s.id];
       const live = s.isLive;
       const item = s.items?.[s.items.length - 1];
-      const thumb = item?.mediaUrl ? mediaUrl(item.mediaUrl) : null;
+      const thumb = item?.mediaUrl ? resolveMediaUrl(item.mediaUrl) : null;
       return (
         <div className={"ech-momentum-card" + (live ? " live" : isMine ? (mine ? (storyUnseen(s) ? " fresh" : " seen") : " add") : (seen ? " seen" : " fresh"))}>
           {live ? (
@@ -4527,35 +4681,27 @@ import React, {
       onRate?.(post, stars);
     };
 
-    const onMediaPointerDown = (e) => {
-      if (locked || e.button !== 0) return;
-      const startT = Date.now();
-      const onWinUp = () => {
-        window.removeEventListener("pointerup", onWinUp);
-        window.removeEventListener("pointercancel", onWinUp);
-        if (Date.now() - startT < 400) {
-          const nowTap = Date.now();
-          if (nowTap - lastTapRef.current < 300) {
-            lastTapRef.current = 0;
-            onLike(post.id);
-          } else {
-            lastTapRef.current = nowTap;
-          }
-        }
-      };
-      window.addEventListener("pointerup", onWinUp);
-      window.addEventListener("pointercancel", onWinUp);
+    const canDragRate = !locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post));
+    const onDoubleTapLike = () => {
+      const nowTap = Date.now();
+      if (nowTap - lastTapRef.current < 300) {
+        lastTapRef.current = 0;
+        onLike(post.id);
+      } else {
+        lastTapRef.current = nowTap;
+      }
     };
 
     return (
       <article className={"feed-post feed-post--focus" + (featured ? " feed-post--featured" : "")}>
-        <div
-          ref={mediaWrapRef}
+        <FeedDragRate
+          enabled={canDragRate}
+          onRate={handleRate}
+          onDoubleTap={locked ? undefined : onDoubleTapLike}
           className="feed-post-media-wrap"
-          style={{ touchAction: "pan-y", WebkitUserSelect: "none", userSelect: "none", WebkitTouchCallout: "none" }}
-          onPointerDown={onMediaPointerDown}
         >
           <PostMedia post={post} locked={locked} cinematic feedMode tr={tr} dispatch={dispatch} />
+          <PostRateStarBadge state={state} post={post} author={a} canSeePremium={canSeePremium} ratedPosts={ratedPosts} className="post-rate-star--media" />
           <div className="feed-post-overlay-top">
             <button
               type="button"
@@ -4565,11 +4711,8 @@ import React, {
               <span className="feed-post-overlay-type" aria-hidden>
                 <TypeIcon size={13} strokeWidth={2} />
               </span>
-              <span>@{handleLabel}</span>
+              <span className="feed-post-overlay-handle">@{handleLabel}</span>
               {post.source === "instagram" && <Instagram size={10} color="#fff" aria-hidden />}
-              {(post.avgRating ?? 0) > 0 && (
-                <em className="feed-post-overlay-score"><Star size={9} fill="#FFD56B" color="#E8B84A" /> {Number(post.avgRating).toFixed(1)}</em>
-              )}
             </button>
             <div className="feed-post-overlay-top-actions">
               {!isMe && isFollowing && (
@@ -4601,16 +4744,14 @@ import React, {
               <Heart size={72} color="#fff" fill="#FF8FB1" />
             </div>
           )}
-          {!locked && !isMe && ((canRate && (!alreadyRated || isUiTestPost(post))) || (alreadyRated && !isUiTestPost(post) && myStars)) && (
-            <EchRateOverlay
-              canRate={canRate && (!alreadyRated || isUiTestPost(post))}
-              alreadyRated={alreadyRated && !isUiTestPost(post)}
-              myStars={myStars}
-              onPick={handleRate}
-              size="pill"
-            />
+          {(post.avgRating ?? 0) > 0 && (
+            <div className="feed-post-overlay-bottom">
+              <span className="feed-post-overlay-score">
+                <Star size={11} fill="#FFD56B" color="#E8B84A" /> {Number(post.avgRating).toFixed(1)}
+              </span>
+            </div>
           )}
-        </div>
+        </FeedDragRate>
 
         <div className="feed-post-bar">
           <div className="feed-post-actions feed-post-actions--icon">
@@ -4670,20 +4811,17 @@ import React, {
       onRate?.(post, stars);
     };
 
+    const canDragRate = !locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post));
+
     return (
       <article className="reel-slide">
-        <div className="reel-slide-media">
+        <FeedDragRate
+          enabled={canDragRate}
+          onRate={handleRate}
+          className="reel-slide-media"
+        >
           <PostMedia post={post} locked={locked} cinematic tr={tr} dispatch={dispatch} />
-          {!locked && !isMe && ((canRate && (!alreadyRated || isUiTestPost(post))) || (alreadyRated && !isUiTestPost(post) && myStars)) && (
-            <EchRateOverlay
-              canRate={canRate && (!alreadyRated || isUiTestPost(post))}
-              alreadyRated={alreadyRated && !isUiTestPost(post)}
-              myStars={myStars}
-              onPick={handleRate}
-              size="md"
-            />
-          )}
-        </div>
+        </FeedDragRate>
         <div className="reel-slide-shade" aria-hidden />
         <div className="reel-slide-overlay">
           <div className="reel-slide-side">
@@ -4926,7 +5064,7 @@ import React, {
           </div>
         </header>
 
-        <StoryBar onCreateStory={() => dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story", gallery: true } })} onOpenStory={openStory} />
+        <StoryBar onCreateStory={() => dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story" } })} onOpenStory={openStory} />
 
         {feedPosts.length === 0 ? (
           <div className="feed-empty feed-empty--ig">
@@ -5016,8 +5154,15 @@ import React, {
   function sendFriendRequest(dispatch, state, id) {
     if (state.friends.includes(id)) return;
     if ((state.blocked || []).includes(id)) return;
+    const peer = getAuthor(state, id);
+    const isPrivate = !!(peer?.privateProfile || peer?.profileLocked);
     dispatch({ type: "SEND_FRIEND_REQUEST", id });
-    if (!state.liveData) return;
+    if (!state.liveData) {
+      if (!isPrivate && peer?.id) {
+        dispatch({ type: "ACCEPT_FRIEND_REQUEST", requestId: "fr_local_" + id, friendId: id, peer });
+      }
+      return;
+    }
     api.sendFriendRequest(id).then((res) => {
       if (res.friendId) {
         dispatch({ type: "ACCEPT_FRIEND_REQUEST", requestId: res.requestId || "", friendId: res.friendId, peer: getAuthor(state, res.friendId) });
@@ -5194,7 +5339,7 @@ import React, {
       try {
         if (state.liveData) {
           const data = await api.sparkDeck();
-          const users = (data.deck || []).map((u) => ({ ...u, avatarUrl: mediaUrl(u.avatarUrl) || u.avatarUrl }));
+          const users = (data.deck || []).map((u) => ({ ...u, avatarUrl: resolveMediaUrl(u.avatarUrl) || u.avatarUrl }));
           registerUsers(users);
           dispatch({ type: "SET_SPARK_DECK", deck: users, preferences: data.preferences });
         } else {
@@ -5646,7 +5791,7 @@ import React, {
       setGlobalBusy(true);
       const t = setTimeout(() => {
         api.searchUsers(globalQ.trim()).then((res) => {
-          const users = (res.users || []).map((u) => ({ ...u, avatarUrl: mediaUrl(u.avatarUrl) || u.avatarUrl }));
+          const users = (res.users || []).map((u) => ({ ...u, avatarUrl: resolveMediaUrl(u.avatarUrl) || u.avatarUrl }));
           registerUsers(users);
           setGlobalResults(users);
         }).catch(() => setGlobalResults([])).finally(() => setGlobalBusy(false));
@@ -6138,31 +6283,30 @@ import React, {
         </div>
 
         <div className="viewfinder-map-wrap">
-          {mapBusy && !visibleMapFriends.length ? (
-            <div className="viewfinder-loading"><Loader size={28} className="spin" color="#C9A0DC" /></div>
-          ) : (
-            <ViewFinderMap
-              friends={visibleMapFriends}
-              parties={mapParties}
-              userLat={state.geoPos?.lat}
-              userLng={state.geoPos?.lng}
-              selectedId={selected}
-              selectedPartyId={selectedParty}
-              searchQuery={mapQuery}
-              mediaUrl={mediaUrl}
-              showYou={!state.hideMapLocation}
-              onSelect={(f) => { sfx.tap(); setSelectedParty(null); setSelected(f.id); registerUsers([f]); }}
-              onPartySelect={(p) => {
-                sfx.tap();
-                setSelected(null);
-                setSelectedParty(p.id);
-                dispatch({ type: "OPEN_MODAL", modal: "party", payload: { id: p.id, ev: p } });
-              }}
-            />
+          <ViewFinderMap
+            friends={visibleMapFriends}
+            parties={mapParties}
+            userLat={state.geoPos?.lat}
+            userLng={state.geoPos?.lng}
+            selectedId={selected}
+            selectedPartyId={selectedParty}
+            searchQuery={mapQuery}
+            resolveMediaUrl={resolveMediaUrl}
+            showYou={!state.hideMapLocation}
+            onSelect={(f) => { sfx.tap(); setSelectedParty(null); setSelected(f.id); registerUsers([f]); }}
+            onPartySelect={(p) => {
+              sfx.tap();
+              setSelected(null);
+              setSelectedParty(p.id);
+              dispatch({ type: "OPEN_MODAL", modal: "party", payload: { id: p.id, ev: p } });
+            }}
+          />
+          {mapBusy && (
+            <div className="viewfinder-loading" aria-hidden><Loader size={28} className="spin" color="#C9A0DC" /></div>
           )}
         </div>
 
-        {!mapBusy && visibleMapFriends.length === 0 && (
+        {!mapBusy && visibleMapFriends.length === 0 && mapParties.length === 0 && (
           <p className="viewfinder-empty muted">{tr("viewfinder.noFriendsOnMap")}</p>
         )}
 
@@ -6211,7 +6355,10 @@ import React, {
     const tr = useT();
     const [q, setQ] = useState("");
     const inbox = state.chatInbox || {};
-    const chats = state.friends.map((id) => byId[id]).filter(Boolean);
+    const chats = useMemo(() => {
+      const ids = new Set([...(state.friends || []), ...Object.keys(inbox)]);
+      return [...ids].map((id) => getAuthor(state, id)).filter((c) => c && c.id);
+    }, [state.friends, state.contacts, state.nearbyUsers, inbox]);
     const qn = q.trim().toLowerCase();
 
     const sorted = useMemo(() => {
@@ -6833,8 +6980,8 @@ import React, {
                 <span className="album-editor-tile-media">
                   {item.mediaUrl ? (
                     item.mediaType === "video"
-                      ? <video src={mediaUrl(item.mediaUrl)} muted playsInline preload="metadata" />
-                      : <img src={mediaUrl(item.mediaUrl)} alt="" loading="lazy" decoding="async" />
+                      ? <video src={resolveMediaUrl(item.mediaUrl)} muted playsInline preload="metadata" />
+                      : <img src={resolveMediaUrl(item.mediaUrl)} alt="" loading="lazy" decoding="async" />
                   ) : (
                     <span className="album-editor-tile-fallback" aria-hidden>✨</span>
                   )}
@@ -6867,7 +7014,7 @@ import React, {
           {items.length === 0 ? <p className="muted album-viewer-empty">{tr("profile.albumEmpty")}</p> : items.map((item, idx) => (
             <div key={`${item.type}-${item.id}-${idx}`} className="album-viewer-tile">
               <span className="album-viewer-tile-media">
-                {item.mediaType === "video" ? <video src={mediaUrl(item.mediaUrl)} muted playsInline preload="metadata" /> : <img src={mediaUrl(item.mediaUrl)} alt="" loading="lazy" />}
+                {item.mediaType === "video" ? <video src={resolveMediaUrl(item.mediaUrl)} muted playsInline preload="metadata" /> : <img src={resolveMediaUrl(item.mediaUrl)} alt="" loading="lazy" />}
               </span>
               <span className="album-viewer-type">{albumTypeLabel(tr, item.type)}</span>
               <button type="button" className="album-viewer-trash" aria-label={tr("profile.albumRemove")} onClick={() => {
@@ -7185,7 +7332,7 @@ import React, {
             const locLabel = ev.secretAddress && !going && !ev.isHost
               ? `${formatCityLabel(ev.city, ev.countryCode) || ev.venue} · ${tr("parties.secretLoc")}`
               : ev.venue;
-            const bannerSrc = ev.bannerUrl ? mediaUrl(ev.bannerUrl) : null;
+            const bannerSrc = ev.bannerUrl ? resolveMediaUrl(ev.bannerUrl) : null;
             return (
               <button
                 key={ev.id}
@@ -7231,7 +7378,12 @@ import React, {
     const posts = useMemo(() => filterExploreQuery(globalExplorePosts(state, now), q, state), [state, now, q]);
     const users = useMemo(() => exploreSearchUsers(state, q), [state, q]);
     const hasQuery = !!(q || "").trim();
-    const ratedScores = useMemo(() => loadFeedIx().ratedPostScores || {}, [state.ratedPosts]);
+    const { effective } = useDerived(state, now);
+    const canSeePremium = effective >= 4.0;
+    const ratedPostsSet = useMemo(
+      () => new Set([...(state.ratedPosts || []), ...loadFeedIx().ratedPosts]),
+      [state.ratedPosts],
+    );
 
     return (
       <div className="ech-discover-screen">
@@ -7285,34 +7437,35 @@ import React, {
               ) : posts.length > 0 ? (
                 <div className="ech-discover-masonry">
                   {posts.map((p) => {
-                    const myStars = ratedScores[p.id];
-                    const ratedByMe = myStars != null && myStars >= 1;
-                    const showScore = ratedByMe || (p.avgRating ?? 0) > 0;
-                    const scoreVal = ratedByMe ? Number(myStars).toFixed(1) : Number(p.avgRating).toFixed(1);
+                    const showScore = (p.avgRating ?? 0) > 0;
+                    const scoreVal = Number(p.avgRating).toFixed(1);
                     const kind = discoverPostKind(p);
                     const TypeIcon = kind === "reel" ? SquarePlay : kind === "album" ? LayoutGrid : kind === "video" ? Video : ImageIcon;
                     const views = postViewCount(p);
                     const isMe = isPostOwner(state, p);
+                    const author = getAuthor(state, p.author);
+                    const handleLabel = author.handle?.replace(/^@/, "") || author.name.split(" ")[0];
                     return (
                       <button key={p.id} type="button" className="ech-discover-tile" onClick={() => openPostViewer(dispatch, p.id, { fromExplore: true })}>
                         {p.mediaType === "video" || isReelPost(p) ? (
-                          <video src={mediaUrl(p.mediaUrl)} muted playsInline />
+                          <video src={resolveMediaUrl(p.mediaUrl)} muted playsInline />
                         ) : (
-                          <img src={mediaUrl(p.mediaUrl)} alt="" />
+                          <img src={resolveMediaUrl(p.mediaUrl)} alt="" />
                         )}
                         {isMe && (
                           <button type="button" className="post-tile-delete" aria-label={tr("postOptions.delete")} onClick={(e) => { e.stopPropagation(); quickDeletePost(state, dispatch, p, tr); }}>
                             <Trash2 size={14} />
                           </button>
                         )}
+                        <PostRateStarBadge state={state} post={p} author={author} canSeePremium={canSeePremium} ratedPosts={ratedPostsSet} />
                         <span className="ech-discover-type" aria-hidden>
                           <TypeIcon size={12} strokeWidth={2} />
                         </span>
-                        {showScore && <MediaAvgRatingBadge avgRating={ratedByMe ? myStars : p.avgRating} className="ech-media-avg-rating--corner" />}
+                        <span className="ech-discover-author">@{handleLabel}</span>
                         <div className="ech-discover-meta">
                           {showScore && (
-                            <span className={"ech-discover-meta-score" + (ratedByMe ? " mine" : "")}>
-                              <Star size={9} fill={ratedByMe ? "#FF7EB3" : "#FFD56B"} color={ratedByMe ? "#E05A8A" : "#E8B84A"} /> {scoreVal}
+                            <span className="ech-discover-meta-score">
+                              <Star size={9} fill="#FFD56B" color="#E8B84A" /> {scoreVal}
                             </span>
                           )}
                           <span className="ech-discover-meta-item"><Clock size={9} /> {formatPostAge(p.ts, now)}</span>
@@ -7362,7 +7515,7 @@ import React, {
           <div className="explore-grid">
             {(tab === "reels" ? grid.reels : grid.trending).map((p) => (
               <button key={p.id} type="button" className="explore-tile" onClick={() => { dispatch({ type: "CLOSE_MODAL" }); openPostViewer(dispatch, p.id); }}>
-                {p.mediaType === "video" ? <video src={mediaUrl(p.mediaUrl)} muted playsInline /> : <img src={mediaUrl(p.mediaUrl)} alt="" />}
+                {p.mediaType === "video" ? <video src={resolveMediaUrl(p.mediaUrl)} muted playsInline /> : <img src={resolveMediaUrl(p.mediaUrl)} alt="" />}
               </button>
             ))}
           </div>
@@ -7586,8 +7739,8 @@ import React, {
       {
         title: tr("igf.stories"),
         items: [
-          { label: tr("igf.stories"), run: () => open("mediapick", { mode: "story", gallery: true }) },
-          { label: tr("igf.storyStickers"), run: () => open("mediapick", { mode: "story", gallery: true }) },
+          { label: tr("igf.stories"), run: () => open("mediapick", { mode: "story" }) },
+          { label: tr("igf.storyStickers"), run: () => open("mediapick", { mode: "story" }) },
           { label: tr("igf.closeFriends"), run: () => open("closefriends") },
           { label: tr("igf.live"), run: () => open("mediapick", { mode: "live", cameraOnly: true }) },
         ],
@@ -7896,8 +8049,8 @@ import React, {
           {items.slice(0, 6).map((m) => (
             <button key={m.id} type="button" className="mentions-tile" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "mentionsviewer", payload: { userId, mentionId: m.id } }); }}>
               {m.mediaType === "video"
-                ? <video src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : mediaUrl(m.mediaUrl)} muted playsInline />
-                : <img src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : mediaUrl(m.mediaUrl)} alt="" loading="lazy" />}
+                ? <video src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : resolveMediaUrl(m.mediaUrl)} muted playsInline />
+                : <img src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : resolveMediaUrl(m.mediaUrl)} alt="" loading="lazy" />}
               <span className="mentions-tile-by">@{normalizeHandle(m.authorHandle || "").replace(/^@/, "") || "user"}</span>
             </button>
           ))}
@@ -7959,8 +8112,8 @@ import React, {
           <div className="mentions-viewer-focus">
             <button type="button" className="mentions-viewer-media" onClick={() => openMedia(focus)}>
               {focus.mediaType === "video"
-                ? <video src={focus.mediaUrl?.startsWith("blob") ? focus.mediaUrl : mediaUrl(focus.mediaUrl)} muted playsInline autoPlay loop />
-                : <img src={focus.mediaUrl?.startsWith("blob") ? focus.mediaUrl : mediaUrl(focus.mediaUrl)} alt="" />}
+                ? <video src={focus.mediaUrl?.startsWith("blob") ? focus.mediaUrl : resolveMediaUrl(focus.mediaUrl)} muted playsInline autoPlay loop />
+                : <img src={focus.mediaUrl?.startsWith("blob") ? focus.mediaUrl : resolveMediaUrl(focus.mediaUrl)} alt="" />}
             </button>
             <p className="mentions-viewer-meta">
               {tr("profile.mentionByLabel")}{" "}
@@ -7979,8 +8132,8 @@ import React, {
           {items.map((m) => (
             <button key={m.id} type="button" className={"mentions-viewer-thumb" + (focusId === m.id ? " on" : "")} onClick={() => { sfx.tap(); setFocusId(m.id); }}>
               {m.mediaType === "video"
-                ? <video src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : mediaUrl(m.mediaUrl)} muted playsInline />
-                : <img src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : mediaUrl(m.mediaUrl)} alt="" loading="lazy" />}
+                ? <video src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : resolveMediaUrl(m.mediaUrl)} muted playsInline />
+                : <img src={m.mediaUrl?.startsWith("blob") ? m.mediaUrl : resolveMediaUrl(m.mediaUrl)} alt="" loading="lazy" />}
             </button>
           ))}
         </div>
@@ -8108,7 +8261,7 @@ import React, {
                 </button>
               ) : albums.map((hl) => (
                 <button key={hl.id} type="button" className="ech-album-card" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "albumviewer", payload: { albumId: hl.id } }); }}>
-                  {hl.coverUrl ? <img src={mediaUrl(hl.coverUrl)} alt="" /> : <span className="ech-album-fallback">{(hl.title || "?")[0]}</span>}
+                  {hl.coverUrl ? <img src={resolveMediaUrl(hl.coverUrl)} alt="" /> : <span className="ech-album-fallback">{(hl.title || "?")[0]}</span>}
                   <span className="ech-album-title">{hl.title}</span>
                 </button>
               ))}
@@ -8515,38 +8668,13 @@ import React, {
     return createPortal(
       <div className="ech-media-viewer" role="dialog" aria-modal="true">
         <div className="ech-media-viewer-stage">
-          <div ref={mediaWrapRef} className="ech-media-viewer-media">
+          <FeedDragRate
+            enabled={!locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post))}
+            onRate={onRatePost}
+            className="ech-media-viewer-media"
+          >
             <PostMedia post={post} locked={locked} cinematic feedMode={false} viewerMode tr={tr} dispatch={dispatch} />
-            {(post.avgRating ?? 0) > 0 && (
-              <MediaAvgRatingBadge avgRating={post.avgRating} className="ech-media-avg-rating--corner ech-media-avg-rating--viewer" />
-            )}
-            {!locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post)) && (
-              <div className="ech-media-viewer-rate-inset">
-                <EchRateOverlay
-                  canRate
-                  alreadyRated={false}
-                  myStars={null}
-                  onPick={onRatePost}
-                  size="pill"
-                  onDark
-                  className="ech-rate-overlay--viewer-inset"
-                />
-              </div>
-            )}
-            {!locked && !isMe && alreadyRated && !isUiTestPost(post) && myStars && (
-              <div className="ech-media-viewer-rate-inset">
-                <EchRateOverlay
-                  canRate={false}
-                  alreadyRated
-                  myStars={myStars}
-                  onPick={() => {}}
-                  size="pill"
-                  onDark
-                  className="ech-rate-overlay--viewer-inset rated"
-                />
-              </div>
-            )}
-          </div>
+          </FeedDragRate>
           <header className="ech-media-viewer-top">
             <button type="button" className="ech-media-viewer-back" aria-label="Back" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
               <ChevronLeft size={20} strokeWidth={2} />
@@ -9076,7 +9204,7 @@ import React, {
     );
   }
   
-  function ChatMessage({ m, c, mine, selected, onSelect, onReact, onReply, onDelete, playingId, onPlayVoice, tr, onConsume, now, dispatch, timeLabel }) {
+  function ChatMessage({ m, c, mine, selected, onSelect, onReact, onReply, onJumpToReply, onDelete, playingId, onPlayVoice, tr, onConsume, now, dispatch, timeLabel }) {
     const longPressRef = useRef(null);
     const didLongPress = useRef(false);
     const lastTapRef = useRef(0);
@@ -9183,7 +9311,22 @@ import React, {
             onKeyDown={(e) => { if (e.key === "Enter" && !mine && !lockedCard) onReply(m); }}
           >
             {m.replyTo && (
-              <div className={"dm-reply-in" + (mine ? " mine" : "")}>
+              <div
+                className={"dm-reply-in" + (mine ? " mine" : "")}
+                role="button"
+                tabIndex={0}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (m.replyTo?.id) onJumpToReply?.(m.replyTo.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && m.replyTo?.id) {
+                    e.stopPropagation();
+                    onJumpToReply?.(m.replyTo.id);
+                  }
+                }}
+              >
                 <span className="dm-reply-in-bar" />
                 <span className="dm-reply-in-text">{m.replyTo.text || replySnippet(m.replyTo)}</span>
               </div>
@@ -9197,7 +9340,7 @@ import React, {
             )}
             {showSticker && (
               <img
-                src={mediaUrl(m.mediaUrl)}
+                src={resolveMediaUrl(m.mediaUrl)}
                 alt=""
                 className="dm-sticker-img"
                 onError={(e) => { e.currentTarget.style.display = "none"; }}
@@ -9205,8 +9348,8 @@ import React, {
             )}
             {showMedia && (
               m.mediaType === "video"
-                ? <video src={mediaUrl(m.mediaUrl)} className="dm-media" controls playsInline preload="metadata" onClick={(e) => e.stopPropagation()} />
-                : <img src={mediaUrl(m.mediaUrl)} alt="" className="dm-media" />
+                ? <video src={resolveMediaUrl(m.mediaUrl)} className="dm-media" controls playsInline preload="metadata" onClick={(e) => e.stopPropagation()} />
+                : <img src={resolveMediaUrl(m.mediaUrl)} alt="" className="dm-media" />
             )}
             {m.voice && (
               <div className="dm-voice">
@@ -9243,8 +9386,8 @@ import React, {
                 >
                   {m.sharedPost.mediaUrl ? (
                     m.sharedPost.mediaType === "video"
-                      ? <video src={mediaUrl(m.sharedPost.mediaUrl)} className="dm-shared-post-vid" muted playsInline />
-                      : <img src={mediaUrl(m.sharedPost.mediaUrl)} alt="" className="dm-shared-post-img" />
+                      ? <video src={resolveMediaUrl(m.sharedPost.mediaUrl)} className="dm-shared-post-vid" muted playsInline />
+                      : <img src={resolveMediaUrl(m.sharedPost.mediaUrl)} alt="" className="dm-shared-post-img" />
                   ) : (
                     <span className="dm-shared-post-emoji">{m.sharedPost.emoji || "✨"}</span>
                   )}
@@ -9285,7 +9428,14 @@ import React, {
     const { state, dispatch } = useStore();
     const tr = useT();
     const [now] = useTick();
-    const isMe = payload?.id === ME_ID || payload?.id === state.user.id;
+    const targetId = payload?.id;
+    const isMe = targetId === ME_ID || targetId === state.user.id;
+    const c = targetId ? getAuthor(state, targetId) : null;
+    const [profile, setProfile] = useState(c);
+    const [rateGate, setRateGate] = useState({ can: false, nextAt: null });
+    const u = profile || c;
+    const profileState = u ? { ...state, user: { ...u, score: u.score || 3 } } : state;
+    const { tier } = useDerived(profileState, now);
 
     useEffect(() => {
       if (isMe) {
@@ -9294,39 +9444,24 @@ import React, {
       }
     }, [isMe, dispatch]);
 
-    if (isMe) return null;
-
-    const c = getAuthor(state, payload?.id);
-    const [profile, setProfile] = useState(c);
-    const blocked = (state.blocked || []).includes(payload.id);
-
     useEffect(() => {
-      if (!payload?.id) return;
-      const local = getAuthor(state, payload.id);
+      if (!targetId || isMe) return;
+      const local = getAuthor(state, targetId);
       if (!state.liveData) {
         setProfile(local);
         return;
       }
-      const apiId = isMe ? state.user.id : payload.id;
-      if (!apiId || apiId === ME_ID) {
+      if (!targetId || targetId === ME_ID) {
         setProfile(local);
         return;
       }
-      api.userProfile(apiId).then((u) => { registerUsers([u]); setProfile(u); }).catch(() => setProfile(local));
-    }, [payload?.id, state.liveData, state.user.id, state.user.name, state.user.handle, state.user.score]);
+      api.userProfile(targetId).then((row) => { registerUsers([row]); setProfile(row); }).catch(() => setProfile(local));
+    }, [targetId, isMe, state.liveData, state.user.id, state.user.name, state.user.handle, state.user.score]);
 
-    const u = profile || c;
-    if (!u) return null;
-    const isSelf = isMe || u.id === state.user.id;
-    const { tier } = useDerived({ ...state, user: { ...u, score: u.score || 3 } }, now);
-    const friend = state.friends.includes(u.id);
-    const locked = !isSelf && (u.profileLocked || u.privateProfile || u.blocked);
-    const feedEligible = canRateFeed(state, u);
-    const [rateGate, setRateGate] = useState({ can: false, nextAt: null });
-    const showRateBtn = canShowProfileRate(state, u, rateGate.can);
+    const feedEligible = u ? canRateFeed(state, u) : false;
 
     useEffect(() => {
-      if (!u?.id || !feedEligible) {
+      if (!u?.id || isMe || !feedEligible) {
         setRateGate({ can: false, nextAt: null });
         return;
       }
@@ -9340,10 +9475,10 @@ import React, {
         setRateGate({ can: !!r.canRate, nextAt: r.nextAt || null });
       }).catch(() => { if (!cancelled) setRateGate({ can: false, nextAt: null }); });
       return () => { cancelled = true; };
-    }, [u?.id, feedEligible, state.liveData, state.proximityCooldowns]);
+    }, [u?.id, isMe, feedEligible, state.liveData, state.proximityCooldowns]);
 
     useEffect(() => {
-      if (!state.liveData || !u?.id || rateGate.can || !rateGate.nextAt) return;
+      if (!state.liveData || !u?.id || isMe || rateGate.can || !rateGate.nextAt) return;
       const ms = rateGate.nextAt - Date.now();
       const recheck = () => {
         api.canRate(u.id, "feed").then((r) => {
@@ -9356,7 +9491,15 @@ import React, {
       }
       const t = setTimeout(recheck, ms + 500);
       return () => clearTimeout(t);
-    }, [rateGate.can, rateGate.nextAt, u?.id, state.liveData]);
+    }, [rateGate.can, rateGate.nextAt, u?.id, isMe, state.liveData]);
+
+    if (isMe || !u) return null;
+
+    const blocked = (state.blocked || []).includes(targetId);
+    const isSelf = u.id === state.user.id;
+    const friend = state.friends.includes(u.id);
+    const locked = !isSelf && (u.profileLocked || u.privateProfile || u.blocked);
+    const showRateBtn = canShowProfileRate(state, u, rateGate.can);
 
     const openChat = () => {
       if (locked || blocked) return;
@@ -9793,7 +9936,7 @@ import React, {
 
     const mapMessageRow = (m) => ({
       ...m,
-      voiceUrl: m.voice && m.mediaUrl ? mediaUrl(m.mediaUrl) : m.voiceUrl,
+      voiceUrl: m.voice && m.mediaUrl ? resolveMediaUrl(m.mediaUrl) : m.voiceUrl,
       replyTo: m.replyTo || (m.replyToId ? { id: m.replyToId, text: m.replyText } : null),
     });
 
@@ -9817,6 +9960,17 @@ import React, {
       if (!changed) return prev;
       return [...byId.values()].sort((a, b) => a.ts - b.ts);
     };
+
+    useEffect(() => {
+      if (!c?.id) return;
+      if (!state.chatInbox?.[c.id]) {
+        dispatch({
+          type: "PATCH_CHAT_INBOX",
+          id: c.id,
+          patch: { lastTs: Date.now(), lastPreview: tr("messages.tapToChat") },
+        });
+      }
+    }, [c?.id, dispatch, tr, state.chatInbox]);
 
     useEffect(() => {
       initialScrollRef.current = false;
@@ -9987,7 +10141,7 @@ import React, {
       }
       stopPlayback();
       sfx.tap();
-      const url = m.voiceUrl || (m.voice && m.mediaUrl ? mediaUrl(m.mediaUrl) : null);
+      const url = m.voiceUrl || (m.voice && m.mediaUrl ? resolveMediaUrl(m.mediaUrl) : null);
       if (url) {
         try {
           const a = new Audio(url);
@@ -10106,7 +10260,7 @@ import React, {
 
     const consumeMessage = async (m) => {
       const full = await api.consumeMessage(c.id, m.id);
-      setMessages((list) => list.map((x) => x.id === m.id ? { ...full, voiceUrl: full.voiceUrl || (full.mediaUrl ? mediaUrl(full.mediaUrl) : null) } : x));
+      setMessages((list) => list.map((x) => x.id === m.id ? { ...full, voiceUrl: full.voiceUrl || (full.mediaUrl ? resolveMediaUrl(full.mediaUrl) : null) } : x));
       return full;
     };
 
@@ -10123,6 +10277,20 @@ import React, {
       setReplyTo(m.voice ? { ...m, text: tr("chat.replyVoice") } : m);
       setSelectedId(null);
       inputRef.current?.focus();
+    };
+
+    const scrollToMessage = (msgId) => {
+      if (!msgId) return;
+      const el = threadRef.current;
+      if (!el) return;
+      const node = el.querySelector(`[data-msg-id="${msgId}"]`);
+      if (!node) return;
+      sfx.tap();
+      el.scrollTo({ top: Math.max(0, node.offsetTop - 6), behavior: "smooth" });
+      stickToBottomRef.current = false;
+      setShowJumpLatest(true);
+      node.classList.add("dm-row--target");
+      window.setTimeout(() => node.classList.remove("dm-row--target"), 1400);
     };
 
     const visitProfile = () => {
@@ -10442,16 +10610,21 @@ import React, {
               </span>
             </div>
           </button>
-          <button type="button" className="dm-head-ic" title={tr("chat.call")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "call", payload: { id: c.id, mode: "audio" } }); }}>
-            <Phone size={16} />
-          </button>
-          <button type="button" className="dm-head-ic" title={tr("chat.camera")} onClick={() => mediaRef.current && mediaRef.current.click()}>
-            <Camera size={17} />
-          </button>
-          <button type="button" className="dm-head-ic" title={tr("messages.deleteChat")} onClick={askDeleteChat}>
-            <Trash2 size={16} />
-          </button>
-          <button type="button" className="dm-end-btn" onClick={endChat}>{tr("chat.endChat")}</button>
+          <div className="dm-head-actions">
+            <button type="button" className="dm-head-ic" title={tr("chat.call")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "call", payload: { id: c.id, mode: "audio" } }); }}>
+              <Phone size={16} />
+            </button>
+            <button type="button" className="dm-head-ic" title={tr("call.video")} onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "call", payload: { id: c.id, mode: "video" } }); }}>
+              <Video size={16} />
+            </button>
+            <button type="button" className="dm-head-ic" title={tr("chat.camera")} onClick={() => mediaRef.current && mediaRef.current.click()}>
+              <Camera size={17} />
+            </button>
+            <button type="button" className="dm-head-ic" title={tr("messages.deleteChat")} onClick={askDeleteChat}>
+              <Trash2 size={16} />
+            </button>
+            <button type="button" className="dm-end-btn" onClick={endChat}>{tr("chat.endChat")}</button>
+          </div>
         </div>
 
         <div className="dm-thread" ref={threadRef} onClick={() => setSelectedId(null)} onPaste={onPaste}>
@@ -10485,6 +10658,7 @@ import React, {
                 onReact={reactTo}
                 onDelete={deleteMessage}
                 onReply={startReply}
+                onJumpToReply={scrollToMessage}
                 playingId={playingId}
                 onPlayVoice={playVoice}
                 tr={tr}
@@ -10571,12 +10745,18 @@ import React, {
         )}
 
         {replyTo && (
-          <div className="dm-reply-bar">
+          <div
+            className="dm-reply-bar"
+            role="button"
+            tabIndex={0}
+            onClick={() => scrollToMessage(replyTo.id)}
+            onKeyDown={(e) => { if (e.key === "Enter") scrollToMessage(replyTo.id); }}
+          >
             <div className="dm-reply-bar-inner">
               <span className="dm-reply-bar-label">{tr("chat.replyingTo")} {c.name}</span>
               <span className="dm-reply-bar-text">{replySnippet(replyTo)}</span>
             </div>
-            <button type="button" className="dm-reply-bar-x" aria-label={tr("chat.replyCancel")} onClick={() => setReplyTo(null)}>
+            <button type="button" className="dm-reply-bar-x" aria-label={tr("chat.replyCancel")} onClick={(e) => { e.stopPropagation(); setReplyTo(null); }}>
               <X size={16} />
             </button>
           </div>
@@ -10643,29 +10823,35 @@ import React, {
     const { state, dispatch } = useStore();
     const tr = useT();
     const c = payload?.id ? getAuthor(state, payload.id) : null;
-    const isVideo = payload?.mode === "video";
+    const startVideo = payload?.mode === "video";
     const [accepted, setAccepted] = useState(false);
+    const [noAnswer, setNoAnswer] = useState(false);
+    const [videoOn, setVideoOn] = useState(startVideo);
     const [secs, setSecs] = useState(0);
     const [muted, setMuted] = useState(false);
+    const [speakerOn, setSpeakerOn] = useState(true);
     const [camOff, setCamOff] = useState(false);
     const [camError, setCamError] = useState(null);
     const [mediaReady, setMediaReady] = useState(false);
     const localRef = useRef(null);
     const streamRef = useRef(null);
     const ringTimer = useRef(null);
+    const audioOutRef = useRef(null);
+    const showVideo = videoOn && accepted;
 
     useEffect(() => {
-      const delay = 2800 + Math.random() * 3200;
-      const t = setTimeout(() => { setAccepted(true); sfx.success(); }, delay);
-      return () => clearTimeout(t);
-    }, []);
-
-    useEffect(() => {
-      if (accepted) return;
+      if (accepted || noAnswer) return;
       sfx.ring();
       ringTimer.current = setInterval(() => sfx.ring(), 2400);
-      return () => { if (ringTimer.current) clearInterval(ringTimer.current); };
-    }, [accepted]);
+      const timeout = setTimeout(() => {
+        if (ringTimer.current) clearInterval(ringTimer.current);
+        setNoAnswer(true);
+      }, 45000);
+      return () => {
+        if (ringTimer.current) clearInterval(ringTimer.current);
+        clearTimeout(timeout);
+      };
+    }, [accepted, noAnswer]);
 
     useEffect(() => {
       if (!accepted) return;
@@ -10673,21 +10859,42 @@ import React, {
       return () => clearInterval(iv);
     }, [accepted]);
 
+    const ensureStream = async (wantVideo) => {
+      const stream = streamRef.current;
+      if (stream) {
+        const hasVideo = stream.getVideoTracks().length > 0;
+        if (wantVideo && !hasVideo) {
+          try {
+            const cam = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+            });
+            cam.getVideoTracks().forEach((t) => stream.addTrack(t));
+            setCamError(null);
+          } catch {
+            setCamError(tr("call.camError"));
+          }
+        }
+        if (!wantVideo && hasVideo) {
+          stream.getVideoTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
+        }
+        return stream;
+      }
+      const next = await navigator.mediaDevices.getUserMedia({
+        video: wantVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+        audio: true,
+      });
+      streamRef.current = next;
+      return next;
+    };
+
     useEffect(() => {
       let cancelled = false;
       setCamError(null);
       setMediaReady(false);
       (async () => {
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: isVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-            audio: true,
-          });
-          if (cancelled) {
-            stream.getTracks().forEach((t) => t.stop());
-            return;
-          }
-          streamRef.current = stream;
+          await ensureStream(startVideo);
+          if (cancelled) return;
           setMediaReady(true);
         } catch {
           if (!cancelled) setCamError(tr("call.camError"));
@@ -10697,23 +10904,43 @@ import React, {
         cancelled = true;
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
+        if (audioOutRef.current) {
+          audioOutRef.current.pause();
+          audioOutRef.current.srcObject = null;
+          audioOutRef.current = null;
+        }
         setMediaReady(false);
       };
-    }, [isVideo, tr]);
+    }, [startVideo, tr]);
+
+    useEffect(() => {
+      if (!accepted || !mediaReady) return;
+      let cancelled = false;
+      (async () => {
+        try {
+          await ensureStream(videoOn);
+          if (cancelled) return;
+          setMediaReady(true);
+        } catch {
+          if (!cancelled) setCamError(tr("call.camError"));
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [videoOn, accepted, tr]);
 
     useEffect(() => {
       const video = localRef.current;
       const stream = streamRef.current;
-      if (!video || !stream || !isVideo || !mediaReady) return;
+      if (!video || !stream || !showVideo || !mediaReady) return;
       video.srcObject = stream;
       video.play().catch(() => {});
-    }, [mediaReady, isVideo]);
+    }, [mediaReady, showVideo]);
 
     useEffect(() => {
       const stream = streamRef.current;
       if (!stream || !mediaReady) return;
-      stream.getVideoTracks().forEach((t) => { t.enabled = isVideo && !camOff; });
-    }, [camOff, mediaReady, isVideo]);
+      stream.getVideoTracks().forEach((t) => { t.enabled = showVideo && !camOff; });
+    }, [camOff, mediaReady, showVideo]);
 
     useEffect(() => {
       const stream = streamRef.current;
@@ -10721,10 +10948,47 @@ import React, {
       stream.getAudioTracks().forEach((t) => { t.enabled = !muted; });
     }, [muted, mediaReady]);
 
+    useEffect(() => {
+      const stream = streamRef.current;
+      if (!stream || !mediaReady || !accepted) return;
+      if (!audioOutRef.current) {
+        audioOutRef.current = new Audio();
+        audioOutRef.current.autoplay = true;
+      }
+      const audio = audioOutRef.current;
+      audio.srcObject = new MediaStream(stream.getAudioTracks());
+      audio.muted = false;
+      audio.volume = speakerOn ? 1 : 0.35;
+      if (typeof audio.setSinkId === "function") {
+        audio.setSinkId("").catch(() => {});
+      }
+      audio.play().catch(() => {});
+      return () => {
+        audio.pause();
+        audio.srcObject = null;
+      };
+    }, [speakerOn, mediaReady, accepted]);
+
     if (!c) return null;
 
     const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-    const statusLabel = !accepted ? tr("call.ringing") : fmt(secs);
+    const statusLabel = noAnswer
+      ? tr("call.noAnswer")
+      : !accepted
+        ? tr("call.ringing")
+        : fmt(secs);
+
+    const enableVideo = async () => {
+      sfx.tap();
+      setVideoOn(true);
+      try {
+        await ensureStream(true);
+        setMediaReady(true);
+        setCamError(null);
+      } catch {
+        setCamError(tr("call.camError"));
+      }
+    };
 
     const stopStream = () => {
       if (ringTimer.current) clearInterval(ringTimer.current);
@@ -10770,13 +11034,13 @@ import React, {
       </div>
     );
 
-    if (isVideo) {
+    if (showVideo || (startVideo && !accepted)) {
       return (
-        <div className={"call-screen call-screen--video" + (accepted ? " live" : " ringing")}>
+        <div className={"call-screen call-screen--video" + (accepted ? " live" : " ringing") + (noAnswer ? " no-answer" : "")}>
           <div className="call-video-stage">
             <div className={"call-video-remote" + (!accepted ? " pulsing" : "")} style={{ background: grad([c.color, "#fff"]) }}>
               {c.avatarUrl
-                ? <img src={mediaUrl(c.avatarUrl)} alt="" className="call-video-remote-img" referrerPolicy="no-referrer" />
+                ? <img src={resolveMediaUrl(c.avatarUrl)} alt="" className="call-video-remote-img" referrerPolicy="no-referrer" />
                 : <span className="call-video-remote-emoji">{c.emoji}</span>}
               <div className="call-video-remote-shade" />
               {!accepted && (
@@ -10785,7 +11049,7 @@ import React, {
                 </div>
               )}
             </div>
-            {isVideo && mediaReady && (
+            {showVideo && mediaReady && (
               <video ref={localRef} className={"call-video-local" + (camOff ? " off" : "") + (!accepted ? " waiting" : "")} autoPlay playsInline muted />
             )}
             {camError && (
@@ -10806,16 +11070,17 @@ import React, {
             </div>
           </div>
           <div className="call-controls call-controls--video">
-            {renderCtrl("cam", "call-ctrl" + (camOff ? " on" : ""), camOff ? <EyeOff size={22} /> : <Video size={22} />, camOff ? tr("call.camOn") : tr("call.camOff"), () => { sfx.tap(); setCamOff((v) => !v); })}
+            {accepted && renderCtrl("cam", "call-ctrl" + (camOff ? " on" : ""), camOff ? <EyeOff size={22} /> : <Video size={22} />, camOff ? tr("call.camOn") : tr("call.camOff"), () => { sfx.tap(); setCamOff((v) => !v); })}
+            {renderCtrl("speaker", "call-ctrl" + (speakerOn ? " on" : ""), speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />, speakerOn ? tr("call.speakerOn") : tr("call.speakerOff"), () => { sfx.tap(); setSpeakerOn((v) => !v); })}
             {renderCtrl("mic", "call-ctrl" + (muted ? " on" : ""), muted ? <MicOff size={22} /> : <Mic size={22} />, muted ? tr("call.unmute") : tr("call.mute"), () => { sfx.tap(); setMuted((m) => !m); })}
-            {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), finishCall)}
+            {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), noAnswer ? hangUp : finishCall)}
           </div>
         </div>
       );
     }
 
     return (
-      <div className={"call-screen" + (!accepted ? " ringing" : "")}>
+      <div className={"call-screen" + (!accepted ? " ringing" : "") + (noAnswer ? " no-answer" : "")}>
         <div className="call-top">
           <button type="button" className="call-back" onClick={hangUp} aria-label={tr("call.endCall")}>
             <ChevronDown size={22} />
@@ -10835,8 +11100,10 @@ import React, {
           <TierPill score={c.score} small />
         </div>
         <div className="call-controls">
+          {accepted && !videoOn && renderCtrl("video", "call-ctrl", <Video size={22} />, tr("call.enableVideo"), enableVideo)}
+          {renderCtrl("speaker", "call-ctrl" + (speakerOn ? " on" : ""), speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />, speakerOn ? tr("call.speakerOn") : tr("call.speakerOff"), () => { sfx.tap(); setSpeakerOn((v) => !v); })}
           {renderCtrl("mic", "call-ctrl" + (muted ? " on" : ""), muted ? <MicOff size={22} /> : <Mic size={22} />, muted ? tr("call.unmute") : tr("call.mute"), () => { sfx.tap(); setMuted((m) => !m); })}
-          {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), finishCall)}
+          {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), noAnswer ? hangUp : finishCall)}
         </div>
       </div>
     );
@@ -10992,6 +11259,13 @@ import React, {
     );
   }
   
+  const drawLayoutCellImage = (ctx, img, col, row, cell) => {
+    const scale = Math.min(cell / img.width, cell / img.height);
+    const w = img.width * scale;
+    const h = img.height * scale;
+    ctx.drawImage(img, col * cell + (cell - w) / 2, row * cell + (cell - h) / 2, w, h);
+  };
+
   const mergeLayoutPhotosStatic = async (files, slots = 2) => {
     const imgs = await Promise.all(files.map((f) => new Promise((resolve) => {
       const img = new Image();
@@ -11008,12 +11282,7 @@ import React, {
     ctx.fillStyle = "#111";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     imgs.forEach((img, i) => {
-      const c = i % cols;
-      const r = Math.floor(i / cols);
-      const scale = Math.max(cell / img.width, cell / img.height);
-      const w = img.width * scale;
-      const h = img.height * scale;
-      ctx.drawImage(img, c * cell + (cell - w) / 2, r * cell + (cell - h) / 2, w, h);
+      drawLayoutCellImage(ctx, img, i % cols, Math.floor(i / cols), cell);
     });
     return new Promise((resolve) => {
       canvas.toBlob((blob) => {
@@ -11041,6 +11310,31 @@ import React, {
   }
 
   const CAMERA_MODES = ["story", "post", "live"];
+  const CAM_PREFS_KEY = "echelon_camera_prefs";
+
+  const loadCamPrefs = () => {
+    try {
+      const raw = localStorage.getItem(CAM_PREFS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return {
+        frontDefault: !!parsed.frontDefault,
+        toolbarSide: parsed.toolbarSide === "left" ? "left" : "right",
+        cameraRoll: parsed.cameraRoll !== false,
+      };
+    } catch {
+      return { frontDefault: false, toolbarSide: "right", cameraRoll: true };
+    }
+  };
+
+  const saveCamPrefs = (patch) => {
+    try {
+      const next = { ...loadCamPrefs(), ...patch };
+      localStorage.setItem(CAM_PREFS_KEY, JSON.stringify(next));
+      return next;
+    } catch {
+      return patch;
+    }
+  };
 
   function ComposeCameraView({ onCapture, onGallery, onClose, captureMode = "story", fullscreen = false, onTextTool, openTextOnCapture = false, onStartLive, onEndLive }) {
     const tr = useT();
@@ -11056,7 +11350,8 @@ import React, {
     const [recording, setRecording] = useState(false);
     const [ready, setReady] = useState(false);
     const [error, setError] = useState(false);
-    const [facing, setFacing] = useState("environment");
+    const [camPrefs, setCamPrefs] = useState(loadCamPrefs);
+    const [facing, setFacing] = useState(() => (loadCamPrefs().frontDefault ? "user" : "environment"));
     const [flashOn, setFlashOn] = useState(false);
     const [torchOk, setTorchOk] = useState(false);
     const [mode, setMode] = useState(CAMERA_MODES.includes(captureMode) ? captureMode : "story");
@@ -11230,18 +11525,41 @@ import React, {
       ctx.fillStyle = "#111";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       imgs.forEach((img, i) => {
-        const c = i % cols;
-        const r = Math.floor(i / cols);
-        const scale = Math.max(cell / img.width, cell / img.height);
-        const w = img.width * scale;
-        const h = img.height * scale;
-        ctx.drawImage(img, c * cell + (cell - w) / 2, r * cell + (cell - h) / 2, w, h);
+        drawLayoutCellImage(ctx, img, i % cols, Math.floor(i / cols), cell);
       });
       return new Promise((resolve) => {
         canvas.toBlob((blob) => {
           resolve(blob ? new File([blob], `layout_${Date.now()}.jpg`, { type: "image/jpeg" }) : null);
         }, "image/jpeg", 0.92);
       });
+    };
+
+    const selectCameraTool = (next) => {
+      sfx.tap();
+      setTextEditOpen(false);
+      if (next === "layout") {
+        layoutRef.current = [];
+        setLayoutCount(0);
+      }
+      setTool((t) => {
+        const on = t === next ? null : next;
+        if (!on) {
+          setHandsFreeActive(false);
+          setCountdown(null);
+        } else if (on === "handsfree") {
+          setHandsFreeActive(true);
+        } else {
+          setHandsFreeActive(false);
+        }
+        return on;
+      });
+    };
+
+    const toggleCameraText = () => {
+      sfx.tap();
+      setTool(null);
+      setHandsFreeActive(false);
+      setTextEditOpen((v) => !v);
     };
 
     const startRecord = () => {
@@ -11325,7 +11643,8 @@ import React, {
         return;
       }
       if (mode === "live") {
-        startCountdown();
+        if (broadcasting || recordingRef.current) endLive();
+        else startCountdown();
         return;
       }
       if (tool === "boomerang") {
@@ -11341,6 +11660,7 @@ import React, {
       if (!shutterPressedRef.current) return;
       shutterPressedRef.current = false;
       if (tool === "handsfree") return;
+      if (mode === "live") return;
       if (tool === "boomerang") {
         const held = Date.now() - (boomerangDownAt.current || 0);
         boomerangDownAt.current = null;
@@ -11348,13 +11668,14 @@ import React, {
         return;
       }
       if (recordingRef.current) stopRecord();
-      else if (ready && !recordingRef.current && mode !== "live") startCountdown();
+      else if (ready && !recordingRef.current) startCountdown();
     };
 
     const onShutterLeave = () => {
       clearTimeout(holdTimerRef.current);
       if (!shutterPressedRef.current) return;
       shutterPressedRef.current = false;
+      if (mode === "live") return;
       if (recordingRef.current) stopRecord();
     };
 
@@ -11365,10 +11686,15 @@ import React, {
     };
 
     const endLive = () => {
+      if (!broadcasting && !recordingRef.current) return;
       sfx.tap();
-      stopRecord();
-      setBroadcasting(false);
-      onEndLive?.();
+      if (recordingRef.current) stopRecord();
+      else {
+        setBroadcasting(false);
+        setRecording(false);
+        recordingRef.current = false;
+        onEndLive?.();
+      }
     };
 
     if (error) return null;
@@ -11388,7 +11714,7 @@ import React, {
       <div className={"compose-camera" + (fullscreen ? " compose-camera--fullscreen" : "")}>
         <div className="compose-camera-top">
           {onClose && (
-            <button type="button" className="compose-camera-topbtn" aria-label={tr("legal.close")} onClick={onClose}>
+            <button type="button" className="compose-camera-topbtn" aria-label={tr("legal.close")} onClick={() => { sfx.tap(); if (settingsOpen) setSettingsOpen(false); else onClose(); }}>
               <X size={26} strokeWidth={2} />
             </button>
           )}
@@ -11400,21 +11726,81 @@ import React, {
           </button>
         </div>
         {settingsOpen && (
-          <div className="compose-camera-settings">
+          <>
+          <button type="button" className="compose-camera-settings-backdrop" aria-label={tr("legal.close")} onClick={() => { sfx.tap(); setSettingsOpen(false); }} />
+          <div className="compose-camera-settings-sheet" onPointerDown={(e) => e.stopPropagation()}>
+            <div className="compose-camera-settings-head">
+              <b>{tr("feed.cameraSettings")}</b>
+              <button type="button" className="compose-camera-settings-ok" onClick={() => { sfx.tap(); setSettingsOpen(false); }}>{tr("feed.cameraSettingsOk")}</button>
+            </div>
+            <button type="button" className="compose-camera-settings-row" onClick={() => { sfx.tap(); setMode("live"); setSettingsOpen(false); }}>
+              <Radio size={18} strokeWidth={1.75} />
+              <span>{tr("feed.cameraSettingsLive")}</span>
+              <ChevronRight size={16} />
+            </button>
+            <p className="compose-camera-settings-section">{tr("feed.cameraSettingsControls")}</p>
+            <button
+              type="button"
+              className={"toggle-row compose-camera-settings-toggle" + (camPrefs.frontDefault ? " on" : "")}
+              onClick={() => {
+                sfx.tap();
+                const next = !camPrefs.frontDefault;
+                const saved = saveCamPrefs({ frontDefault: next });
+                setCamPrefs(saved);
+                setFacing(next ? "user" : "environment");
+              }}
+            >
+              <span>{tr("feed.cameraSettingsFrontDefault")}</span>
+              <span className="toggle-dot" />
+            </button>
+            <p className="compose-camera-settings-sub">{tr("feed.cameraSettingsToolbar")}</p>
+            <div className="compose-camera-settings-radios">
+              {["left", "right"].map((side) => (
+                <button
+                  key={side}
+                  type="button"
+                  className={"compose-camera-settings-radio" + (camPrefs.toolbarSide === side ? " on" : "")}
+                  onClick={() => { sfx.tap(); setCamPrefs(saveCamPrefs({ toolbarSide: side })); }}
+                >
+                  <span className="compose-camera-settings-radio-dot" aria-hidden />
+                  <span>{side === "left" ? tr("feed.cameraSettingsToolbarLeft") : tr("feed.cameraSettingsToolbarRight")}</span>
+                </button>
+              ))}
+            </div>
+            <p className="compose-camera-settings-section">{tr("feed.cameraSettingsRoll")}</p>
+            <button
+              type="button"
+              className={"toggle-row compose-camera-settings-toggle" + (camPrefs.cameraRoll ? " on" : "")}
+              onClick={() => { sfx.tap(); setCamPrefs(saveCamPrefs({ cameraRoll: !camPrefs.cameraRoll })); }}
+            >
+              <span>{tr("feed.cameraSettingsRollAllow")}</span>
+              <span className="toggle-dot" />
+            </button>
+            <p className="compose-camera-settings-note">{tr("feed.cameraSettingsRollNote")}</p>
+          </div>
+          </>
+        )}
+        <div className={"compose-camera-tools" + (camPrefs.toolbarSide === "right" ? " compose-camera-tools--right" : "")}>
+          <button type="button" className={"compose-camera-tool compose-camera-aa" + (textEditOpen ? " on" : "")} aria-label={tr("feed.storyToolText")} onClick={toggleCameraText}>Aa</button>
+          <button type="button" className={"compose-camera-tool" + (tool === "boomerang" ? " on" : "")} aria-label="Boomerang" onClick={() => selectCameraTool("boomerang")}><Infinity size={22} /></button>
+          <button type="button" className={"compose-camera-tool" + (tool === "layout" ? " on" : "")} aria-label="Layout" onClick={() => selectCameraTool("layout")}><LayoutGrid size={22} /></button>
+          <button type="button" className={"compose-camera-tool compose-camera-handsfree" + (tool === "handsfree" ? " on" : "")} aria-label={tr("feed.handsFree")} onClick={() => selectCameraTool("handsfree")}>
+            <span className="compose-handsfree-box"><Circle size={14} /></span>
+            {tool === "handsfree" && <em className="compose-handsfree-timer">{timerSec}s</em>}
+          </button>
+        </div>
+        {tool === "handsfree" && !recording && countdown == null && (
+          <div className="compose-camera-timer-row">
             <button type="button" className={timerSec === 0 ? "on" : ""} onClick={() => setTimerSec(0)}>{tr("feed.timerOff")}</button>
             <button type="button" className={timerSec === 3 ? "on" : ""} onClick={() => setTimerSec(3)}>3s</button>
             <button type="button" className={timerSec === 10 ? "on" : ""} onClick={() => setTimerSec(10)}>10s</button>
-            <span className="compose-camera-settings-hint">{torchOk ? tr("feed.flashTorch") : tr("feed.flashScreen")}</span>
           </div>
         )}
-        <div className="compose-camera-tools">
-          <button type="button" className={"compose-camera-tool compose-camera-aa" + (textEditOpen ? " on" : "")} aria-label={tr("feed.storyToolText")} onClick={() => { sfx.tap(); setTextEditOpen((v) => !v); }}>Aa</button>
-          <button type="button" className={"compose-camera-tool" + (tool === "boomerang" ? " on" : "")} aria-label="Boomerang" onClick={() => { sfx.tap(); setTool((t) => t === "boomerang" ? null : "boomerang"); }}><Infinity size={22} /></button>
-          <button type="button" className={"compose-camera-tool" + (tool === "layout" ? " on" : "")} aria-label="Layout" onClick={() => { sfx.tap(); layoutRef.current = []; setLayoutCount(0); setTool((t) => t === "layout" ? null : "layout"); }}><LayoutGrid size={22} /></button>
-          <button type="button" className={"compose-camera-tool compose-camera-handsfree" + (tool === "handsfree" ? " on" : "")} aria-label={tr("feed.handsFree")} onClick={() => { sfx.tap(); setTool((t) => t === "handsfree" ? null : "handsfree"); setTimerSec(3); }}><span className="compose-handsfree-box"><Circle size={14} /></span></button>
-        </div>
         {textEditOpen && (
-          <input className="compose-camera-text-input" value={cameraText} onChange={(e) => setCameraText(e.target.value)} placeholder={tr("feed.storyToolText")} autoFocus />
+          <input className="compose-camera-text-input" value={cameraText} onChange={(e) => setCameraText(e.target.value)} placeholder={tr("feed.storyToolText")} autoFocus onBlur={() => {}} />
+        )}
+        {tool === "handsfree" && !recording && countdown == null && (
+          <div className="compose-camera-handsfree-hint">{tr("feed.handsFreeHint")}</div>
         )}
         {tool === "layout" && (
           <div className="compose-layout-picker" onPointerDown={(e) => e.stopPropagation()}>
@@ -11465,7 +11851,7 @@ import React, {
         </div>
         <div className="compose-camera-bottom">
           <div className="compose-camera-controls">
-            {onGallery && (
+            {onGallery && camPrefs.cameraRoll && (
               <button type="button" className="compose-camera-gallery" aria-label={tr("feed.pickUpload")} onClick={onGallery}>
                 {galleryThumb ? <img src={galleryThumb} alt="" className="compose-camera-gallery-thumb" /> : <ImageIcon size={24} />}
               </button>
@@ -11516,6 +11902,8 @@ import React, {
     const [cameraOpen, setCameraOpen] = useState(false);
     const [albumOpen, setAlbumOpen] = useState(false);
     const [musicPick, setMusicPick] = useState(false);
+    const browseRef = useRef(null);
+    const portalRoot = typeof document !== "undefined" ? (document.getElementById("root") || document.body) : null;
 
     const pickFile = (f, meta) => {
       if (!f) return;
@@ -11543,26 +11931,24 @@ import React, {
             onClose={() => setCameraOpen(false)}
             onStartLive={() => dispatch({ type: "START_LIVE", keepModal: true })}
             onEndLive={() => { dispatch({ type: "END_LIVE" }); setCameraOpen(false); }}
-            openTextOnCapture
           />
           <input ref={uploadRef} type="file" accept="image/*,video/*" onChange={(e) => pickFile(e.target.files?.[0])} style={{ display: "none" }} />
         </div>,
-        document.body
+        portalRoot
       );
     }
 
     return createPortal(
       <div className="story-gallery">
         <header className="story-gallery-head">
-          <button type="button" className="story-gallery-x" onClick={onClose}><X size={26} /></button>
+          <button type="button" className="story-gallery-x" onClick={onClose} aria-label={tr("legal.close")}><X size={26} /></button>
           <h1>{tr("feed.addToStory")}</h1>
-          <button type="button" className="story-gallery-settings" onClick={() => dispatch({ type: "SCREEN", screen: "settings" })}><Settings size={22} /></button>
+          <button type="button" className="story-gallery-settings" onClick={() => dispatch({ type: "SCREEN", screen: "settings" })} aria-label={tr("settings.title")}><Settings size={22} /></button>
         </header>
         <div className="story-gallery-features">
           <button type="button" className="story-gallery-feature" onClick={() => {
             sfx.tap();
-            onClose();
-            dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story", cameraOnly: true, addYours: true } });
+            uploadRef.current?.click();
           }}>
             <span className="story-gallery-feature-ic story-gallery-feature-ic--svg"><UserRound size={28} strokeWidth={1.5} /></span>
             <small>{tr("feed.storyAddYours")}</small>
@@ -11602,6 +11988,10 @@ import React, {
             )}
             <button type="button" className={"story-gallery-select" + (selectMode ? " on" : "")} onClick={() => { sfx.tap(); setSelectMode((v) => !v); setSelected([]); }}>{tr("feed.select")}</button>
           </div>
+        </div>
+        <div className="story-gallery-perms">
+          <p>{tr("feed.galleryLimitedAccess")}</p>
+          <button type="button" className="story-gallery-manage" onClick={() => { sfx.tap(); browseRef.current?.click(); }}>{tr("feed.galleryManage")}</button>
         </div>
         {selectMode && selected.length > 1 && (
           <button type="button" className="story-gallery-collage-btn" onClick={async () => {
@@ -11651,6 +12041,13 @@ import React, {
           ))}
         </div>
         <input ref={uploadRef} type="file" accept="image/*,video/*,audio/*,.mov,.mp4,.webm,.m4v" onChange={(e) => pickFile(e.target.files?.[0])} style={{ display: "none" }} />
+        <input ref={browseRef} type="file" accept="image/*,video/*,.mov,.mp4,.webm,.m4v" multiple onChange={(e) => {
+          const files = [...(e.target.files || [])];
+          files.forEach((f) => pushRecentMedia(f));
+          setRecents(loadRecentMedia());
+          if (files[0] && !selectMode) pickFile(files[0]);
+          e.target.value = "";
+        }} style={{ display: "none" }} />
         <input ref={multiRef} type="file" accept="image/*" multiple onChange={(e) => pickFile(e.target.files?.[0])} style={{ display: "none" }} />
         <input ref={collageRef} type="file" accept="image/*" multiple onChange={(e) => {
           const files = [...(e.target.files || [])];
@@ -11659,7 +12056,7 @@ import React, {
           } else if (files[0]) pickFile(files[0]);
         }} style={{ display: "none" }} />
       </div>,
-      document.body
+      portalRoot
     );
   }
 
@@ -11685,18 +12082,6 @@ import React, {
     }
     if (opts.addYours) {
       overlays.push({ id: overlayId(), type: "text", text: translate(state.lang || "en", "feed.addYoursPrompt"), x: 50, y: 72, color: "#fff", align: "center", scale: 0.95 });
-    }
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(async (pos) => {
-        const label = await reverseGeocodeLabel(pos.coords.latitude, pos.coords.longitude);
-        if (label) {
-          dispatch({
-            type: "PATCH_FEED_POST",
-            postId: tempId,
-            patch: { captionStyle: { overlays: [...overlays, { id: overlayId(), type: "location", text: label, x: 50, y: 55, color: "#fff", align: "center" }] } },
-          });
-        }
-      }, () => {}, { timeout: 8000, maximumAge: 120000 });
     }
     const captionStyle = { overlays, color: "#fff", align: "center" };
     const filter = COMPOSE_FILTERS[0];
@@ -11737,7 +12122,6 @@ import React, {
     }
     dispatch({ type: "CLOSE_MODAL" });
     dispatch({ type: "SET_SHARE_SUCCESS", message: translate(state.lang || "en", "feed.sharedSuccess"), composeMode: mode });
-    sfx.success();
 
     if (!state.liveData) return;
     try {
@@ -11748,7 +12132,7 @@ import React, {
         if (res?.story) dispatch({ type: "STORY_PUBLISHED", story: res.story });
       } else {
         const res = await api.createPost({ ...body, fromStory: false, source: "echelon", kind: mode === "reel" ? "reel" : "post" });
-        dispatch({ type: "UPDATE_FEED_POST", postId: tempId, patch: { ...res, mediaUrl: mediaUrl(res.mediaUrl) || up.url, pending: false } });
+        dispatch({ type: "UPDATE_FEED_POST", postId: tempId, patch: { ...res, mediaUrl: resolveMediaUrl(res.mediaUrl) || up.url, pending: false } });
       }
     } catch {
       sfx.penalty();
@@ -11760,8 +12144,7 @@ import React, {
     const tr = useT();
     const uploadRef = useRef(null);
     const pickMode = payload?.mode || "post";
-    const cameraOnly = payload?.cameraOnly || pickMode === "post";
-    const storyGallery = payload?.gallery || pickMode === "story";
+    const cameraOnly = payload?.cameraOnly !== false;
 
     const onPicked = (f, meta) => {
       if (!f) return;
@@ -11776,6 +12159,7 @@ import React, {
         payload: {
           mode: publishMode,
           initialFile: f,
+          fromCamera: cameraOnly,
           cameraText: meta?.cameraText,
           cameraTextX: meta?.cameraTextX,
           cameraTextY: meta?.cameraTextY,
@@ -11792,21 +12176,10 @@ import React, {
     };
 
     const onEndLive = () => {
-      sfx.tap();
       dispatch({ type: "END_LIVE" });
-      dispatch({ type: "CLOSE_MODAL" });
     };
 
     const canLiveCamera = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
-
-    if (storyGallery && pickMode === "story") {
-      return (
-        <StoryGalleryModal
-          onPicked={onPicked}
-          onClose={() => dispatch({ type: "CLOSE_MODAL" })}
-        />
-      );
-    }
 
     if (canLiveCamera && cameraOnly) {
       return createPortal(
@@ -11819,7 +12192,6 @@ import React, {
             onClose={() => dispatch({ type: "CLOSE_MODAL" })}
             onStartLive={onStartLive}
             onEndLive={onEndLive}
-            openTextOnCapture
           />
           <input ref={uploadRef} type="file" accept="image/*,video/*,.mov,.mp4,.webm,.m4v" onChange={(e) => onPicked(e.target.files?.[0])} style={{ display: "none" }} />
         </div>,
@@ -11856,9 +12228,13 @@ import React, {
     const [overlays, setOverlays] = useState([]);
     const [selectedOverlay, setSelectedOverlay] = useState(null);
     const [editingOverlay, setEditingOverlay] = useState(null);
-    const [mediaUrl, setMediaUrl] = useState(null);
-    const [mediaType, setMediaType] = useState(null);
-    const [mediaFile, setMediaFile] = useState(null);
+    const bootFile = payload?.initialFile || null;
+    const [mediaUrl, setMediaUrl] = useState(() => (bootFile ? URL.createObjectURL(bootFile) : null));
+    const [mediaType, setMediaType] = useState(() => {
+      if (!bootFile) return null;
+      return bootFile.type?.startsWith("video/") ? "video" : "image";
+    });
+    const [mediaFile, setMediaFile] = useState(() => bootFile || null);
     const [filterIdx, setFilterIdx] = useState(0);
     const [adjust, setAdjust] = useState({ ...COMPOSE_ADJUST_DEFAULT });
     const [toolTab, setToolTab] = useState("filters");
@@ -11878,23 +12254,27 @@ import React, {
     const [musicQuery, setMusicQuery] = useState("");
     const [musicResults, setMusicResults] = useState(ECHELON_TRACKS);
     const [musicBusy, setMusicBusy] = useState(false);
-    const [videoMuted, setVideoMuted] = useState(true);
+    const [videoMuted, setVideoMuted] = useState(false);
     const [videoDuration, setVideoDuration] = useState(0);
     const [clipStart, setClipStart] = useState(0);
     const [clipEnd, setClipEnd] = useState(0);
     const [closeFriendsOnly, setCloseFriendsOnly] = useState(false);
     const [drawPaths, setDrawPaths] = useState([]);
-    const [drawColor, setDrawColor] = useState("#ffffff");
+    const [drawColor, setDrawColor] = useState("#000000");
+    const [drawWidth, setDrawWidth] = useState(3);
     const [drawActive, setDrawActive] = useState(false);
     const drawRef = useRef(null);
+    const drawLiveRef = useRef(null);
     const audioRef = useRef(null);
     const musicPreviewRef = useRef(null);
     const fileRef = useRef(null);
     const cameraRef = useRef(null);
     const canvasRef = useRef(null);
+    const mediaFrameRef = useRef(null);
     const descRef = useRef(null);
-    const geoAddedRef = useRef(false);
-    const payloadBootRef = useRef("");
+    const payloadBootRef = useRef(
+      bootFile ? `${bootFile.name}-${bootFile.size}-${bootFile.lastModified}-${payload?.cameraText || ""}` : ""
+    );
 
     const FILTERS = COMPOSE_FILTERS;
     const filter = FILTERS[filterIdx] || FILTERS[0];
@@ -11941,33 +12321,12 @@ import React, {
       return id;
     };
 
-    useEffect(() => {
-      if (!mediaUrl || geoAddedRef.current) return;
-      if (!navigator.geolocation) return;
-      geoAddedRef.current = true;
-      navigator.geolocation.getCurrentPosition(async (pos) => {
-        const label = await reverseGeocodeLabel(pos.coords.latitude, pos.coords.longitude);
-        if (!label) return;
-        setOverlays((list) => {
-          if (list.some((o) => o.type === "location")) return list;
-          return [...list, {
-            id: overlayId(),
-            type: "location",
-            text: label,
-            x: 50,
-            y: 42,
-            color: captionColor,
-            align: "center",
-          }];
-        });
-      }, () => {}, { timeout: 9000, maximumAge: 120000 });
-    }, [mediaUrl, captionColor]);
 
     useEffect(() => {
       if (!tagOpen && !mentionOpen) return;
       const q = (tagOpen ? tagQuery : mentionQuery).trim();
       if (tagOpen && storyTool === "mention" && q.length < 2) {
-        const friends = (state.friends || []).map((fid) => byId[fid]).filter(Boolean);
+        const friends = (state.friends || []).map((fid) => getAuthor(state, fid)).filter((u) => u?.id);
         setTagResults(friends.slice(0, 20));
         return;
       }
@@ -11975,7 +12334,7 @@ import React, {
       const t = setTimeout(() => {
         api.searchUsers(q).then((res) => {
           const rows = res?.users || res || [];
-          setTagResults(Array.isArray(rows) ? rows : []);
+          setTagResults((Array.isArray(rows) ? rows : []).filter((u) => u?.id));
         }).catch(() => setTagResults([]));
       }, 280);
       return () => clearTimeout(t);
@@ -11985,7 +12344,6 @@ import React, {
       if (!f) return;
       const isVideo = f.type.startsWith("video/");
       if (mediaUrl) URL.revokeObjectURL(mediaUrl);
-      geoAddedRef.current = false;
       setOverlays([]);
       setSelectedOverlay(null);
       setEditingOverlay(null);
@@ -12022,9 +12380,12 @@ import React, {
     useEffect(() => {
       if (!payload?.initialFile) return;
       const bootKey = `${payload.initialFile.name}-${payload.initialFile.size}-${payload.initialFile.lastModified}-${payload?.cameraText || ""}`;
-      if (payloadBootRef.current === bootKey) return;
-      payloadBootRef.current = bootKey;
-      onFile(payload.initialFile);
+      if (payloadBootRef.current !== bootKey) {
+        payloadBootRef.current = bootKey;
+        onFile(payload.initialFile);
+      } else if (mediaFile !== payload.initialFile) {
+        onFile(payload.initialFile);
+      }
       const seedOverlays = [];
       if (payload?.cameraText?.trim()) {
         const id = overlayId();
@@ -12044,10 +12405,18 @@ import React, {
         seedOverlays.push({ id: overlayId(), type: "text", text: tr("feed.addYoursPrompt"), x: 50, y: 72, scale: 0.95, color: "#fff" });
       }
       if (seedOverlays.length) queueMicrotask(() => setOverlays(seedOverlays));
-      if (payload?.openText && !payload?.cameraText?.trim()) { setStoryTool("text"); setStoryRailOpen(true); }
       if (payload?.openMusic) { setStoryTool("audio"); setStoryRailOpen(true); }
-      if (payload?.addYours && !payload?.cameraText?.trim()) { setStoryTool("text"); setStoryRailOpen(true); }
-    }, [payload?.initialFile, payload?.cameraText, payload?.cameraTextX, payload?.cameraTextY, payload?.openText, payload?.openMusic, payload?.addYours]);
+      if (payload?.openText) {
+        queueMicrotask(() => {
+          const id = overlayId();
+          setOverlays((list) => [...list, { id, type: "text", text: "", x: 50, y: 45, color: "#ffffff", align: "center" }]);
+          setSelectedOverlay(id);
+          setEditingOverlay(id);
+          setStoryTool("text");
+          setStoryRailOpen(true);
+        });
+      }
+    }, [payload?.initialFile, payload?.cameraText, payload?.cameraTextX, payload?.cameraTextY, payload?.openMusic, payload?.addYours, payload?.openText]);
 
     const clearMedia = () => {
       if (mediaUrl) URL.revokeObjectURL(mediaUrl);
@@ -12057,7 +12426,6 @@ import React, {
       setOverlays([]);
       setSelectedOverlay(null);
       setEditingOverlay(null);
-      geoAddedRef.current = false;
       if (fileRef.current) fileRef.current.value = "";
     };
 
@@ -12126,11 +12494,15 @@ import React, {
     };
 
     const insertMention = (user, asOverlay = false) => {
+      if (!user?.id) return;
       const handle = normalizeHandle(user.handle || user.name);
       if (asOverlay) {
-        addOverlay({ type: "tag", userId: user.id, name: user.name, handle });
+        addOverlay({ type: "tag", userId: user.id, name: user.name || handle, handle });
         setTagOpen(false);
         setTagQuery("");
+        setMentionOpen(false);
+        setMentionQuery("");
+        setStoryTool(null);
         return;
       }
       const el = descRef.current;
@@ -12301,7 +12673,6 @@ import React, {
 
       dispatch({ type: "CLOSE_MODAL" });
       dispatch({ type: "SET_SHARE_SUCCESS", message: tr("feed.sharedSuccess"), composeMode: mode });
-      sfx.success();
       setBusy(false);
 
       if (!state.liveData || !mediaFile) return;
@@ -12336,7 +12707,7 @@ import React, {
           dispatch({
             type: "UPDATE_FEED_POST",
             postId: tempId,
-            patch: { ...res, mediaUrl: mediaUrl(res.mediaUrl) || up.url, pending: false },
+            patch: { ...res, mediaUrl: resolveMediaUrl(res.mediaUrl) || up.url, pending: false },
           });
         }
       } catch {
@@ -12358,29 +12729,133 @@ import React, {
       if (selectedOverlay) patchOverlay(selectedOverlay, { align: a });
     };
 
+    const playMusicPreview = (track, { loop = false } = {}) => {
+      if (!track?.preview || videoMuted) return;
+      try {
+        if (musicPreviewRef.current) {
+          musicPreviewRef.current.pause();
+          musicPreviewRef.current = null;
+        }
+        const a = new Audio(track.preview);
+        a.volume = 0.5;
+        a.loop = loop;
+        musicPreviewRef.current = a;
+        a.play().catch(() => {});
+      } catch { /* ignore */ }
+    };
+
+    useEffect(() => {
+      if (musicPreviewRef.current) {
+        musicPreviewRef.current.pause();
+        musicPreviewRef.current = null;
+      }
+      if (musicTrack?.preview && !videoMuted) playMusicPreview(musicTrack, { loop: true });
+      return () => {
+        if (musicPreviewRef.current) {
+          musicPreviewRef.current.pause();
+          musicPreviewRef.current = null;
+        }
+      };
+    }, [musicTrack, videoMuted]);
+
+    const syncDrawCanvas = () => {
+      const canvas = drawRef.current;
+      const host = mediaFrameRef.current || canvasRef.current;
+      if (!canvas || !host) return;
+      const rect = host.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width));
+      const h = Math.max(1, Math.round(rect.height));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.clearRect(0, 0, w, h);
+      drawPaths.forEach((path) => {
+        if (!path.points?.length) return;
+        ctx.strokeStyle = path.color;
+        ctx.lineWidth = path.width || drawWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        path.points.forEach((pt, i) => {
+          const x = (pt.x / 100) * w;
+          const y = (pt.y / 100) * h;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      });
+    };
+
+    useEffect(() => {
+      if (!drawActive) return;
+      syncDrawCanvas();
+      const onResize = () => syncDrawCanvas();
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
+    }, [drawActive, drawPaths, drawWidth]);
+
+    useEffect(() => {
+      if (!editingOverlay) return;
+      const t = requestAnimationFrame(() => {
+        const el = mediaFrameRef.current?.querySelector(".media-overlay-inline-edit") || canvasRef.current?.querySelector(".media-overlay-inline-edit");
+        el?.focus?.();
+      });
+      return () => cancelAnimationFrame(t);
+    }, [editingOverlay, selectedOverlay]);
+
+    const addLocationOverlay = () => {
+      sfx.tap();
+      setDrawActive(false);
+      const placeFallback = () => addOverlay(createStorySticker("location", tr));
+      if (!navigator.geolocation) {
+        placeFallback();
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        const label = await reverseGeocodeLabel(pos.coords.latitude, pos.coords.longitude);
+        if (label) addOverlay({ type: "location", text: label, x: 50, y: 55, color: captionColor, align: "center" });
+        else placeFallback();
+      }, placeFallback, { timeout: 9000, maximumAge: 120000 });
+    };
+
     const storyMoreTools = [
-      { id: "poll", icon: BarChart2, label: tr("feed.storyPoll"), run: () => { addOverlay(createStorySticker("poll", tr)); setStoryTool("poll"); setStoryRailOpen(true); } },
-      { id: "quiz", icon: Check, label: tr("stickers.quiz"), run: () => { addOverlay(createStorySticker("quiz", tr)); setStoryTool("quiz"); setStoryRailOpen(true); } },
-      { id: "countdown", icon: Timer, label: tr("stickers.countdown"), run: () => { addOverlay(createStorySticker("countdown", tr)); setStoryTool("countdown"); setStoryRailOpen(true); } },
-      { id: "link", icon: Link2, label: tr("stickers.link"), run: () => { addOverlay(createStorySticker("link", tr)); setStoryTool("link"); setStoryRailOpen(true); } },
-      { id: "hashtag", icon: Hash, label: tr("stickers.hashtag"), run: () => { addOverlay(createStorySticker("hashtag", tr)); setStoryTool("hashtag"); setStoryRailOpen(true); } },
+      { id: "poll", icon: BarChart2, label: tr("feed.storyPoll"), run: () => { setDrawActive(false); addOverlay(createStorySticker("poll", tr)); setStoryTool("poll"); setStoryRailOpen(true); } },
+      { id: "quiz", icon: Check, label: tr("stickers.quiz"), run: () => { setDrawActive(false); addOverlay(createStorySticker("quiz", tr)); setStoryTool("quiz"); setStoryRailOpen(true); } },
+      { id: "countdown", icon: Timer, label: tr("stickers.countdown"), run: () => { setDrawActive(false); addOverlay(createStorySticker("countdown", tr)); setStoryTool("countdown"); setStoryRailOpen(true); } },
+      { id: "link", icon: Link2, label: tr("stickers.link"), run: () => { setDrawActive(false); addOverlay(createStorySticker("link", tr)); setStoryTool("link"); setStoryRailOpen(true); } },
+      { id: "hashtag", icon: Hash, label: tr("stickers.hashtag"), run: () => { setDrawActive(false); addOverlay(createStorySticker("hashtag", tr)); setStoryTool("hashtag"); setStoryRailOpen(true); } },
+      { id: "location", icon: MapPin, label: tr("stickers.locationDefault"), run: () => { addLocationOverlay(); setStoryTool("text"); setStoryRailOpen(true); } },
     ];
     const storyTools = [
       { id: "text", icon: Type, label: tr("feed.storyToolText"), run: () => {
+        setDrawActive(false);
+        setTagOpen(false);
+        setMentionOpen(false);
         const id = overlayId();
-        setOverlays((list) => [...list, { id, type: "text", text: "", x: 50, y: 45, color: captionColor, align: captionAlign }]);
+        const textColor = captionColor === "#000000" && mediaType === "image" ? "#ffffff" : captionColor;
+        setOverlays((list) => [...list, { id, type: "text", text: "", x: 50, y: 45, color: textColor, align: captionAlign }]);
         setSelectedOverlay(id);
-        setEditingOverlay(id);
         setStoryTool("text");
         setStoryRailOpen(true);
+        queueMicrotask(() => setEditingOverlay(id));
         sfx.tap();
       } },
       { id: "stickers", icon: Smile, label: tr("feed.storyToolStickers"), run: () => { setStickerItems(STORY_STICKER_PACK); setToolTab("stickers"); setStoryTool("stickers"); setStoryRailOpen(true); } },
       { id: "audio", icon: Music2, label: tr("feed.storyToolAudio"), run: () => { setStoryTool("audio"); setStoryRailOpen(true); sfx.tap(); } },
       { id: "effects", icon: Sparkles, label: tr("feed.storyToolEffects"), run: () => { setToolTab("filters"); setStoryTool((t) => t === "effects" ? null : "effects"); setStoryRailOpen(true); } },
       { id: "sound", icon: videoMuted ? VolumeX : Volume2, label: tr("feed.storyToolSound"), run: () => { setVideoMuted((v) => !v); sfx.tap(); } },
-      { id: "mention", icon: AtSign, label: tr("feed.storyToolMention"), run: () => { setTagQuery(""); setTagOpen(true); setStoryTool("mention"); setStoryRailOpen(true); const friends = (state.friends || []).map((fid) => byId[fid]).filter(Boolean); setTagResults(friends.slice(0, 20)); } },
-      { id: "draw", icon: Pencil, label: tr("feed.storyToolDraw"), run: () => { setDrawActive(true); setStoryTool("draw"); setStoryRailOpen(true); } },
+      { id: "mention", icon: AtSign, label: tr("feed.storyToolMention"), run: () => { setTagQuery(""); setTagOpen(true); setMentionOpen(false); setStoryTool("mention"); setStoryRailOpen(true); const friends = (state.friends || []).map((fid) => getAuthor(state, fid)).filter((u) => u?.id); setTagResults(friends.slice(0, 20)); sfx.tap(); } },
+      { id: "draw", icon: Pencil, label: tr("feed.storyToolDraw"), run: () => {
+        setEditingOverlay(null);
+        setSelectedOverlay(null);
+        setDrawActive(true);
+        setStoryTool("draw");
+        setStoryRailOpen(true);
+        sfx.tap();
+      } },
       ...(mediaType === "video" ? [{ id: "trim", icon: Scissors, label: tr("feed.trimVideo"), run: () => { setStoryTool("trim"); setStoryRailOpen(true); sfx.tap(); } }] : []),
       { id: "save", icon: Download, label: tr("feed.storyToolSave"), run: () => {
         if (!mediaUrl) return;
@@ -12393,7 +12868,7 @@ import React, {
       { id: "more", icon: MoreHorizontal, label: tr("feed.storyToolMore"), run: () => { setStoryTool((t) => t === "more" ? null : "more"); setStoryRailOpen(true); sfx.tap(); } },
     ];
 
-    if (mediaUrl) {
+    if (mediaUrl && (mode === "story" || mode === "reel" || payload?.fromCamera)) {
       const activeTool = storyTools.find((t) => t.id === storyTool);
       return createPortal(
         <div className="story-editor">
@@ -12402,61 +12877,96 @@ import React, {
           </button>
           <div className="story-editor-stage" ref={canvasRef} onClick={(e) => {
             if (e.target.closest(".media-overlay--edit")) return;
+            if (e.target.closest(".story-editor-rail")) return;
+            if (e.target.closest(".story-editor-panel")) return;
+            if (e.target.closest(".story-editor-overlay-bar")) return;
+            if (drawActive) return;
             setSelectedOverlay(null);
             setEditingOverlay(null);
           }}>
             <div className="story-editor-bg" style={{ backgroundImage: `url(${mediaUrl})` }} aria-hidden />
-            {mediaType === "video"
-              ? <video src={mediaUrl} className="story-editor-media story-editor-media--contain" muted={videoMuted} playsInline autoPlay loop style={{ filter: mediaFilterCss || undefined }} />
-              : <img src={mediaUrl} alt="" className="story-editor-media story-editor-media--contain" style={{ filter: mediaFilterCss || undefined }} draggable={false} />}
-            <div className="compose-canvas-filter" style={{ background: filter.overlay !== "none" ? filter.overlay : undefined }} aria-hidden />
-            {drawPaths.length > 0 && (
-              <svg className="story-editor-draw" viewBox="0 0 100 100" preserveAspectRatio="none">
-                {drawPaths.map((path, i) => (
-                  <polyline key={i} fill="none" stroke={path.color} strokeWidth="0.8" strokeLinecap="round" points={path.points.map((p) => `${p.x},${p.y}`).join(" ")} />
-                ))}
-              </svg>
-            )}
-            {drawActive && (
+            <div className="story-editor-media-frame" ref={mediaFrameRef}>
+              {mediaType === "video"
+                ? <video src={mediaUrl} className="story-editor-media story-editor-media--fit" muted={videoMuted} playsInline autoPlay loop style={{ filter: mediaFilterCss || undefined }} />
+                : <img src={mediaUrl} alt="" className="story-editor-media story-editor-media--fit" style={{ filter: mediaFilterCss || undefined }} draggable={false} />}
+              <div className="compose-canvas-filter" style={{ background: filter.overlay !== "none" ? filter.overlay : undefined }} aria-hidden />
+              {drawActive && (
               <canvas
                 ref={drawRef}
                 className="story-editor-draw-canvas"
                 onPointerDown={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  e.currentTarget.setPointerCapture?.(e.pointerId);
                   const rect = e.currentTarget.getBoundingClientRect();
                   const pt = { x: ((e.clientX - rect.left) / rect.width) * 100, y: ((e.clientY - rect.top) / rect.height) * 100 };
-                  setDrawPaths((paths) => [...paths, { color: drawColor, points: [pt] }]);
+                  drawLiveRef.current = { color: drawColor, width: drawWidth, points: [pt] };
+                  setDrawPaths((paths) => [...paths, drawLiveRef.current]);
                 }}
                 onPointerMove={(e) => {
-                  if (e.buttons !== 1) return;
+                  if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return;
+                  e.preventDefault();
                   const rect = e.currentTarget.getBoundingClientRect();
                   const pt = { x: ((e.clientX - rect.left) / rect.width) * 100, y: ((e.clientY - rect.top) / rect.height) * 100 };
+                  const live = drawLiveRef.current;
+                  if (!live) return;
+                  live.points.push(pt);
+                  const canvas = drawRef.current;
+                  const ctx = canvas?.getContext("2d");
+                  if (ctx && canvas && live.points.length >= 2) {
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    const prev = live.points[live.points.length - 2];
+                    ctx.strokeStyle = live.color;
+                    ctx.lineWidth = live.width || drawWidth;
+                    ctx.lineCap = "round";
+                    ctx.lineJoin = "round";
+                    ctx.beginPath();
+                    ctx.moveTo((prev.x / 100) * w, (prev.y / 100) * h);
+                    ctx.lineTo((pt.x / 100) * w, (pt.y / 100) * h);
+                    ctx.stroke();
+                  }
                   setDrawPaths((paths) => {
                     if (!paths.length) return paths;
                     const next = [...paths];
-                    const last = { ...next[next.length - 1], points: [...next[next.length - 1].points, pt] };
-                    next[next.length - 1] = last;
+                    next[next.length - 1] = { ...live, points: [...live.points] };
                     return next;
                   });
                 }}
+                onPointerUp={(e) => {
+                  if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+                    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+                  }
+                  drawLiveRef.current = null;
+                }}
+                onPointerCancel={() => { drawLiveRef.current = null; }}
               />
-            )}
-            <MediaOverlaysView
-              overlays={overlays}
-              captionStyle={{ color: captionColor, align: captionAlign }}
-              editable
-              selectedId={selectedOverlay}
-              editingId={editingOverlay}
-              onSelect={(id) => { setSelectedOverlay(id); setEditingOverlay(null); }}
-              onEdit={setEditingOverlay}
-              onChange={patchOverlay}
-              onRemove={removeOverlay}
-              canvasRef={canvasRef}
-            />
+              )}
+              {!drawActive && drawPaths.length > 0 && (
+                <svg className="story-editor-draw" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  {drawPaths.map((path, i) => (
+                    <polyline key={i} fill="none" stroke={path.color} strokeWidth={(path.width || drawWidth) / 8} strokeLinecap="round" strokeLinejoin="round" points={path.points.map((p) => `${p.x},${p.y}`).join(" ")} />
+                  ))}
+                </svg>
+              )}
+              <MediaOverlaysView
+                overlays={overlays}
+                captionStyle={{ color: captionColor, align: captionAlign }}
+                editable
+                selectedId={selectedOverlay}
+                editingId={editingOverlay}
+                onSelect={(id) => { setSelectedOverlay(id); setEditingOverlay(null); }}
+                onEdit={setEditingOverlay}
+                onChange={patchOverlay}
+                onRemove={removeOverlay}
+                canvasRef={mediaFrameRef}
+              />
+            </div>
             <aside className="story-editor-rail" aria-label="Edit tools">
               {storyTools.map((tool) => {
                 const Icon = tool.icon;
                 return (
-                  <button key={tool.id} type="button" className={"story-editor-rail-btn" + (storyTool === tool.id ? " on" : "")} aria-label={tool.label} title={tool.label} onClick={tool.run}>
+                  <button key={tool.id} type="button" className={"story-editor-rail-btn" + (storyTool === tool.id ? " on" : "")} aria-label={tool.label} title={tool.label} onClick={(e) => { e.stopPropagation(); tool.run(); }}>
                     <span className="story-editor-rail-icon"><Icon size={18} strokeWidth={1.75} /></span>
                   </button>
                 );
@@ -12521,11 +13031,21 @@ import React, {
                 </div>
               )}
               {storyTool === "text" && (
-                <div className="compose-tool-row compose-tool-icons">
-                  {["#ffffff", "#FFE9A8", "#FFD1E1", "#8C6BD8", "#FF3B7A"].map((c) => (
-                    <button key={c} type="button" className={"compose-color-dot" + (captionColor === c ? " on" : "")} style={{ background: c }} onClick={() => applyColor(c)} />
-                  ))}
-                </div>
+                <>
+                  <div className="compose-tool-row compose-tool-icons">
+                    {["#ffffff", "#FFE9A8", "#FFD1E1", "#8C6BD8", "#FF3B7A"].map((c) => (
+                      <button key={c} type="button" className={"compose-color-dot" + (captionColor === c ? " on" : "")} style={{ background: c }} onClick={() => applyColor(c)} />
+                    ))}
+                  </div>
+                  <div className="story-text-subtools">
+                    <button type="button" className="story-text-subtool" onClick={() => { setDrawActive(false); const id = overlayId(); setOverlays((list) => [...list, { id, type: "text", text: "", x: 50, y: 45, color: captionColor, align: captionAlign }]); setSelectedOverlay(id); setEditingOverlay(id); sfx.tap(); }}>
+                      <Type size={14} /> {tr("feed.storyToolText")}
+                    </button>
+                    <button type="button" className="story-text-subtool" onClick={addLocationOverlay}>
+                      <MapPin size={14} /> {tr("stickers.locationDefault")}
+                    </button>
+                  </div>
+                </>
               )}
               {storyTool === "audio" && (
                 <>
@@ -12533,7 +13053,7 @@ import React, {
                   <div className="story-music-picker">
                     {musicBusy && <Loader size={18} className="spin" color="#fff" />}
                     {!musicBusy && musicResults.map((track) => (
-                      <button key={track.id} type="button" className={"story-music-track" + (musicPending?.id === track.id ? " on" : "")} onClick={() => { setMusicPending(track); sfx.tap(); }}>
+                      <button key={track.id} type="button" className={"story-music-track" + (musicPending?.id === track.id ? " on" : "")} onClick={() => { setMusicPending(track); playMusicPreview(track); sfx.tap(); }}>
                         <Music2 size={16} />
                         <span><b>{track.title}</b><small>{track.artist}{track.license ? ` · ${track.license}` : ""}</small></span>
                       </button>
@@ -12541,22 +13061,11 @@ import React, {
                   </div>
                   {musicPending && (
                     <button type="button" className="story-music-add-btn" onClick={() => {
-                      sfx.success();
+                      sfx.tap();
                       setMusicTrack(musicPending);
                       setMusicPending(null);
                       setStoryTool(null);
-                      if (musicPending.preview) {
-                        try {
-                          if (musicPreviewRef.current) {
-                            musicPreviewRef.current.pause();
-                            musicPreviewRef.current = null;
-                          }
-                          const a = new Audio(musicPending.preview);
-                          a.volume = 0.55;
-                          musicPreviewRef.current = a;
-                          a.play().catch(() => {});
-                        } catch { /* ignore */ }
-                      }
+                      playMusicPreview(musicPending, { loop: true });
                     }}>
                       {tr("feed.addMusic")}
                     </button>
@@ -12575,11 +13084,23 @@ import React, {
                 </div>
               )}
               {storyTool === "draw" && (
-                <div className="compose-tool-row compose-tool-icons">
-                  {["#ffffff", "#FF3B7A", "#FFD56B", "#00C9A7", "#8C6BD8", "#262626"].map((c) => (
-                    <button key={c} type="button" className={"compose-color-dot" + (drawColor === c ? " on" : "")} style={{ background: c }} onClick={() => setDrawColor(c)} />
-                  ))}
-                </div>
+                <>
+                  <div className="story-draw-tools">
+                    <label className="story-draw-width">
+                      <span>{tr("feed.drawSize")}</span>
+                      <input type="range" min={1} max={12} value={drawWidth} onChange={(e) => setDrawWidth(Number(e.target.value))} />
+                    </label>
+                    <div className="story-draw-actions">
+                      <button type="button" className="story-draw-action" onClick={() => { setDrawPaths((p) => p.slice(0, -1)); sfx.tap(); }}>{tr("feed.drawUndo")}</button>
+                      <button type="button" className="story-draw-action" onClick={() => { setDrawPaths([]); sfx.tap(); }}>{tr("feed.drawClear")}</button>
+                    </div>
+                  </div>
+                  <div className="compose-tool-row compose-tool-icons compose-draw-colors">
+                    {DRAW_COLORS.map((c) => (
+                      <button key={c} type="button" className={"compose-color-dot" + (drawColor === c ? " on" : "")} style={{ background: c }} onClick={() => setDrawColor(c)} />
+                    ))}
+                  </div>
+                </>
               )}
               {storyTool === "mention" && (
                 <>
@@ -12731,7 +13252,7 @@ import React, {
             <button type="button" className="compose-icon-btn danger-soft" aria-label="Delete" onClick={() => removeOverlay(selectedOverlay)}><Trash2 size={16} /></button>
           </div>
         )}
-        {mediaUrl && (
+        {mediaUrl && toolTab !== "text" && (
           <div className="compose-enhance-panel">
             <div className="compose-enhance-head">
               <Sparkles size={14} color="#B79CF0" />
@@ -12832,7 +13353,11 @@ import React, {
             )}
             {toolTab === "text" && (
               <div className="compose-tool-row compose-tool-icons">
-                <button type="button" className="compose-icon-btn" aria-label="Add text" onClick={() => addOverlay({ type: "text", text: "" })}><Type size={17} /></button>
+                <button type="button" className="compose-icon-btn" aria-label="Add text" onClick={() => {
+                  const id = addOverlay({ type: "text", text: "" });
+                  setEditingOverlay(id);
+                  canvasRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+                }}><Type size={17} /></button>
                 <button type="button" className="compose-icon-btn" aria-label="Add location" onClick={() => {
                   const loc = overlays.find((o) => o.type === "location");
                   if (loc) { setSelectedOverlay(loc.id); return; }
@@ -13003,7 +13528,7 @@ import React, {
       return <span className="ech-share-icon ech-share-icon--neutral"><Share2 size={24} strokeWidth={2} /></span>;
     };
 
-    const previewSrc = post.mediaUrl ? mediaUrl(post.mediaUrl) : null;
+    const previewSrc = post.mediaUrl ? resolveMediaUrl(post.mediaUrl) : null;
 
     return createPortal(
       <div className="ig-sheet-backdrop ech-share-backdrop" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
@@ -13072,7 +13597,7 @@ import React, {
     const cs = item.captionStyle || {};
     const clipStart = cs.clipStart ?? 0;
     const clipEnd = cs.clipEnd ?? null;
-    const src = mediaUrl(item.mediaUrl);
+    const src = resolveMediaUrl(item.mediaUrl);
 
     useEffect(() => {
       const v = ref.current;
@@ -13219,7 +13744,7 @@ import React, {
     const content = item.mediaUrl ? (
       item.mediaType === "video"
         ? <StoryVideoSlide item={item} onDone={() => advanceRef.current?.()} />
-        : <img src={mediaUrl(item.mediaUrl)} alt="" className="story-slide-media" />
+        : <img src={resolveMediaUrl(item.mediaUrl)} alt="" className="story-slide-media" />
     ) : (
       <div className="story-slide-fallback" style={{ background: grad(item.scene || [a.color, "#fff"]) }}>
         <span style={{ fontSize: 72 }}>{item.emoji || a.emoji}</span>
@@ -13271,7 +13796,11 @@ import React, {
             <span className="muted" style={{ fontSize: 11, marginLeft: "auto" }}>{formatPostAge(item.ts, now)}</span>
             <button type="button" className="icbtn" onClick={() => dispatch({ type: "CLOSE_MODAL" })}><X size={16} /></button>
           </div>
-          <div ref={mediaWrapRef} className="story-slide">
+          <FeedDragRate
+            enabled={authorId !== ME_ID && canRateStory && !storyRated}
+            onRate={commitStoryRating}
+            className="story-slide"
+          >
             {content}
             <MediaOverlaysView
               overlays={capStyle.overlays}
@@ -13279,16 +13808,7 @@ import React, {
               legacyCaption={slideCaption}
               dispatch={dispatch}
             />
-            {authorId !== ME_ID && (canRateStory || storyRated) && (
-              <EchRateOverlay
-                canRate={canRateStory}
-                alreadyRated={storyRated}
-                myStars={storyStars}
-                onPick={commitStoryRating}
-                size="md"
-              />
-            )}
-          </div>
+          </FeedDragRate>
           <button type="button" className="story-tap-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); goPrev(); }} />
           <button type="button" className="story-tap-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); goNext(); }} />
         </div>
@@ -13302,7 +13822,7 @@ import React, {
       const mode = payload?.mode || "post";
       dispatch({ type: "CLOSE_MODAL" });
       if (mode === "story") {
-        dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story", gallery: true } });
+        dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story" } });
       } else {
         dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode, cameraOnly: true } });
       }
@@ -13763,7 +14283,7 @@ import React, {
           const locLabel = ev.secretAddress && !going && !ev.isHost
             ? `${formatCityLabel(ev.city, ev.countryCode) || ev.venue} · ${tr("parties.secretLoc")}`
             : ev.venue;
-          const bannerSrc = ev.bannerUrl ? mediaUrl(ev.bannerUrl) : null;
+          const bannerSrc = ev.bannerUrl ? resolveMediaUrl(ev.bannerUrl) : null;
           return (
             <button
               key={ev.id}
@@ -13834,7 +14354,7 @@ import React, {
     const going = state.rsvps.includes(ev.id) || ev.hasRsvp;
     const open = effective >= ev.req;
     const loc = (going || ev.isHost) && ev.fullLocation ? ev.fullLocation : ev.venue;
-    const bannerSrc = ev.bannerUrl ? mediaUrl(ev.bannerUrl) : null;
+    const bannerSrc = ev.bannerUrl ? resolveMediaUrl(ev.bannerUrl) : null;
     const mapVisible = ev.lat != null && ev.lng != null;
     const secretMapPending = ev.secretAddress && !ev.isHost && ev.startsAt && now < ev.startsAt;
 
@@ -14023,7 +14543,7 @@ import React, {
     const [price, setPrice] = useState(editEv?.price != null ? String(editEv.price) : "10");
     const [currency, setCurrency] = useState(editEv?.currency || "EUR");
     const [bannerUrl, setBannerUrl] = useState(editEv?.bannerUrl || "");
-    const [bannerPreview, setBannerPreview] = useState(editEv?.bannerUrl ? mediaUrl(editEv.bannerUrl) : "");
+    const [bannerPreview, setBannerPreview] = useState(editEv?.bannerUrl ? resolveMediaUrl(editEv.bannerUrl) : "");
     const [bannerBusy, setBannerBusy] = useState(false);
     const [pinLat, setPinLat] = useState(editEv?.lat ?? null);
     const [pinLng, setPinLng] = useState(editEv?.lng ?? null);
@@ -14111,15 +14631,22 @@ import React, {
       }
     };
 
-    const pickAddress = (opt) => {
+    const pickAddress = async (opt) => {
       sfx.tap();
-      if (!Number.isFinite(opt.lat) || !Number.isFinite(opt.lng)) return;
-      setLocation(opt.address || opt.label || "");
+      const label = opt.label || opt.address || "";
+      setLocation(label);
       setAddrOpen(false);
       setAddrOpts([]);
-      setPinLat(opt.lat);
-      setPinLng(opt.lng);
-      setMapCenter({ lat: opt.lat, lng: opt.lng });
+      let lat = opt.lat;
+      let lng = opt.lng;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        const geo = await geocodePlace(label);
+        if (geo) { lat = geo.lat; lng = geo.lng; }
+      }
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      setPinLat(lat);
+      setPinLng(lng);
+      setMapCenter({ lat, lng });
       requestAnimationFrame(() => {
         mapWrapRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
         window.dispatchEvent(new Event("resize"));
@@ -14229,7 +14756,8 @@ import React, {
                   key={c.key}
                   type="button"
                   className={"city-autocomplete-opt" + (c.city === city && c.countryCode === countryCode ? " on" : "")}
-                  onClick={() => pickCity(c)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onPointerDown={(e) => { e.preventDefault(); pickCity(c); }}
                 >
                   {c.label}
                 </button>
@@ -14248,14 +14776,15 @@ import React, {
             disabled={secretAddress}
             autoComplete="off"
           />
-          {addrOpen && !secretAddress && addrOpts.length > 0 && (
+              {addrOpen && !secretAddress && addrOpts.length > 0 && (
             <div className="city-autocomplete-drop">
               {addrOpts.map((a) => (
                 <button
                   key={a.key}
                   type="button"
                   className="city-autocomplete-opt"
-                  onClick={() => pickAddress(a)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onPointerDown={(e) => { e.preventDefault(); pickAddress(a); }}
                 >
                   {a.label}
                 </button>
@@ -15019,14 +15548,16 @@ import React, {
   .install-coach-share-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:14px;padding:14px 18px}
   .install-coach-card--action .install-coach-foot{margin-top:12px;font-size:12px;color:#8C6BD8}
   .feed-post-media-wrap{position:relative;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:pan-y;-webkit-user-select:none;user-select:none}
+  .feed-drag-rate--active,.feed-post-media-wrap.feed-drag-rate--active,.reel-slide-media.feed-drag-rate--active,.ech-media-viewer-media.feed-drag-rate--active,.story-slide.feed-drag-rate--active{touch-action:none!important}
   .feed-post-media-wrap .post-media,.feed-post-media-wrap video{pointer-events:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .feed-post-media-wrap .media-overlay{pointer-events:none!important}
   .feed-post-media-wrap .media-overlay--tag{pointer-events:auto!important;z-index:9;cursor:pointer;touch-action:manipulation}
   .feed-rating-overlay{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#000;touch-action:none;pointer-events:none;transition:opacity .18s ease}
   .feed-rating-overlay.commit{background:#000}
-  .feed-drag-stars{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#000;touch-action:none;pointer-events:none}
+  .feed-drag-stars{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(0,0,0,.72);touch-action:none;pointer-events:none}
+  .feed-post-media-wrap,.reel-slide-media,.ech-media-viewer-media,.story-slide{position:relative}
   .feed-drag-stars-row{display:flex;align-items:center;justify-content:center;gap:12px;padding:0 8px}
-  .feed-drag-stars-row svg{transition:transform .14s ease,color .14s ease,fill .14s ease}
+  .feed-drag-stars-row svg{transition:transform .1s ease,color .1s ease,fill .1s ease}
   .feed-drag-stars-row .lit{filter:drop-shadow(0 0 14px rgba(255,213,107,.7));transform:scale(1.08)}
   .feed-drag-stars-label{font-size:15px;font-weight:800;color:#fff;letter-spacing:.04em;text-shadow:0 2px 8px rgba(0,0,0,.4)}
   .appbody--ig{padding-bottom:58px}
@@ -15078,10 +15609,25 @@ import React, {
   .ig-notif-btn--primary{background:#0095F6;color:#fff}
   .ig-notif-btn--primary:active{opacity:.9}
   .ig-notif-btn--muted{background:#EFEFEF;color:#8E8E8E;cursor:default}
-  .compose-camera-settings{position:absolute;top:max(58px,env(safe-area-inset-top));right:16px;z-index:5;background:rgba(0,0,0,.65);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:6px}
-  .compose-camera-settings button{border:none;border-radius:8px;padding:8px 12px;background:rgba(255,255,255,.15);color:#fff;font-weight:700;cursor:pointer}
-  .compose-camera-settings button.on{background:#fff;color:#111}
-  .compose-camera-settings-hint{font-size:10px;color:rgba(255,255,255,.75);max-width:140px;line-height:1.35}
+  .compose-camera-settings-backdrop{position:absolute;inset:0;z-index:14;border:none;background:rgba(0,0,0,.42);cursor:pointer}
+  .compose-camera-settings-sheet{position:absolute;left:0;right:0;bottom:0;z-index:15;max-height:min(58vh,420px);background:#FFFBFE;border-radius:20px 20px 0 0;padding:16px 16px max(18px,env(safe-area-inset-bottom));overflow-y:auto;scrollbar-width:none;font-family:var(--font-sans);font-size:15px;line-height:1.5;letter-spacing:-.018em;font-weight:500;box-shadow:0 -10px 36px rgba(90,74,96,.14);border-top:1px solid #EBD9F0}
+  .compose-camera-settings-sheet::-webkit-scrollbar{display:none}
+  .compose-camera-settings-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+  .compose-camera-settings-head b{font-size:16px;font-weight:800;color:#5A4A60;letter-spacing:-.03em}
+  .compose-camera-settings-ok{border:none;background:transparent;color:#8C6BD8;font-size:15px;font-weight:800;cursor:pointer;padding:4px 0}
+  .compose-camera-settings-row{display:flex;align-items:center;gap:10px;width:100%;border:none;background:transparent;color:#5A4A60;padding:12px 0;font-size:15px;font-weight:700;cursor:pointer;border-bottom:1px solid #F0E6F4;text-align:left}
+  .compose-camera-settings-row span{flex:1}
+  .compose-camera-settings-section{margin:12px 0 6px;font-size:12px;font-weight:800;color:#8C6BD8;text-transform:uppercase;letter-spacing:.05em}
+  .compose-camera-settings-sub{margin:4px 0 8px;font-size:12px;color:#9A8AA4;line-height:1.45}
+  .compose-camera-settings-toggle{width:100%;margin-bottom:6px;background:#F8F2FC;border:1px solid #EBD9F0;border-radius:14px}
+  .compose-camera-settings-radios{display:flex;flex-direction:column;gap:4px;margin-bottom:6px}
+  .compose-camera-settings-radio{display:flex;align-items:center;gap:10px;border:none;background:transparent;color:#5A4A60;padding:10px 4px;font-size:14px;font-weight:700;cursor:pointer;text-align:left}
+  .compose-camera-settings-radio-dot{width:18px;height:18px;border-radius:50%;border:2px solid #C9B8D6;flex-shrink:0;display:grid;place-items:center}
+  .compose-camera-settings-radio.on .compose-camera-settings-radio-dot{border-color:#8C6BD8;background:radial-gradient(circle at center,#8C6BD8 0 5px,transparent 6px)}
+  .compose-camera-settings-note{font-size:11px;color:#9A8AA4;line-height:1.45;margin:6px 0 0}
+  .compose-camera-timer-row{position:absolute;left:50%;bottom:max(196px,calc(168px + env(safe-area-inset-bottom)));transform:translateX(-50%);z-index:8;display:flex;gap:8px;background:rgba(0,0,0,.55);padding:6px 10px;border-radius:999px}
+  .compose-camera-timer-row button{border:none;border-radius:999px;padding:6px 12px;background:rgba(255,255,255,.15);color:#fff;font-size:12px;font-weight:700;cursor:pointer}
+  .compose-camera-timer-row button.on{background:#fff;color:#111}
   .compose-camera-countdown{position:absolute;inset:0;z-index:5;display:grid;place-items:center;font-size:88px;font-weight:800;color:#fff;text-shadow:0 4px 24px rgba(0,0,0,.5)}
   .compose-camera-layout-hint{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:5;padding:8px 14px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-weight:800}
   .compose-camera-tool.on{opacity:1;transform:scale(1.05);background:rgba(255,255,255,.22);border-radius:12px;box-shadow:0 0 0 2px rgba(255,255,255,.85)}
@@ -15093,9 +15639,11 @@ import React, {
   .compose-layout-cell.active{border-color:#FFD56B;box-shadow:0 0 0 2px rgba(255,213,107,.55);background:rgba(255,213,107,.12)}
   .compose-layout-picker button{display:grid;place-items:center;padding:6px}
   .story-editor-bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(28px) brightness(.45);transform:scale(1.08)}
+  .story-editor-media-frame{position:relative;z-index:2;flex:0 1 auto;max-width:calc(100% - 48px);max-height:100%;width:min(100%,calc(100% - 48px));height:100%;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .story-editor-media--fit{position:relative;z-index:2;max-width:100%;max-height:100%;width:auto!important;height:auto!important;object-fit:contain;display:block}
   .story-editor-media--contain{object-fit:contain!important;position:relative;z-index:2}
   .story-editor-draw{position:absolute;inset:0;z-index:4;pointer-events:none}
-  .story-editor-draw-canvas{position:absolute;inset:0;z-index:5;touch-action:none;cursor:crosshair}
+  .story-editor-draw-canvas{position:absolute;inset:0;z-index:9;touch-action:none;cursor:crosshair;pointer-events:auto}
   .story-editor-pill.on{outline:2px solid #fff}
   .feed-scroll--ig .feed-list{gap:0}
   .feed-scroll--ig .feed-post--ig{border-radius:0;border:none;border-bottom:1px solid #EFEFEF;box-shadow:none;animation:none}
@@ -15186,23 +15734,26 @@ import React, {
   .compose-layout-picker button{border:none;background:rgba(255,255,255,.12);color:#fff;width:42px;height:42px;border-radius:12px;cursor:pointer;pointer-events:auto}
   .compose-layout-picker button.on{background:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.9)}
   .compose-layout-picker button.on .compose-layout-preview em{background:#111}
-  .story-gallery{position:fixed;inset:0;z-index:99990;background:#000;color:#fff;display:flex;flex-direction:column;font-family:var(--font-sans);overflow:hidden}
-  .story-gallery-head{display:flex;align-items:center;justify-content:space-between;padding:max(10px,env(safe-area-inset-top)) 14px 10px}
+  .story-gallery{position:fixed;inset:0;left:0;right:0;top:0;bottom:0;width:100vw;max-width:100vw;min-width:100%;height:100dvh;min-height:100dvh;z-index:99990;background:#000;color:#fff;display:flex;flex-direction:column;align-items:stretch;font-family:var(--font-sans);overflow:hidden;box-sizing:border-box}
+  .story-gallery-head{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:max(10px,env(safe-area-inset-top)) 14px 10px;width:100%}
   .story-gallery-head h1{margin:0;font-size:17px;font-weight:800;font-family:var(--font-display);letter-spacing:-.03em}
   .story-gallery-x,.story-gallery-settings{border:none;background:transparent;color:#fff;padding:8px;cursor:pointer}
-  .story-gallery-features{display:flex;gap:10px;padding:10px 14px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .story-gallery-features{flex-shrink:0;display:flex;gap:10px;padding:10px 14px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none;width:100%;box-sizing:border-box}
   .story-gallery-features::-webkit-scrollbar{display:none}
   .story-gallery-feature{flex:0 0 112px;background:linear-gradient(145deg,#1a1a1a,#262626);border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:16px 10px;color:#fff;cursor:pointer;transition:transform .15s,background .15s}
   .story-gallery-feature:active{transform:scale(.96)}
   .story-gallery-feature:hover{background:linear-gradient(145deg,#222,#2e2e2e)}
   .story-gallery-feature-ic{font-size:28px;display:block;margin-bottom:8px}
   .story-gallery-feature small{font-size:11px;font-weight:700;font-family:var(--font-sans);letter-spacing:-.01em}
-  .story-gallery-bar{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;gap:8px}
+  .story-gallery-bar{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:8px 14px;gap:8px;width:100%;box-sizing:border-box}
+  .story-gallery-perms{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 14px 10px;width:100%;box-sizing:border-box}
+  .story-gallery-perms p{margin:0;flex:1;font-size:11px;line-height:1.35;color:rgba(255,255,255,.72)}
+  .story-gallery-manage{border:none;background:transparent;color:#0095F6;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap}
   .story-gallery-bar-actions{display:flex;align-items:center;gap:10px;margin-left:auto}
   .story-gallery-recents,.story-gallery-select,.story-gallery-delete-selected{border:none;background:transparent;color:#fff;font-size:14px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
   .story-gallery-select.on{color:#0095F6}
   .story-gallery-delete-selected{color:#FF453A}
-  .story-gallery-grid{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;padding:0 0 12px;align-content:start;scrollbar-width:none;-ms-overflow-style:none}
+  .story-gallery-grid{flex:1;min-height:0;width:100%;align-self:stretch;overflow-y:auto;overflow-x:hidden;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1px;padding:0 0 max(12px,env(safe-area-inset-bottom));align-content:start;scrollbar-width:none;-ms-overflow-style:none;box-sizing:border-box}
   .story-gallery-grid::-webkit-scrollbar{display:none;width:0;height:0}
   .story-gallery-tile-wrap{position:relative;aspect-ratio:1;width:100%;min-height:0}
   .story-gallery-tile-wrap.selected{outline:3px solid #0095F6;outline-offset:-3px;z-index:1}
@@ -15376,24 +15927,33 @@ import React, {
   .ig-comments-sheet--ig .ig-comment-age{font-size:12px;color:#8E8E8E;margin-left:6px;font-weight:400}
   .ig-comments-input-wrap{flex:1;display:flex;align-items:center;background:#EFEFEF;border-radius:999px;padding:0 12px 0 14px}
   .ig-comments-input-wrap input{flex:1;border:none;background:transparent;padding:10px 0;font-size:14px;outline:none}
-  .story-music-picker{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .story-music-picker{display:flex;flex-direction:column;gap:8px;max-height:min(42vh,220px);overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;padding:2px 0}
   .story-music-picker::-webkit-scrollbar{display:none}
-  .story-music-track{display:flex;align-items:center;gap:10px;border:none;background:rgba(255,255,255,.12);color:#fff;padding:8px 10px;border-radius:10px;cursor:pointer;text-align:left}
+  .story-music-track{display:flex;align-items:flex-start;gap:8px;border:none;background:rgba(255,255,255,.12);color:#fff;padding:10px 10px;border-radius:10px;cursor:pointer;text-align:left;width:100%;flex-shrink:0;min-height:52px;box-sizing:border-box}
   .story-music-track.on{background:rgba(0,149,246,.45)}
   .story-music-add-btn{margin-top:8px;border:none;background:#0095F6;color:#fff;font-size:14px;font-weight:800;padding:12px;border-radius:12px;cursor:pointer;width:100%}
   .story-music-applied{display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:12px;font-weight:600;color:rgba(255,255,255,.85)}
-  .story-music-track span{display:flex;flex-direction:column;gap:2px}
-  .story-music-track small{opacity:.8;font-size:11px}
+  .story-music-track span{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1;overflow:hidden}
+  .story-music-track b{font-size:12px;font-weight:700;line-height:1.3;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .story-music-track small{opacity:.78;font-size:10px;line-height:1.3;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .story-text-subtools{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+  .story-text-subtool{display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(255,255,255,.14);color:#fff;font-size:11px;font-weight:700;padding:8px 10px;border-radius:10px;cursor:pointer}
   .story-editor-trim{display:flex;flex-direction:column;gap:8px;padding:4px 0}
   .story-editor-trim-label{font-size:11px;font-weight:700;color:rgba(255,255,255,.9)}
   .story-editor-trim input[type=range]{width:100%}
   .post-music-audio{display:none}
   .compose-camera--fullscreen{position:absolute;inset:0;width:100%;height:100%;max-height:none;aspect-ratio:auto;border-radius:0;margin:0}
   .compose-camera--fullscreen .compose-camera-video{object-fit:cover}
-  .compose-camera-top{position:absolute;top:0;left:0;right:0;z-index:4;display:flex;align-items:center;justify-content:space-between;padding:max(12px,env(safe-area-inset-top)) 16px 8px}
+  .compose-camera-top{position:absolute;top:0;left:0;right:0;z-index:20;display:flex;align-items:center;justify-content:space-between;padding:max(12px,env(safe-area-inset-top)) 16px 8px;pointer-events:none}
+  .compose-camera-topbtn,.compose-camera-top>*{pointer-events:auto}
   .compose-camera-topbtn{width:44px;height:44px;border:none;background:transparent;color:#fff;display:grid;place-items:center;cursor:pointer;filter:drop-shadow(0 1px 4px rgba(0,0,0,.5))}
-  .compose-camera-tools{position:absolute;left:12px;top:50%;transform:translateY(-50%);z-index:4;display:flex;flex-direction:column;gap:18px}
-  .compose-camera-tool{width:40px;height:40px;border:none;background:transparent;color:#fff;display:grid;place-items:center;cursor:pointer;filter:drop-shadow(0 1px 4px rgba(0,0,0,.5))}
+  .compose-camera-tools{position:absolute;left:max(12px,env(safe-area-inset-left));top:50%;transform:translateY(-50%);z-index:8;display:flex;flex-direction:column;gap:18px;pointer-events:auto;touch-action:manipulation}
+  .compose-camera-tools--right{left:auto;right:max(12px,env(safe-area-inset-right))}
+  .compose-camera-tool{width:44px;height:44px;border:none;background:rgba(0,0,0,.28);border-radius:12px;color:#fff;display:grid;place-items:center;cursor:pointer;filter:drop-shadow(0 1px 4px rgba(0,0,0,.5));pointer-events:auto;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+  .compose-camera-tool.on{background:rgba(255,255,255,.22);box-shadow:0 0 0 2px rgba(255,255,255,.75)}
+  .compose-camera-handsfree{position:relative}
+  .compose-handsfree-timer{position:absolute;right:-4px;top:-6px;min-width:18px;height:18px;padding:0 4px;border-radius:999px;background:#0095F6;color:#fff;font-size:9px;font-weight:800;font-style:normal;display:grid;place-items:center;line-height:1}
+  .compose-camera-handsfree-hint{position:absolute;left:50%;bottom:max(148px,calc(120px + env(safe-area-inset-bottom)));transform:translateX(-50%);z-index:7;padding:8px 14px;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:12px;font-weight:700;pointer-events:none;white-space:nowrap}
   .compose-camera-bottom{position:absolute;left:0;right:0;bottom:0;z-index:4;padding:0 12px max(16px,env(safe-area-inset-bottom))}
   .compose-camera-modes{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px;flex-wrap:nowrap;overflow-x:auto;font-family:var(--font-sans)}
   .compose-camera-mode{border:none;background:transparent;color:rgba(255,255,255,.75);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;padding:6px 4px;white-space:nowrap;font-family:inherit}
@@ -15512,7 +16072,7 @@ import React, {
   .compose-camera-fallback--portal{position:absolute;bottom:max(100px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);color:rgba(255,255,255,.8);z-index:5}
   .story-editor{position:fixed;inset:0;z-index:99990;background:#0d0d0d;display:flex;flex-direction:column;overflow:hidden;font-family:var(--font-sans)}
   .story-editor-close{position:absolute;top:max(12px,env(safe-area-inset-top));left:12px;z-index:8;width:40px;height:40px;border-radius:12px;border:none;background:rgba(30,20,40,.55);color:#fff;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(10px)}
-  .story-editor-stage{flex:1;min-height:0;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#000;padding-right:48px;touch-action:none}
+  .story-editor-stage{flex:1;min-height:min(45dvh,320px);position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:#000;padding-right:48px;touch-action:none}
   .story-editor-stage .media-overlay--edit{z-index:8}
   .story-editor-media{width:100%;height:100%;object-fit:cover}
   .story-editor-rail{position:absolute;right:8px;top:max(58px, calc(env(safe-area-inset-top) + 48px));bottom:12px;z-index:6;display:flex;flex-direction:column;gap:6px;overflow-y:auto;scrollbar-width:none;padding:2px 0}
@@ -15741,7 +16301,9 @@ import React, {
   .overlay-drag-handle{position:absolute;bottom:-38px;left:50%;transform:translateX(-50%);width:44px;height:44px;border-radius:14px;border:none;background:rgba(255,255,255,.95);color:#6B5080;display:grid;place-items:center;cursor:grab;box-shadow:0 6px 20px rgba(0,0,0,.28);touch-action:none}
   .overlay-drag-handle:active{cursor:grabbing}
   .overlay-delete-btn{position:absolute;top:-12px;right:-12px;width:28px;height:28px;border-radius:50%;border:none;background:#FF7FA6;color:#fff;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.2)}
-  .media-overlay-inline-edit{background:transparent;border:none;outline:none;font:inherit;font-weight:800;text-shadow:0 2px 12px rgba(0,0,0,.55);min-width:48px;max-width:min(80vw,280px);padding:2px 6px}
+  .overlay-resize-handle{position:absolute;right:-10px;bottom:-10px;width:22px;height:22px;border-radius:6px;border:2px solid #fff;background:rgba(183,156,240,.85);cursor:nwse-resize;touch-action:none;box-shadow:0 4px 12px rgba(0,0,0,.28)}
+  .overlay-resize-handle::after{content:"";position:absolute;inset:5px;border-right:2px solid #fff;border-bottom:2px solid #fff;border-radius:1px}
+  .media-overlay-inline-edit{background:rgba(0,0,0,.38);border:1px solid rgba(255,255,255,.35);border-radius:10px;outline:none;font:inherit;font-weight:800;text-shadow:0 2px 12px rgba(0,0,0,.55);min-width:120px;max-width:min(80vw,280px);padding:8px 12px;caret-color:#fff}
   .compose-sticker-emoji span{font-size:28px;line-height:1}
   .story-editor-overlay-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(0,0,0,.72);border-top:1px solid rgba(255,255,255,.08)}
   .story-editor-overlay-bar .compose-overlay-bar-hint{color:rgba(255,255,255,.75)}
@@ -15880,9 +16442,9 @@ import React, {
   .viewfinder-privacy-toggle span{font-size:12px;font-weight:800;color:#3D3048;line-height:1.35}
   .viewfinder-privacy-sub{display:block;margin-top:8px;font-size:10.5px;line-height:1.45;color:#8C6BD8;font-weight:700}
   .viewfinder-empty{text-align:center;padding:8px 14px 0;font-size:12px}
-  .viewfinder-map-wrap{flex:1;min-height:280px;border-radius:0;overflow:hidden;border:none;border-top:1px solid #ECE8EF;border-bottom:1px solid #ECE8EF;box-shadow:none;position:relative}
-  .viewfinder-map{width:100%;height:100%;min-height:280px;z-index:0}
-  .viewfinder-loading{position:absolute;inset:0;display:grid;place-items:center;background:rgba(255,251,254,.85);z-index:2}
+  .viewfinder-map-wrap{flex:1;min-height:min(52vh,360px);border-radius:0;overflow:hidden;border:none;border-top:1px solid #ECE8EF;border-bottom:1px solid #ECE8EF;box-shadow:none;position:relative;background:#E8E4EC}
+  .viewfinder-map{width:100%;height:100%;min-height:min(52vh,360px);z-index:0;touch-action:pan-x pan-y}
+  .viewfinder-loading{position:absolute;inset:0;display:grid;place-items:center;background:rgba(255,251,254,.72);z-index:2;pointer-events:none}
   .viewfinder-detail{display:flex;align-items:center;gap:14px;padding:14px 16px;flex-shrink:0;margin:8px max(14px,env(safe-area-inset-left)) 0 max(14px,env(safe-area-inset-right));border-radius:16px;border:1px solid #ECE8EF;box-shadow:0 6px 18px rgba(120,90,140,.06)}
   .viewfinder-hint{padding:8px max(14px,env(safe-area-inset-left)) 4px max(14px,env(safe-area-inset-right));font-size:11.5px;line-height:1.45}
   .viewfinder-detail-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
@@ -16683,12 +17245,13 @@ import React, {
 
   /* Instagram-style DM */
   .dm-screen{position:absolute;inset:0;z-index:45;background:#FFFDFE;display:flex;flex-direction:column;animation:fade .2s}
-  .dm-head{display:flex;align-items:center;gap:10px;padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top,0px));border-bottom:1px solid #F2E9F0;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);flex-shrink:0}
-  .dm-head-meta{flex:1;min-width:0;line-height:1.25;text-align:left}
-  .dm-head-meta b{display:block;font-size:14px;color:#5A4A60}
-  .dm-head-meta .muted{font-size:11px}
+  .dm-head{display:flex;align-items:center;gap:8px;padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top,0px));border-bottom:1px solid #F2E9F0;background:rgba(255,255,255,.96);backdrop-filter:blur(10px);flex-shrink:0}
+  .dm-head-meta{flex:1;min-width:0;line-height:1.25;text-align:left;overflow:hidden}
+  .dm-head-meta b{display:block;font-size:14px;color:#5A4A60;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dm-head-meta .muted{display:block;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dm-head-score{font-style:normal;color:#8C6BD8;font-weight:800}
-  .dm-head-profile{flex:1;min-width:0;display:flex;align-items:center;gap:10px;border:none;background:none;padding:0;cursor:pointer;text-align:left;font:inherit}
+  .dm-head-profile{flex:1;min-width:0;max-width:42%;display:flex;align-items:center;gap:10px;border:none;background:none;padding:0;cursor:pointer;text-align:left;font:inherit}
+  .dm-head-actions{display:flex;align-items:center;gap:5px;flex-shrink:0;margin-left:auto}
   .dm-head-profile:active{opacity:.85}
   .dm-end-btn{border:none;background:#FFF1F6;color:#E07AA0;font-weight:800;font-size:11px;padding:7px 11px;border-radius:999px;cursor:pointer;white-space:nowrap;flex-shrink:0}
   .dm-end-btn:active{transform:scale(.96)}
@@ -16784,12 +17347,14 @@ import React, {
   .dm-tip-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:#9B8FA8;line-height:1.4}
   .dm-tip-body b{font-size:12.5px;color:#5A4A60}
   .dm-tip-btn{flex-shrink:0;border:none;border-radius:999px;padding:7px 12px;font-family:var(--font-sans);font-size:10.5px;font-weight:800;color:#fff;background:linear-gradient(120deg,#FF9DC0,#C6A0F0);cursor:pointer;white-space:nowrap}
-  .dm-reply-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid #F2E9F0;background:#FFFBFE;flex-shrink:0}
+  .dm-reply-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid #F2E9F0;background:#FFFBFE;flex-shrink:0;cursor:pointer;touch-action:manipulation}
   .dm-reply-bar-inner{flex:1;min-width:0;border-left:3px solid #B79CF0;padding-left:10px}
   .dm-reply-bar-label{display:block;font-size:10px;font-weight:800;color:#B79CF0;text-transform:uppercase;letter-spacing:.06em}
   .dm-reply-bar-text{display:block;font-size:12px;color:#5A4A60;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
   .dm-reply-bar-x{width:30px;height:30px;border:none;border-radius:50%;background:#F3ECF6;color:#9B8FA8;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
-  .dm-reply-in{display:flex;gap:8px;align-items:stretch;margin:4px 6px 6px;padding:6px 8px;border-radius:10px;background:rgba(0,0,0,.06);font-size:11px;line-height:1.35}
+  .dm-reply-in{display:flex;gap:8px;align-items:stretch;margin:4px 6px 6px;padding:6px 8px;border-radius:10px;background:rgba(0,0,0,.06);font-size:11px;line-height:1.35;cursor:pointer;touch-action:manipulation;transition:background .18s ease}
+  .dm-reply-in:active{background:rgba(0,0,0,.1)}
+  .dm-row--target .dm-bubble{box-shadow:0 0 0 2px rgba(183,156,240,.65),0 8px 24px rgba(120,80,140,.18);transition:box-shadow .25s ease}
   .dm-reply-in.mine{background:rgba(255,255,255,.18)}
   .dm-reply-in-bar{width:3px;border-radius:999px;background:#B79CF0;flex-shrink:0}
   .dm-reply-in.mine .dm-reply-in-bar{background:rgba(255,255,255,.85)}
@@ -16827,6 +17392,8 @@ import React, {
   .call-ctrl-label{font-size:10px;font-weight:700;color:rgba(255,255,255,.88);text-align:center;line-height:1.2;max-width:76px}
   .call-ctrl.on{background:rgba(255,255,255,.28)}
   .call-ctrl.end{background:#E85D7A;box-shadow:0 8px 24px rgba(232,93,122,.45)}
+  .call-ctrl.accept{background:#5FD6A0;box-shadow:0 8px 24px rgba(95,214,160,.35)}
+  .story-slide{position:relative}
   .call-ctrl:active{transform:scale(.94)}
   .call-screen--video{background:#0d0818;justify-content:flex-end}
   .call-video-stage{flex:1;min-height:0;position:relative;overflow:hidden;display:flex;flex-direction:column}
@@ -16859,7 +17426,7 @@ import React, {
   .city-autocomplete{position:relative;margin-bottom:10px}
   .city-autocomplete-drop{position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:12;background:#fff;border:1px solid rgba(183,156,240,.28);border-radius:16px;box-shadow:0 12px 32px rgba(120,90,140,.16);max-height:220px;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none;padding:6px}
   .city-autocomplete-drop::-webkit-scrollbar{display:none}
-  .city-autocomplete-opt{display:block;width:100%;border:none;background:transparent;text-align:left;padding:14px 16px;font-family:var(--font-sans);font-size:15px;font-weight:600;color:var(--text-primary);cursor:pointer;border-radius:12px;min-height:48px;line-height:1.25}
+  .city-autocomplete-opt{display:block;width:100%;border:none;background:transparent;text-align:left;padding:14px 16px;font-family:var(--font-sans);font-size:15px;font-weight:600;color:var(--text-primary);cursor:pointer;border-radius:12px;min-height:48px;line-height:1.25;-webkit-user-select:none;user-select:none;touch-action:manipulation}
   .city-autocomplete-opt.on,.city-autocomplete-opt:active{background:#F5EEFF;color:#8C6BD8}
   .dt-wheels{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:6px 0 8px}
   .dt-wheel{height:132px;overflow-y:auto;scroll-snap-type:y mandatory;border:1px solid rgba(183,156,240,.22);border-radius:12px;background:#FFFBFE;-webkit-overflow-scrolling:touch;scrollbar-width:none;-ms-overflow-style:none}
@@ -16872,7 +17439,7 @@ import React, {
   .party-price-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:4px}
   .party-price-input{margin-bottom:0!important}
   .party-currency-select{margin-bottom:0!important;min-width:88px;padding-right:28px}
-  .party-map-wrap{margin:10px 0 14px;border-radius:16px;overflow:hidden;border:1px solid rgba(183,156,240,.25);height:200px}
+  .party-map-wrap{margin:10px 0 14px;border-radius:16px;overflow:hidden;border:1px solid rgba(183,156,240,.25);height:220px;min-height:220px;background:#E8E4EC;position:relative}
   .party-pin-map{width:100%;height:200px;z-index:0}
   .party-map-pin{width:28px;height:28px;background:linear-gradient(135deg,#FF9DC0,#C6A0F0);border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 4px 12px rgba(120,80,110,.35)}
   .party-secret-map-note{font-size:11px;margin:0 0 10px;padding:8px 10px;border-radius:10px;background:#FFF8FC;border:1px solid #F0E6F0;line-height:1.45}
@@ -16943,15 +17510,30 @@ import React, {
   .feed-post--focus .feed-post-media{aspect-ratio:4/5}
   .feed-post-overlay-top{position:absolute;top:12px;left:12px;right:12px;z-index:6;display:flex;align-items:center;justify-content:space-between;gap:8px}
   .feed-post-overlay-top-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
-  .feed-post-overlay-author--top{position:static;max-width:min(68%,calc(100% - 120px));padding:5px 11px 5px 8px}
+  .feed-post-overlay-author--top{position:static;max-width:min(72%,calc(100% - 108px));padding:5px 11px 5px 8px}
   .feed-post-overlay-type{display:grid;place-items:center;flex-shrink:0;opacity:.92}
+  .feed-post-overlay-handle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .feed-post-overlay-btn{width:34px;height:34px;border:1px solid rgba(255,255,255,.22);border-radius:12px;background:rgba(20,12,28,.38);backdrop-filter:blur(12px);color:#fff;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.18)}
-  .feed-post-overlay-sent{width:34px;height:34px;border-radius:12px;background:rgba(20,12,28,.32);color:rgba(255,255,255,.85);display:grid;place-items:center}
+  .feed-post-overlay-sent{width:34px;height:34px;border-radius:12px;background:rgba(20,12,28,.32);color:rgba(255,255,255,.85);display:grid;place-items:center;pointer-events:none;touch-action:none}
   .feed-post-overlay-sent--following{background:rgba(95,214,160,.35);color:#eafff5}
   .feed-post-overlay-sent--pending{background:rgba(183,156,240,.35);color:#fff}
   .feed-post-overlay-author{position:absolute;left:12px;bottom:12px;z-index:6;display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.18);background:rgba(20,12,28,.4);backdrop-filter:blur(14px);color:#fff;padding:5px 11px 5px 5px;border-radius:999px;font-size:11px;font-weight:700;cursor:pointer;max-width:calc(100% - 24px);box-shadow:0 4px 16px rgba(0,0,0,.2)}
   .feed-post-overlay-author span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .feed-post-overlay-score{font-style:normal;display:inline-flex;align-items:center;gap:2px;font-size:10px;font-weight:800;color:#FFD56B;margin-left:2px}
+  .feed-post-overlay-score{font-style:normal;display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:800;color:#FFD56B;padding:5px 9px;border-radius:999px;background:rgba(20,12,28,.45);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.14)}
+  .feed-post-overlay-bottom{position:absolute;left:12px;bottom:12px;z-index:6;pointer-events:none}
+  .post-rate-star{position:absolute;top:10px;right:10px;z-index:6;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:rgba(0,0,0,.45);backdrop-filter:blur(8px);pointer-events:none}
+  .post-rate-star.empty{border:1.5px solid rgba(255,255,255,.75);background:rgba(0,0,0,.35)}
+  .post-rate-star.filled{background:rgba(255,213,107,.22);border:1px solid rgba(255,213,107,.45)}
+  .post-rate-star--media{top:56px;right:12px}
+  .ech-discover-tile .post-rate-star{top:8px;right:8px}
+  .media-overlay-text--placeholder{opacity:.72;font-style:italic}
+  .compose-draw-colors{flex-wrap:wrap;max-height:88px;overflow-y:auto}
+  .story-draw-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+  .story-draw-width{flex:1;display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:700;color:rgba(255,255,255,.8)}
+  .story-draw-width input{width:100%}
+  .story-draw-actions{display:flex;gap:6px}
+  .story-draw-action{border:none;background:rgba(255,255,255,.14);color:#fff;font-size:11px;font-weight:700;padding:6px 10px;border-radius:8px;cursor:pointer}
+  .applebtn-logo{filter:invert(1)}
   .feed-post-bar{padding:10px max(14px,env(safe-area-inset-left)) 12px max(14px,env(safe-area-inset-right));background:#fff}
   .feed-post-actions--icon .feed-action span{font-size:11px;font-weight:800;color:#8A7A98}
   .feed-post-actions--icon .feed-action{padding:4px 8px;gap:5px}
@@ -17066,6 +17648,7 @@ import React, {
   .ech-discover-tile{position:relative;aspect-ratio:3/4;border:none;padding:0;border-radius:0;overflow:hidden;background:#1a1228;cursor:pointer;box-shadow:none}
   .ech-discover-tile img,.ech-discover-tile video{width:100%;height:100%;object-fit:cover;display:block}
   .ech-discover-type{position:absolute;top:8px;left:8px;width:26px;height:26px;border-radius:8px;background:rgba(20,12,28,.55);backdrop-filter:blur(8px);color:#fff;display:grid;place-items:center;z-index:2}
+  .ech-discover-author{position:absolute;top:8px;left:40px;z-index:2;max-width:calc(100% - 48px);padding:5px 8px;border-radius:8px;background:rgba(20,12,28,.55);backdrop-filter:blur(8px);color:#fff;font-size:10px;font-weight:800;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ech-discover-meta{position:absolute;left:0;right:0;bottom:0;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;background:linear-gradient(180deg,transparent,rgba(12,8,20,.82));font-family:var(--font-sans);font-size:9px;font-weight:800;color:rgba(255,255,255,.92)}
   .ech-discover-meta-item,.ech-discover-meta-score{display:inline-flex;align-items:center;gap:3px}
   .ech-discover-meta-score.mine{color:#FFD0E4}
@@ -17144,7 +17727,7 @@ import React, {
   .ech-media-viewer-media .feed-post-media,.ech-media-viewer-media .post-img,.ech-media-viewer-media video,.ech-media-viewer-media img{width:100%;height:100%;object-fit:cover;border-radius:0}
   .ech-media-viewer-top{position:absolute;top:0;left:0;right:0;z-index:8;display:flex;align-items:center;gap:8px;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) 10px max(10px,env(safe-area-inset-left));background:linear-gradient(180deg,rgba(0,0,0,.55),transparent)}
   .ech-media-viewer-back,.ech-media-viewer-iconbtn{border:none;background:rgba(30,20,40,.5);color:#fff;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(10px);flex-shrink:0}
-  .ech-media-viewer-iconbtn--state{cursor:default;background:rgba(95,214,160,.28);color:#eafff5}
+  .ech-media-viewer-iconbtn--state{cursor:default;background:rgba(95,214,160,.28);color:#eafff5;pointer-events:none;touch-action:none}
   .ech-media-viewer-iconbtn--danger{background:rgba(255,59,122,.32);color:#fff}
   .ech-media-viewer-top-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
   .ech-media-viewer-author-chip{flex:1;min-width:0;border:none;background:rgba(30,20,40,.45);color:#fff;border-radius:999px;padding:5px 11px 5px 8px;display:inline-flex;align-items:center;gap:7px;cursor:pointer;backdrop-filter:blur(10px);font-family:var(--font-sans)}
@@ -17313,7 +17896,7 @@ import React, {
   .ech-user-qbtn--block.on{color:#8C6BD8}
   .ech-user-qbtn.on{color:#8C6BD8}
   .ech-user-qbtn{flex:1;min-width:0;border:none;background:transparent;display:flex;flex-direction:column;align-items:center;gap:2px;color:#6B5080;font-size:9px;font-weight:700;cursor:pointer;padding:4px 2px}
-  .ech-user-qbtn--state{cursor:default;opacity:.85;color:#8C6BD8}
+  .ech-user-qbtn--state{cursor:default;opacity:.85;color:#8C6BD8;pointer-events:none;touch-action:none}
 
 
   /* ---- mobile: full-screen native feel ---- */

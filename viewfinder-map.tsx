@@ -112,11 +112,13 @@ export default function ViewFinderMap({
   onSelect,
   onPartySelect,
   className = "",
-  mediaUrl,
+  resolveMediaUrl,
+  mediaUrl: mediaUrlLegacy,
   showYou = true,
   fitKey = 0,
   restoreView = true,
 }) {
+  const mediaUrlFn = resolveMediaUrl || mediaUrlLegacy;
   const hostRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef({});
@@ -139,10 +141,16 @@ export default function ViewFinderMap({
   }, [located, searchQuery]);
 
   useEffect(() => {
-    if (!hostRef.current || mapRef.current) return;
+    const host = hostRef.current;
+    if (!host || mapRef.current) return;
+
+    if ((host as HTMLElement & { _leaflet_id?: number })._leaflet_id) {
+      delete (host as HTMLElement & { _leaflet_id?: number })._leaflet_id;
+    }
+
     const center =
       userLat != null && userLng != null ? [userLat, userLng] : DEFAULT_CENTER;
-    const map = L.map(hostRef.current, {
+    const map = L.map(host, {
       center,
       zoom: WORLD_ZOOM,
       zoomControl: false,
@@ -161,7 +169,13 @@ export default function ViewFinderMap({
     };
     map.on("moveend", onMoveEnd);
     map.on("zoomend", onMoveEnd);
-    requestAnimationFrame(() => {
+
+    const ro = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(() => map.invalidateSize())
+      : null;
+    ro?.observe(host);
+
+    const fitOnce = () => {
       map.invalidateSize();
       if (restoreView && savedMapView) {
         map.setView(savedMapView.center, savedMapView.zoom, { animate: false });
@@ -172,8 +186,15 @@ export default function ViewFinderMap({
         didInitialFit.current = true;
         rememberMapView(map);
       }
-    });
+    };
+    requestAnimationFrame(fitOnce);
+    const t1 = setTimeout(fitOnce, 120);
+    const t2 = setTimeout(fitOnce, 400);
+
     return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      ro?.disconnect();
       if (mapRef.current) rememberMapView(mapRef.current);
       map.off("moveend", onMoveEnd);
       map.off("zoomend", onMoveEnd);
@@ -184,6 +205,9 @@ export default function ViewFinderMap({
       youMarkerRef.current = null;
       didInitialFit.current = false;
       userMovedRef.current = false;
+      if ((host as HTMLElement & { _leaflet_id?: number })._leaflet_id) {
+        delete (host as HTMLElement & { _leaflet_id?: number })._leaflet_id;
+      }
     };
   }, []);
 
@@ -240,9 +264,9 @@ export default function ViewFinderMap({
       const selected = f.id === selectedId;
       if (markersRef.current[f.id]) {
         markersRef.current[f.id].setLatLng(latlng);
-        markersRef.current[f.id].setIcon(pinIcon(f, selected, mediaUrl));
+        markersRef.current[f.id].setIcon(pinIcon(f, selected, mediaUrlFn));
       } else {
-        const m = L.marker(latlng, { icon: pinIcon(f, selected, mediaUrl) }).addTo(map);
+        const m = L.marker(latlng, { icon: pinIcon(f, selected, mediaUrlFn) }).addTo(map);
         m.on("click", () => onSelect?.(f));
         m.bindTooltip(`${f.name?.split(" ")[0] || "Friend"} · ${(f.score ?? 3).toFixed(1)}★`, { direction: "top", offset: [0, -18], className: "vf-tooltip" });
         markersRef.current[f.id] = m;
@@ -252,7 +276,7 @@ export default function ViewFinderMap({
       const f = filtered.find((x) => x.id === selectedId);
       if (f) map.panTo([f.lat, f.lng], { animate: true });
     }
-  }, [filtered, selectedId, onSelect, mediaUrl]);
+  }, [filtered, selectedId, onSelect, mediaUrlFn]);
 
   useEffect(() => {
     const map = mapRef.current;

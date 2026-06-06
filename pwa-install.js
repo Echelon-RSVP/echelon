@@ -1,3 +1,5 @@
+import { isEchelonAppStoreShell } from "./native-shell.js";
+
 let deferredPrompt = typeof window !== "undefined" ? window.__echelonBip || null : null;
 
 export function isStandalone() {
@@ -33,15 +35,7 @@ export function isInAppBrowser() {
 
 /** True when running inside the iOS App Store build (native shell or marked distribution). */
 export function isEchelonIosAppStore() {
-  if (typeof window === "undefined") return false;
-  const native = window.EchelonNative;
-  if (native?.fromAppStore === true || native?.distribution === "appstore") return true;
-  if (document.querySelector('meta[name="echelon-distribution"][content="appstore"]')) return true;
-  try {
-    return isIos() && isStandalone() && localStorage.getItem("echelon-channel") === "appstore";
-  } catch {
-    return false;
-  }
+  return isEchelonAppStoreShell();
 }
 
 /**
@@ -64,7 +58,7 @@ export function getInstallKind(state = {}) {
 /** Subscribe to install availability. Returns cleanup. */
 export function initPwaInstall(onChange) {
   const emit = () => {
-    if (isStandalone()) {
+    if (isEchelonAppStoreShell() || isStandalone()) {
       onChange({
         installed: true,
         native: false,
@@ -88,7 +82,7 @@ export function initPwaInstall(onChange) {
     });
   };
 
-  if (isStandalone()) {
+  if (isEchelonAppStoreShell() || isStandalone()) {
     emit();
     return () => {};
   }

@@ -14,9 +14,13 @@ return [
 
     // Google Sign-In (Google Cloud Console → OAuth 2.0 Web client)
     'google_client_id' => '73520219376-5bvlfjlkuejnega5r9h5nqiu84r1s9si.apps.googleusercontent.com',
+    // iOS native Gmail (OAuth client type iOS, bundle rsvp.echelon.app). Also set GOOGLE_IOS_CLIENT_ID + GOOGLE_IOS_URL_SCHEME in GitHub secrets.
+    'google_ios_client_id' => '',
 
-    // Apple (optional — when Developer account is approved)
-    'apple_client_id' => '',
+    // Apple Sign In — native iOS bundle ID
+    'apple_client_id' => 'rsvp.echelon.app',
+    // Optional Services ID for Apple JS on the web (Safari / old TestFlight builds)
+    'apple_web_client_id' => '',
     'apple_redirect_uri' => 'https://echelon.rsvp/app/',
 
     // Google Gemini — face-scan baseline scoring

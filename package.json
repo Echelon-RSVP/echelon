@@ -10,6 +10,7 @@
     "setup-db": "node setup-db.mjs",
     "deploy:api": "node deploy-api.mjs",
     "deploy:app": "npm run build && node deploy-ftp.mjs",
+    "deploy:all": "node deploy-api.mjs && npm run deploy:app",
     "deploy:home": "node deploy-home.mjs",
     "migrate:prod": "node run-migrations.mjs",
     "seed:meta-reviewer": "node seed-meta-reviewer.mjs",
@@ -24,8 +25,10 @@
     "ios:build:free": "powershell -ExecutionPolicy Bypass -File scripts/setup-github-ios-build.ps1"
   },
   "dependencies": {
+    "@capacitor-community/apple-sign-in": "^7.1.0",
     "@capacitor/core": "^7.2.0",
     "@capacitor/ios": "^7.2.0",
+    "@codetrix-studio/capacitor-google-auth": "^3.4.0-rc.4",
     "@types/leaflet": "^1.9.21",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.511.0",

@@ -118,6 +118,9 @@ function handle_auth(PDO $pdo, array $cfg, string $method, array $parts): void
             $methods[] = 'google';
             $out['googleClientId'] = trim($cfg['google_client_id']);
         }
+        if (trim($cfg['google_ios_client_id'] ?? '')) {
+            $out['googleIosClientId'] = trim($cfg['google_ios_client_id']);
+        }
         if (trim($cfg['apple_client_id'] ?? '')) {
             $methods[] = 'apple';
             $out['appleClientId'] = trim($cfg['apple_client_id']);
@@ -179,11 +182,14 @@ function handle_auth(PDO $pdo, array $cfg, string $method, array $parts): void
         require_once __DIR__ . '/lib/AppleAuth.php';
         $body = Helpers::jsonBody();
         $idToken = trim($body['idToken'] ?? '');
-        $clientId = trim($cfg['apple_client_id'] ?? '');
-        if (!$clientId) Response::error('Apple Sign In not configured on server', 503);
+        $appleIds = array_values(array_unique(array_filter([
+            trim($cfg['apple_client_id'] ?? ''),
+            trim($cfg['apple_web_client_id'] ?? ''),
+        ])));
+        if ($appleIds === []) Response::error('Apple Sign In not configured on server', 503);
         if (!$idToken) Response::error('Apple identity token required');
         try {
-            $claims = AppleAuth::verify($idToken, $clientId);
+            $claims = AppleAuth::verify($idToken, $appleIds);
         } catch (Throwable $e) {
             Response::error('Apple sign-in verification failed', 401);
         }

@@ -5,8 +5,16 @@ final class AppleAuth
 {
     private static ?array $keys = null;
 
-    public static function verify(string $jwt, string $clientId): array
+    /** @param string|list<string> $clientIds Bundle ID and/or Apple Services ID */
+    public static function verify(string $jwt, string|array $clientIds): array
     {
+        $allowed = array_values(array_unique(array_filter(
+            is_array($clientIds) ? $clientIds : [$clientIds],
+            static fn($id) => is_string($id) && $id !== '',
+        )));
+        if ($allowed === []) {
+            throw new InvalidArgumentException('Apple client ID not configured');
+        }
         $parts = explode('.', $jwt);
         if (count($parts) !== 3) {
             throw new InvalidArgumentException('Invalid Apple identity token');
@@ -35,7 +43,7 @@ final class AppleAuth
         if (($payload['iss'] ?? '') !== 'https://appleid.apple.com') {
             throw new InvalidArgumentException('Apple token issuer invalid');
         }
-        if (($payload['aud'] ?? '') !== $clientId) {
+        if (!in_array($payload['aud'] ?? '', $allowed, true)) {
             throw new InvalidArgumentException('Apple token audience invalid');
         }
         if (($payload['exp'] ?? 0) < $now) {

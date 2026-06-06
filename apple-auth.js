@@ -1,4 +1,14 @@
+import {
+  isCapacitorIos,
+  isEchelonAppStoreShell,
+  useNativeAppleSignIn,
+} from "./native-shell.js";
+
+const APPLE_NATIVE_CLIENT_ID = "rsvp.echelon.app";
+
 let appleReady = false;
+let appleConfig = null;
+let appleNative = false;
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -18,8 +28,7 @@ function loadScript(src) {
 const APPLE_SRC =
   "https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js";
 
-export async function initAppleAuth(config) {
-  if (!config?.clientId) throw new Error("Apple Sign In is not configured");
+async function initAppleAuthWeb(config) {
   await loadScript(APPLE_SRC);
   if (!window.AppleID?.auth) throw new Error("Apple Sign In unavailable");
   window.AppleID.auth.init({
@@ -29,10 +38,43 @@ export async function initAppleAuth(config) {
     state: "echelon",
     usePopup: true,
   });
+}
+
+export async function initAppleAuth(config) {
+  if (!config?.clientId) throw new Error("Apple Sign In is not configured");
+  appleConfig = config;
+  appleNative = useNativeAppleSignIn();
+  if (appleNative) {
+    appleReady = true;
+    return;
+  }
+  await initAppleAuthWeb(config);
   appleReady = true;
 }
 
-export async function signInWithApple() {
+async function signInWithAppleNative() {
+  const { SignInWithApple } = await import("@capacitor-community/apple-sign-in");
+  const clientId = appleConfig?.clientId || APPLE_NATIVE_CLIENT_ID;
+  const redirectURI = appleConfig?.redirectUri || "https://echelon.rsvp/app/";
+  const res = await SignInWithApple.authorize({
+    clientId,
+    redirectURI,
+    scopes: "email name",
+    state: "echelon",
+    nonce: "echelon-native",
+  });
+  const body = res?.response;
+  const idToken = body?.identityToken;
+  if (!idToken) throw new Error("Apple did not return an identity token");
+  const name = [body?.givenName, body?.familyName].filter(Boolean).join(" ").trim() || null;
+  return {
+    idToken,
+    name,
+    email: body?.email || null,
+  };
+}
+
+async function signInWithAppleWeb() {
   if (!appleReady || !window.AppleID?.auth) {
     throw new Error("Apple Sign In not initialized");
   }
@@ -53,15 +95,34 @@ export async function signInWithApple() {
   };
 }
 
-export function shouldAutoSignInWithApple() {
-  if (typeof window === "undefined") return false;
-  const native = window.EchelonNative;
-  if (native?.fromAppStore === true || native?.distribution === "appstore") return true;
-  return !!document.querySelector('meta[name="echelon-distribution"][content="appstore"]');
+export async function signInWithApple() {
+  if (!appleReady) throw new Error("Apple Sign In not initialized");
+  if (appleNative) {
+    try {
+      return await signInWithAppleNative();
+    } catch (err) {
+      const msg = String(err?.message || err || "");
+      if (msg.includes("not implemented") || msg.includes("UNIMPLEMENTED")) {
+        appleNative = false;
+        if (!window.AppleID?.auth && appleConfig) {
+          await initAppleAuthWeb(appleConfig);
+        }
+        return signInWithAppleWeb();
+      }
+      throw err;
+    }
+  }
+  return signInWithAppleWeb();
 }
 
-/** Native App Store shell can return stored Apple credentials without a popup. */
+export function shouldAutoSignInWithApple() {
+  return isEchelonAppStoreShell() && useNativeAppleSignIn();
+}
+
+/** Native App Store shell: silent Apple sign-in only when the native plugin exists. */
 export async function tryAutoSignInWithApple() {
+  if (!shouldAutoSignInWithApple()) return null;
+
   const native = window.EchelonNative;
   if (native?.getAppleCredential) {
     const cred = await native.getAppleCredential();
@@ -73,7 +134,18 @@ export async function tryAutoSignInWithApple() {
       };
     }
   }
-  return null;
+
+  if (!appleReady || !appleNative) return null;
+
+  try {
+    return await signInWithAppleNative();
+  } catch (err) {
+    const code = err?.code || err?.message || "";
+    if (String(code).includes("1001") || String(code).toLowerCase().includes("cancel")) {
+      return null;
+    }
+    return null;
+  }
 }
 
 export async function fetchAppleConfig() {

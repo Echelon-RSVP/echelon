@@ -41,9 +41,12 @@ jobs:
       - name: Patch iOS project
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GOOGLE_IOS_URL_SCHEME: ${{ secrets.GOOGLE_IOS_URL_SCHEME }}
+          GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
         run: |
           node scripts/patch-ios-plist.mjs
           node scripts/patch-ios-icon.mjs
+          node scripts/patch-ios-auth.mjs
           node scripts/patch-ios-signing.mjs
 
       - name: Install CocoaPods
@@ -54,6 +57,20 @@ jobs:
           cd ios/App
           pod install
           node ../../scripts/patch-pods-signing.mjs
+
+      - name: Verify native auth plugins
+        run: |
+          set -eo pipefail
+          cd ios/App
+          test -f Podfile.lock
+          grep -q CapacitorCommunityAppleSignIn Podfile.lock
+          grep -q CodetrixStudioCapacitorGoogleAuth Podfile.lock
+          test -f App/App.entitlements
+          grep -q applesignin App/App.entitlements
+          if [ -z "${{ secrets.GOOGLE_IOS_URL_SCHEME }}" ]; then
+            echo "::warning::GOOGLE_IOS_URL_SCHEME secret missing. Native Gmail will not work until you add an iOS OAuth client in Google Cloud Console."
+          fi
+          echo "Native Sign in with Apple + Google Auth pods present."
 
       - name: Validate signing secrets
         env:

@@ -2771,7 +2771,7 @@ import React, {
     );
   }
 
-  const ECH_RATE_STAR_SIZES = { corner: 12, pill: 20, xs: 17, sm: 24, md: 34, lg: 44, xl: 54 };
+  const ECH_RATE_STAR_SIZES = { corner: 12, pill: 20, sheet: 28, xs: 17, sm: 24, md: 34, lg: 44, xl: 54 };
   const ECH_STAR_PATH = "M16 3.2l3.4 6.9 7.6 1.1-5.5 5.4 1.3 7.6L16 20.8l-6.8 3.6 1.3-7.6-5.5-5.4 7.6-1.1L16 3.2z";
   const ECH_STAR_SHINE = "M16 8.4l1.1 2.2 2.4.35-1.7 1.7.4 2.4-2.2-1.2-2.2 1.2.4-2.4-1.7-1.7 2.4-.35L16 8.4z";
 
@@ -3145,7 +3145,7 @@ import React, {
           const cfg = await fetchAuthConfig();
           setAuthCfg(cfg);
           if (cfg.googleClientId) {
-            await initGoogleAuth(cfg.googleClientId);
+            await initGoogleAuth(cfg);
             setGmailReady(true);
           }
           if (cfg.appleClientId) {
@@ -3315,7 +3315,11 @@ import React, {
 
     const doGmail = async () => {
       if (!gmailReady) {
-        setAuthError(tr("onb.gmailNotConfigured"));
+        setAuthError(
+          authCfg?.googleClientId
+            ? tr("onb.gmailIosUnavailable")
+            : tr("onb.gmailNotConfigured"),
+        );
         return;
       }
       sfx.tap();
@@ -3347,8 +3351,15 @@ import React, {
           email: apple.email,
         });
         await finishAuth(token, user);
-      } catch {
-        setAuthError(tr("onb.appleError"));
+      } catch (e) {
+        const msg = String(e?.message || "");
+        if (msg.includes("cancel")) {
+          setAuthError("");
+        } else if (msg.includes("not implemented") || msg.includes("UNIMPLEMENTED")) {
+          setAuthError(tr("onb.appleNeedsUpdate"));
+        } else {
+          setAuthError(tr("onb.appleError"));
+        }
       } finally {
         setSigning(false);
         setSigningMethod(null);
@@ -7676,7 +7687,7 @@ import React, {
         } else if (provider === "apple") {
           const appleCfg = await fetchAppleConfig();
           if (!appleCfg?.clientId) throw new Error(tr("accounts.appleUnavailable"));
-          await initAppleAuth({ clientId: appleCfg.clientId, redirectUri: appleCfg.appleRedirectUri });
+          await initAppleAuth({ clientId: appleCfg.clientId, redirectUri: appleCfg.redirectUri });
           const apple = await signInWithApple();
           const res = await api.authApple({ idToken: apple.idToken, name: apple.name, email: apple.email });
           token = res.token;
@@ -8509,16 +8520,31 @@ import React, {
             {(post.avgRating ?? 0) > 0 && (
               <MediaAvgRatingBadge avgRating={post.avgRating} className="ech-media-avg-rating--corner ech-media-avg-rating--viewer" />
             )}
+            {!locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post)) && (
+              <div className="ech-media-viewer-rate-inset">
+                <EchRateOverlay
+                  canRate
+                  alreadyRated={false}
+                  myStars={null}
+                  onPick={onRatePost}
+                  size="pill"
+                  onDark
+                  className="ech-rate-overlay--viewer-inset"
+                />
+              </div>
+            )}
             {!locked && !isMe && alreadyRated && !isUiTestPost(post) && myStars && (
-              <EchRateOverlay
-                canRate={false}
-                alreadyRated
-                myStars={myStars}
-                onPick={() => {}}
-                size="pill"
-                onDark
-                className="ech-rate-overlay--corner ech-rate-overlay--viewer-mine"
-              />
+              <div className="ech-media-viewer-rate-inset">
+                <EchRateOverlay
+                  canRate={false}
+                  alreadyRated
+                  myStars={myStars}
+                  onPick={() => {}}
+                  size="pill"
+                  onDark
+                  className="ech-rate-overlay--viewer-inset rated"
+                />
+              </div>
             )}
           </div>
           <header className="ech-media-viewer-top">
@@ -8591,21 +8617,6 @@ import React, {
               <Bookmark size={20} strokeWidth={isSaved ? 2.2 : 1.75} color="#5A4A60" fill={isSaved ? "#5A4A60" : "none"} />
             </button>
           </div>
-
-          {!locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post)) && (
-            <div className="ech-media-viewer-rate-row">
-              <span className="ech-media-viewer-rate-kicker">{tr("rate.tapStars")}</span>
-              <EchRateOverlay
-                canRate
-                alreadyRated={false}
-                myStars={null}
-                onPick={onRatePost}
-                size="md"
-                onDark={false}
-                className="ech-rate-overlay--sheet"
-              />
-            </div>
-          )}
 
           {caption && !captionOnMedia && (
             <p className="feed-post-caption feed-post-caption--compact ech-media-viewer-caption">
@@ -14537,7 +14548,7 @@ import React, {
             try {
               const appleCfg = await fetchAppleConfig();
               if (appleCfg.clientId) {
-                await initAppleAuth({ clientId: appleCfg.clientId, redirectUri: appleCfg.appleRedirectUri });
+                await initAppleAuth({ clientId: appleCfg.clientId, redirectUri: appleCfg.redirectUri });
                 const apple = await tryAutoSignInWithApple();
                 if (apple?.idToken) {
                   const { token, user } = await api.authApple({
@@ -17129,6 +17140,7 @@ import React, {
   .ech-media-viewer{position:fixed;inset:0;z-index:99995;display:flex;flex-direction:column;background:#000;color:#fff;overflow:hidden;font-family:var(--font-sans)}
   .ech-media-viewer-stage{flex:1;min-height:0;position:relative;background:#000}
   .ech-media-viewer-media{position:absolute;inset:0}
+  .ech-media-viewer-media:has(.ech-media-viewer-rate-inset)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:120px;background:linear-gradient(180deg,transparent,rgba(0,0,0,.55));pointer-events:none;z-index:6}
   .ech-media-viewer-media .feed-post-media,.ech-media-viewer-media .post-img,.ech-media-viewer-media video,.ech-media-viewer-media img{width:100%;height:100%;object-fit:cover;border-radius:0}
   .ech-media-viewer-top{position:absolute;top:0;left:0;right:0;z-index:8;display:flex;align-items:center;gap:8px;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) 10px max(10px,env(safe-area-inset-left));background:linear-gradient(180deg,rgba(0,0,0,.55),transparent)}
   .ech-media-viewer-back,.ech-media-viewer-iconbtn{border:none;background:rgba(30,20,40,.5);color:#fff;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(10px);flex-shrink:0}
@@ -17138,13 +17150,15 @@ import React, {
   .ech-media-viewer-author-chip{flex:1;min-width:0;border:none;background:rgba(30,20,40,.45);color:#fff;border-radius:999px;padding:5px 11px 5px 8px;display:inline-flex;align-items:center;gap:7px;cursor:pointer;backdrop-filter:blur(10px);font-family:var(--font-sans)}
   .ech-media-viewer-type{display:grid;place-items:center;flex-shrink:0;opacity:.92}
   .ech-media-viewer-author-chip b{font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.02em}
-  .ech-media-viewer-sheet{flex-shrink:0;background:#fff;border-top:1px solid #ECE8EF;padding:10px max(14px,env(safe-area-inset-left)) max(12px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right));font-family:var(--font-sans)}
-  .ech-media-viewer-sheet .feed-post-actions{margin:0 0 2px}
-  .ech-media-viewer-rate-row{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 0 4px}
-  .ech-media-viewer-rate-kicker{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#9B7FD4}
-  .ech-rate-overlay--sheet{position:static;right:auto;bottom:auto;left:auto;width:100%;max-width:100%;justify-content:center;background:linear-gradient(135deg,#FFF8FC,#F0EBFF);border:1px solid rgba(183,156,240,.18);box-shadow:0 4px 14px rgba(120,90,140,.06);padding:10px 14px;min-height:44px}
-  .ech-rate-overlay--sheet.rated{border-color:rgba(255,213,107,.35)}
-  .ech-rate-overlay--sheet .ech-rate-overlay-locked{color:#6B5080;font-size:10px;max-width:none}
+  .ech-media-viewer-sheet{flex-shrink:0;background:#fff;border-top:1px solid #ECE8EF;padding:12px max(14px,env(safe-area-inset-left)) max(14px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right));font-family:var(--font-sans)}
+  .ech-media-viewer-sheet .feed-post-actions{margin:0;padding:0}
+  .ech-media-viewer-rate-inset{position:absolute;left:0;right:0;bottom:max(14px,env(safe-area-inset-bottom));z-index:7;display:flex;justify-content:center;padding:0 16px;pointer-events:none}
+  .ech-media-viewer-rate-inset>*{pointer-events:auto}
+  .ech-rate-overlay--viewer-inset{position:static;right:auto;bottom:auto;left:auto;width:auto;max-width:min(100%,340px);margin:0 auto;justify-content:center;padding:10px 16px;min-height:42px;border-radius:999px;background:rgba(8,6,14,.72);border:1px solid rgba(255,255,255,.2);box-shadow:0 8px 24px rgba(0,0,0,.35);backdrop-filter:blur(14px)}
+  .ech-rate-overlay--viewer-inset.rated{border-color:rgba(255,213,107,.38)}
+  .ech-rate-overlay--viewer-inset .ech-rate-stars{gap:5px}
+  .ech-rate-overlay--viewer-inset .ech-rate-star{min-width:34px;width:34px;height:34px}
+  .ech-rate-overlay--viewer-inset .ech-rate-stars--pill .ech-star-svg,.ech-rate-overlay--viewer-inset .ech-rate-stars--pill .ech-star-svg.filled{width:22px!important;height:22px!important;min-width:22px;min-height:22px}
   .ech-media-avg-rating{position:absolute;right:10px;bottom:10px;z-index:6;display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;background:rgba(8,6,14,.58);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px);pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.28)}
   .ech-media-avg-rating--corner{transform:scale(.88);transform-origin:bottom right}
   .ech-media-avg-rating--viewer{right:12px;bottom:12px;transform:scale(.78);transform-origin:bottom right}
@@ -17153,9 +17167,7 @@ import React, {
   .ech-media-avg-rating .ech-rate-stars--pill .ech-star-svg,.ech-media-avg-rating .ech-rate-stars--pill .ech-star-svg.filled{width:16px!important;height:16px!important;min-width:16px;min-height:16px}
   .ech-media-avg-rating-num{font-size:10px;font-weight:800;color:#FFD56B;letter-spacing:-.02em}
   .portfolio-media .ech-media-avg-rating,.ech-discover-tile .ech-media-avg-rating{bottom:36px}
-  .ech-media-viewer-media .ech-rate-overlay--corner{position:absolute;right:12px;bottom:12px;left:auto;z-index:7;transform:scale(.58);transform-origin:bottom right}
-  .ech-media-viewer-media .ech-rate-overlay--viewer-mine{bottom:52px}
-  .ech-media-viewer-media .ech-media-avg-rating--viewer{bottom:12px}
+  .ech-media-viewer-media .ech-media-avg-rating--viewer{top:max(52px,env(safe-area-inset-top));bottom:auto;right:12px}
   .ech-rate-overlay--corner.rated{border-color:rgba(255,213,107,.32)}
   .ech-media-viewer-caption{margin-top:8px}
   .ech-spark-screen{background:transparent}

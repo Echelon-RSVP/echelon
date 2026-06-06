@@ -46,7 +46,7 @@ import React, {
     Map as MapIcon, Compass, QrCode, AlertCircle,
     BookOpen, SlidersHorizontal, Ruler, Type, AtSign, AlignLeft, AlignCenter, AlignRight, GripVertical, Minus, PlusCircle,
     RotateCcw, LayoutGrid, Infinity, Link2, Download, Music2, Pencil, SquarePlay, ChevronUp, Circle,
-    Disc3, Radio, UserRound, BarChart2, Hash, Scissors,
+    Disc3, Radio, UserRound, BarChart2, Hash, Scissors, ArrowUpDown,
   } from "lucide-react";
   import ViewFinderMap, { resetViewfinderMapView } from "./viewfinder-map";
   import PartyPinMap from "./party-pin-map";
@@ -933,20 +933,39 @@ import React, {
   };
 
   const formatPostAge = (ts, now) => {
-    const m = Math.max(0, Math.floor((now - ts) / 60000));
+    if (!ts) return "";
+    const diff = Math.max(0, now - ts);
+    const m = Math.floor(diff / 60000);
     if (m < 1) return "now";
-    if (m < 60) return m + "m";
+    if (m < 60) return `${m}m ago`;
     const h = Math.floor(m / 60);
-    if (h < 24) return h + "h";
-    return Math.floor(h / 24) + "d";
+    if (h < 24) return `${h}h ago`;
+    const d = new Date(ts);
+    const y = d.getFullYear() !== new Date(now).getFullYear();
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(y ? { year: "numeric" } : {}) });
   };
 
-  const formatPortfolioDate = (ts, now) => {
-    if (!ts) return "";
-    const age = formatPostAge(ts, now);
-    if ((now - ts) < 86400000 * 7) return age;
-    const d = new Date(ts);
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const formatPortfolioDate = (ts, now) => formatPostAge(ts, now);
+
+  const PORTFOLIO_SORT_KEY = "echelon_portfolio_sort";
+  const loadPortfolioSort = () => {
+    try {
+      const v = localStorage.getItem(PORTFOLIO_SORT_KEY);
+      return ["newest", "oldest", "scoreHigh", "scoreLow"].includes(v) ? v : "newest";
+    } catch {
+      return "newest";
+    }
+  };
+  const savePortfolioSort = (v) => {
+    try { localStorage.setItem(PORTFOLIO_SORT_KEY, v); } catch { /* ignore */ }
+  };
+  const comparePortfolioPosts = (a, b, sortBy) => {
+    switch (sortBy) {
+      case "oldest": return (a.ts || 0) - (b.ts || 0);
+      case "scoreHigh": return (b.avgRating ?? 0) - (a.avgRating ?? 0) || (b.ts || 0) - (a.ts || 0);
+      case "scoreLow": return (a.avgRating ?? 0) - (b.avgRating ?? 0) || (b.ts || 0) - (a.ts || 0);
+      default: return (b.ts || 0) - (a.ts || 0);
+    }
   };
 
   const CHAT_EMOJIS = [
@@ -1388,7 +1407,9 @@ import React, {
   };
 
   const DRAG_STAR_PX = 18;
-  const MIN_RATING_DRAG_PX = 10;
+  const MIN_RATING_DRAG_PX = 14;
+  const SCROLL_CANCEL_PX = 12;
+  const RATING_HORIZONTAL_RATIO = 1.25;
 
   /** Slide finger left (lower) / right (higher) to pick 1–5 stars. */
   const starsFromHorizontalDrag = (startX, clientX, baseStars = 3) => {
@@ -2931,45 +2952,68 @@ import React, {
     const tr = useT();
     const wrapRef = useRef(null);
     const [preview, setPreview] = useState(0);
-    const dragRef = useRef({ active: false, x: 0, moved: false, base: 3 });
+    const [ratingGesture, setRatingGesture] = useState(false);
+    const dragRef = useRef({ active: false, pending: false, rating: false, x: 0, y: 0, moved: false, base: 3 });
+
+    const resetDrag = () => {
+      dragRef.current = { active: false, pending: false, rating: false, x: 0, y: 0, moved: false, base: 3 };
+      setPreview(0);
+      setRatingGesture(false);
+    };
 
     const finishDrag = (clientX, pointerId) => {
       if (!dragRef.current.active) return;
-      const { moved, x, base } = dragRef.current;
-      dragRef.current.active = false;
-      const stars = moved ? starsFromHorizontalDrag(x, clientX, base) : 0;
+      const { rating, moved, x, base } = dragRef.current;
+      const stars = rating && moved ? starsFromHorizontalDrag(x, clientX, base) : 0;
       try { wrapRef.current?.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
-      if (moved && stars >= 1) {
+      if (rating && moved && stars >= 1) {
         sfx.rateCommit(stars);
         onRate?.(stars);
-      } else if (!moved) {
+      } else if (!rating && !moved) {
         onDoubleTap?.();
       }
-      setPreview(0);
+      resetDrag();
     };
 
     const onPointerDown = (e) => {
       if (!enabled) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
-      dragRef.current = { active: true, x: e.clientX, moved: false, base: 3 };
-      setPreview(3);
-      try { wrapRef.current?.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
-      e.preventDefault();
+      dragRef.current = { active: true, pending: true, rating: false, x: e.clientX, y: e.clientY, moved: false, base: 3 };
     };
 
     const onPointerMove = (e) => {
       if (!dragRef.current.active || !enabled) return;
-      e.preventDefault();
-      const dx = Math.abs(e.clientX - dragRef.current.x);
-      if (dx > MIN_RATING_DRAG_PX) dragRef.current.moved = true;
-      if (dragRef.current.moved) {
-        setPreview(starsFromHorizontalDrag(dragRef.current.x, e.clientX, dragRef.current.base));
+      const dx = e.clientX - dragRef.current.x;
+      const dy = e.clientY - dragRef.current.y;
+      const adx = Math.abs(dx);
+      const ady = Math.abs(dy);
+
+      if (dragRef.current.pending) {
+        if (ady > SCROLL_CANCEL_PX && ady > adx * RATING_HORIZONTAL_RATIO) {
+          resetDrag();
+          return;
+        }
+        if (adx > MIN_RATING_DRAG_PX && adx > ady * RATING_HORIZONTAL_RATIO) {
+          dragRef.current.pending = false;
+          dragRef.current.rating = true;
+          dragRef.current.moved = true;
+          setRatingGesture(true);
+          setPreview(3);
+          try { wrapRef.current?.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
+          e.preventDefault();
+        }
+        return;
       }
+
+      if (!dragRef.current.rating) return;
+      e.preventDefault();
+      dragRef.current.moved = true;
+      setPreview(starsFromHorizontalDrag(dragRef.current.x, e.clientX, dragRef.current.base));
     };
 
     const mergedStyle = {
       ...style,
-      touchAction: enabled ? "none" : (style?.touchAction || "pan-y"),
+      touchAction: ratingGesture ? "none" : (style?.touchAction || "pan-y"),
       WebkitUserSelect: "none",
       userSelect: "none",
       WebkitTouchCallout: "none",
@@ -2978,7 +3022,7 @@ import React, {
     return (
       <div
         ref={wrapRef}
-        className={className + (enabled ? " feed-drag-rate--active" : "")}
+        className={className + (ratingGesture ? " feed-drag-rate--active" : "")}
         style={mergedStyle}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -4478,6 +4522,7 @@ import React, {
     const { state } = useStore();
     const tr = useT();
     const [now] = useTick();
+    const [sortBy, setSortBy] = useState(loadPortfolioSort);
     const authorIds = useMemo(() => portfolioAuthorIds(state, userId), [state.user.id, userId]);
     const pinned = new Set(state.igExtras?.pinnedPosts || []);
     const posts = useMemo(() => {
@@ -4488,13 +4533,8 @@ import React, {
         .filter((p) => authorIds.has(p.author) && !p.fromStory && p.kind !== "story");
       const pin = rows.filter((p) => pinned.has(p.id));
       const rest = rows.filter((p) => !pinned.has(p.id));
-      return [...pin, ...rest].sort((a, b) => {
-        const ap = pinned.has(a.id) ? 1 : 0;
-        const bp = pinned.has(b.id) ? 1 : 0;
-        if (bp !== ap) return bp - ap;
-        return (b.avgRating ?? 0) - (a.avgRating ?? 0) || b.ts - a.ts;
-      });
-    }, [state.feedPosts, state.stories, authorIds, reelsOnly, postsOnly, storiesOnly, pinned]);
+      return [...pin.sort((a, b) => comparePortfolioPosts(a, b, sortBy)), ...rest.sort((a, b) => comparePortfolioPosts(a, b, sortBy))];
+    }, [state.feedPosts, state.stories, authorIds, reelsOnly, postsOnly, storiesOnly, pinned, sortBy]);
 
     if (!posts.length) {
       if (userId === ME_ID) {
@@ -4521,8 +4561,31 @@ import React, {
         ? "portfolio-grid portfolio-grid--stories portfolio-grid--ech"
         : "portfolio-grid portfolio-grid--ech";
 
+    const sortOptions = [
+      ["newest", tr("profile.sortNewest")],
+      ["oldest", tr("profile.sortOldest")],
+      ["scoreHigh", tr("profile.sortScoreHigh")],
+      ["scoreLow", tr("profile.sortScoreLow")],
+    ];
+
     return (
       <div className="portfolio-wrap portfolio-wrap--ech">
+        {!reelsOnly && !storiesOnly && posts.length > 0 && (
+          <div className="portfolio-sort-row">
+            <label className="portfolio-sort-label" htmlFor={`portfolio-sort-${userId}`}>
+              <ArrowUpDown size={13} />
+              {tr("profile.sortBy")}
+            </label>
+            <select
+              id={`portfolio-sort-${userId}`}
+              className="portfolio-sort-select"
+              value={sortBy}
+              onChange={(e) => { sfx.tap(); const v = e.target.value; setSortBy(v); savePortfolioSort(v); }}
+            >
+              {sortOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+          </div>
+        )}
         <div className={gridClass}>
           {posts.map((p) => {
             const src = p.mediaUrl ? resolveMediaUrl(p.mediaUrl) : null;
@@ -4771,6 +4834,9 @@ import React, {
             <button type="button" className="feed-action" aria-label={tr("feed.shareViaDm")} onClick={() => onShare(post)}>
               <Send size={20} strokeWidth={1.75} color="#5A4A60" />
             </button>
+            {post.ts != null && (
+              <time className="feed-post-time" dateTime={new Date(post.ts).toISOString()}>{formatPostAge(post.ts, now)}</time>
+            )}
             <button
               type="button"
               className={"feed-action feed-action--save" + (isSaved ? " on" : "")}
@@ -8735,6 +8801,9 @@ import React, {
               <Send size={20} strokeWidth={1.75} color="#5A4A60" />
               {(post.shares ?? 0) > 0 && <span>{formatEngagementCount(post.shares ?? 0)}</span>}
             </button>
+            {post.ts != null && (
+              <time className="feed-post-time" dateTime={new Date(post.ts).toISOString()}>{formatPostAge(post.ts, Date.now())}</time>
+            )}
             <button
               type="button"
               className={"feed-action feed-action--save" + (isSaved ? " on" : "")}
@@ -11372,6 +11441,7 @@ import React, {
     const [handsFreeActive, setHandsFreeActive] = useState(false);
     const [broadcasting, setBroadcasting] = useState(false);
     const [galleryThumb, setGalleryThumb] = useState(null);
+    const [captureFlash, setCaptureFlash] = useState(false);
 
     useEffect(() => {
       const recents = loadRecentMedia();
@@ -11467,7 +11537,6 @@ import React, {
     const takePhoto = (withFlashPulse = false) => {
       const v = videoRef.current;
       if (!v?.videoWidth) return;
-      sfx.tap();
       const snap = () => {
         const canvas = document.createElement("canvas");
         canvas.width = v.videoWidth;
@@ -11494,7 +11563,11 @@ import React, {
             }
             return;
           }
-          onCapture(file, captureMeta());
+          setCaptureFlash(true);
+          requestAnimationFrame(() => {
+            onCapture(file, captureMeta());
+            setTimeout(() => setCaptureFlash(false), 120);
+          });
         }, "image/jpeg", 0.92);
       };
       if (withFlashPulse && torchOk && facing === "environment") {
@@ -11848,12 +11921,15 @@ import React, {
             {cameraText}
           </div>
         )}
+        {captureFlash && <div className="compose-camera-flash" aria-hidden />}
         </div>
         <div className="compose-camera-bottom">
           <div className="compose-camera-controls">
             {onGallery && camPrefs.cameraRoll && (
               <button type="button" className="compose-camera-gallery" aria-label={tr("feed.pickUpload")} onClick={onGallery}>
-                {galleryThumb ? <img src={galleryThumb} alt="" className="compose-camera-gallery-thumb" /> : <ImageIcon size={24} />}
+                {galleryThumb
+                  ? <span className="compose-camera-gallery-inner"><img src={galleryThumb} alt="" className="compose-camera-gallery-thumb" /></span>
+                  : <ImageIcon size={24} />}
               </button>
             )}
             <button
@@ -12149,9 +12225,10 @@ import React, {
     const onPicked = (f, meta) => {
       if (!f) return;
       pushRecentMedia(f);
-      sfx.tap();
       const capMode = meta?.captureMode || pickMode;
       if (capMode === "live") return;
+      const fromCameraCapture = cameraOnly && !!meta?.captureMode;
+      if (!fromCameraCapture) sfx.tap();
       const publishMode = capMode === "story" ? "story" : capMode === "reel" || pickMode === "reel" ? "reel" : "post";
       dispatch({
         type: "OPEN_MODAL",
@@ -12160,6 +12237,7 @@ import React, {
           mode: publishMode,
           initialFile: f,
           fromCamera: cameraOnly,
+          seamlessCapture: fromCameraCapture,
           cameraText: meta?.cameraText,
           cameraTextX: meta?.cameraTextX,
           cameraTextY: meta?.cameraTextY,
@@ -15958,7 +16036,10 @@ import React, {
   .compose-camera-modes{display:flex;align-items:center;justify-content:center;gap:14px;margin-top:14px;flex-wrap:nowrap;overflow-x:auto;font-family:var(--font-sans)}
   .compose-camera-mode{border:none;background:transparent;color:rgba(255,255,255,.75);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;padding:6px 4px;white-space:nowrap;font-family:inherit}
   .compose-camera-mode.on{color:#fff;font-size:13px;font-weight:700}
-  .compose-camera-gallery-thumb{width:100%;height:100%;object-fit:cover;border-radius:8px}
+  .compose-camera-gallery-thumb{width:100%;height:100%;object-fit:cover;display:block;border-radius:50%}
+  .compose-camera-gallery-inner{width:100%;height:100%;border-radius:50%;overflow:hidden;display:block}
+  .compose-camera-flash{position:absolute;inset:0;z-index:12;background:#fff;pointer-events:none;animation:composeCameraFlash .14s ease-out forwards}
+  @keyframes composeCameraFlash{from{opacity:.55}to{opacity:0}}
   .compose-camera-live-overlay{position:absolute;top:max(72px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:6;display:flex;align-items:center;gap:10px}
   .compose-camera-live-pill{display:inline-flex;align-items:center;gap:6px;background:#ED4956;color:#fff;font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px}
   .compose-camera-live-end{border:none;background:rgba(255,255,255,.2);color:#fff;font-size:12px;font-weight:700;padding:8px 14px;border-radius:999px;cursor:pointer}
@@ -16066,7 +16147,7 @@ import React, {
   .media-overlay-link{background:#fff;color:#0095F6;padding:8px 12px;border-radius:999px;text-decoration:none;font-weight:700}
   .media-overlay-hashtag{color:#fff;font-weight:800;font-size:18px}
   .compose-camera-flip{margin-left:8px;width:40px;height:40px;border-radius:50%;border:1px solid rgba(255,255,255,.35);background:rgba(0,0,0,.25);color:#fff;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
-  .compose-camera-gallery{width:48px;height:48px;border-radius:10px;border:2px solid #fff;background:rgba(255,255,255,.15);color:#fff;display:grid;place-items:center;cursor:pointer}
+  .compose-camera-gallery{width:48px;height:48px;border-radius:50%;border:2px solid #fff;background:rgba(255,255,255,.15);color:#fff;display:grid;place-items:center;cursor:pointer;overflow:hidden;padding:0;flex-shrink:0}
   .compose-camera-filters{display:flex;gap:8px}
   .compose-camera-filter-dot{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#888,#ccc);border:2px solid #fff}
   .compose-camera-fallback--portal{position:absolute;bottom:max(100px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);color:rgba(255,255,255,.8);z-index:5}
@@ -17537,6 +17618,10 @@ import React, {
   .feed-post-bar{padding:10px max(14px,env(safe-area-inset-left)) 12px max(14px,env(safe-area-inset-right));background:#fff}
   .feed-post-actions--icon .feed-action span{font-size:11px;font-weight:800;color:#8A7A98}
   .feed-post-actions--icon .feed-action{padding:4px 8px;gap:5px}
+  .feed-post-time{margin-left:2px;font-size:11px;font-weight:700;color:#9B8FA8;white-space:nowrap;flex-shrink:0;line-height:1}
+  .portfolio-sort-row{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:8px 12px 10px;background:linear-gradient(180deg,#FFF8FC,#fff)}
+  .portfolio-sort-label{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#8A7A98}
+  .portfolio-sort-select{border:1px solid rgba(183,156,240,.28);background:#fff;color:#5A4A60;font-size:12px;font-weight:700;padding:7px 10px;border-radius:10px;font-family:var(--font-sans);cursor:pointer;max-width:min(62vw,220px)}
   .feed-post-caption--compact{margin:6px 0 0;font-size:12px;line-height:1.45;color:#5A4A60;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .ech-feed-head{padding:10px max(12px,env(safe-area-inset-left)) 8px max(12px,env(safe-area-inset-right));display:flex;flex-direction:column;gap:8px;background:transparent}
   .ech-feed-head-row{display:flex;align-items:center;justify-content:space-between;gap:10px}

@@ -35,6 +35,9 @@ jobs:
       - name: Build web + App Store meta
         run: npm run build && npm run ios:prepare
 
+      - name: Patch GoogleSignIn privacy (before cap sync pod install)
+        run: node scripts/patch-google-signin-privacy.mjs
+
       - name: Capacitor iOS sync
         run: npm run cap:sync:ios
 

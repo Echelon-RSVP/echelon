@@ -91,7 +91,7 @@ gh run watch --repo OWNER/REPO
 | `scripts/patch-pods-signing.mjs` | `CODE_SIGNING_ALLOWED=NO` on all Pod targets |
 | `scripts/patch-ios-plist.mjs` | Permission strings for App Store review |
 | `scripts/patch-ios-icon.mjs` | Copies `public/icons/icon-1024.png` into `AppIcon.appiconset` |
-| `scripts/patch-google-signin-privacy.mjs` | Forces GoogleSignIn 7.1+ (PrivacyInfo.xcprivacy, fixes ITMS-91061) |
+| `scripts/patch-ios-strip-native-google.mjs` | Removes native GoogleSignIn pods from iOS (fixes ITMS-91061) |
 | `scripts/register-asc-device.mjs` | Registers `CI_DEVICE_UDID` via App Store Connect API |
 | `scripts/prune-ios-certificates.mjs` | **Revokes orphan dev certs before archive** (prevents Apple cert quota failures) |
 | `scripts/ios-inject-appstore-meta.mjs` | App Store distribution meta in web build |
@@ -287,7 +287,7 @@ npm run cap:sync:ios
 | Secret empty in workflow | Org secret → Repository access must include the repo. |
 | Invalid `.p8` | Paste full PEM with headers; check newlines in GitHub secret UI. |
 | **Missing Compliance** (TestFlight) | App uses only HTTPS/TLS (exempt). `patch-ios-plist.mjs` sets `ITSAppUsesNonExemptEncryption=false`. Fix current build in ASC: TestFlight → build → Manage Export Compliance → uses encryption, qualifies for exemption. |
-| **ITMS-91061** missing privacy manifest (GoogleSignIn, GTMAppAuth, GTMSessionFetcher) | `@codetrix-studio/capacitor-google-auth` pins GoogleSignIn 6.2.4 (no manifest). Run `patch-google-signin-privacy.mjs` before `pod install` (CI does this automatically). Requires GoogleSignIn **7.1+**. Upload a **new build** (bump `CURRENT_PROJECT_VERSION`), then resubmit. |
+| **ITMS-91061** missing privacy manifest (GoogleSignIn, GTMAppAuth, GTMSessionFetcher) | `@codetrix-studio/capacitor-google-auth` pins GoogleSignIn **6.2.4** (no `PrivacyInfo.xcprivacy`). Upgrading to 7.x breaks the plugin Swift API. **Fix:** run `patch-ios-strip-native-google.mjs` after cap sync so the IPA excludes native Google SDKs; Gmail uses **web Google Sign-In** inside the WKWebView shell. Sign in with Apple stays native. Bump `CURRENT_PROJECT_VERSION`, upload new build, resubmit. |
 
 ---
 

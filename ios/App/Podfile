@@ -17,7 +17,6 @@ end
 
 target 'App' do
   capacitor_pods
-  pod 'GoogleSignIn', '~> 7.1.0'  # ITMS-91061 privacy manifest
   # Add your Pods here
 end
 

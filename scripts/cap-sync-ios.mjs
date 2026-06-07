@@ -10,7 +10,7 @@ if (!fs.existsSync(iosDir)) {
   console.log("cap-sync-ios: adding iOS platform...");
   execSync("npx cap add ios", { stdio: "inherit" });
 }
-console.log("cap-sync-ios: patching GoogleSignIn for ITMS-91061...");
-execSync("node scripts/patch-google-signin-privacy.mjs", { stdio: "inherit" });
 console.log("cap-sync-ios: syncing...");
 execSync("npx cap sync ios", { stdio: "inherit" });
+console.log("cap-sync-ios: stripping native Google Auth (ITMS-91061)...");
+execSync("node scripts/patch-ios-strip-native-google.mjs", { stdio: "inherit" });

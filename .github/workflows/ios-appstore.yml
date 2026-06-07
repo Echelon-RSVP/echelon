@@ -35,9 +35,6 @@ jobs:
       - name: Build web + App Store meta
         run: npm run build && npm run ios:prepare
 
-      - name: Patch GoogleSignIn privacy (before cap sync pod install)
-        run: node scripts/patch-google-signin-privacy.mjs
-
       - name: Capacitor iOS sync
         run: npm run cap:sync:ios
 
@@ -51,7 +48,7 @@ jobs:
           node scripts/patch-ios-icon.mjs
           node scripts/patch-ios-auth.mjs
           node scripts/patch-ios-signing.mjs
-          node scripts/patch-google-signin-privacy.mjs
+          node scripts/patch-ios-strip-native-google.mjs
 
       - name: Install CocoaPods
         env:
@@ -68,18 +65,19 @@ jobs:
           cd ios/App
           test -f Podfile.lock
           grep -q CapacitorCommunityAppleSignIn Podfile.lock
-          grep -q CodetrixStudioCapacitorGoogleAuth Podfile.lock
-          grep -E "GoogleSignIn \\([7-9]\\." Podfile.lock || {
-            echo "::error::GoogleSignIn must be 7.1+ for PrivacyInfo.xcprivacy (ITMS-91061). Run patch-google-signin-privacy.mjs"
+          grep -q CapacitorCommunityAppleSignIn Podfile.lock
+          if grep -q GoogleSignIn Podfile.lock; then
+            echo "::error::GoogleSignIn must not be in the IPA (ITMS-91061). patch-ios-strip-native-google.mjs did not run."
             grep GoogleSignIn Podfile.lock || true
             exit 1
-          }
+          fi
+          echo "Native GoogleSignIn excluded; Gmail uses web sign-in in the shell."
           test -f App/App.entitlements
           grep -q applesignin App/App.entitlements
           if [ -z "${{ secrets.GOOGLE_IOS_URL_SCHEME }}" ]; then
             echo "::warning::GOOGLE_IOS_URL_SCHEME secret missing. Native Gmail will not work until you add an iOS OAuth client in Google Cloud Console."
           fi
-          echo "Native Sign in with Apple + Google Auth pods present."
+          echo "Native Sign in with Apple present; Gmail uses web GIS (no GoogleSignIn SDK in IPA)."
 
       - name: Validate signing secrets
         env:

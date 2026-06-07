@@ -110,7 +110,7 @@ Prints secret names and opens the right pages:
 | API key rejected | Paste full `.p8` into `APPSTORE_PRIVATE_KEY`, including `BEGIN` / `END` lines |
 | `pod install` failed | Re-run workflow; rare CocoaPods CDN glitch |
 | TestFlight upload: `iOS 26 SDK` required | Workflow uses `macos-26` + Xcode 26. Apple no longer accepts builds made with Xcode 16 / iOS 18 SDK. |
-| **ITMS-91061** GoogleSignIn / GTMAppAuth / GTMSessionFetcher privacy manifest | See [IOS-DEPLOY-METHOD.md](IOS-DEPLOY-METHOD.md) troubleshooting. CI runs `patch-google-signin-privacy.mjs`; bump build number and upload new binary. |
+| **ITMS-91061** GoogleSignIn / GTMAppAuth / GTMSessionFetcher privacy manifest | Native Google SDK stripped on iOS; Gmail uses web sign-in. See [IOS-DEPLOY-METHOD.md](IOS-DEPLOY-METHOD.md). Upload build **9+** and resubmit. |
 | Blank app in TestFlight | Confirm https://echelon.rsvp/app/ loads on iPhone Safari |
 | Wrong / placeholder app icon in TestFlight | `AppIcon.appiconset` was missing the PNG. Re-run workflow on latest `main` (`patch-ios-icon.mjs` runs after `npm run build`). |
 | **Missing Compliance** on build | Echelon uses only standard HTTPS (exempt). `ITSAppUsesNonExemptEncryption=false` is in Info.plist. For **build 1 already uploaded**: TestFlight → click build → answer export compliance (encryption yes, exempt yes). Or re-run workflow for a new build. |

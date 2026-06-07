@@ -4,7 +4,7 @@ Codemagic is **not required**. Use **GitHub Actions** (free on public repos, or 
 
 You need a **free GitHub account** and your **$99/year Apple Developer** membership. No Mac, no paid CI.
 
-**Full method reference (for future apps):** [IOS-DEPLOY-METHOD.md](IOS-DEPLOY-METHOD.md) documents secrets, runner requirements, repo files, and every lesson from the Echelon setup.
+**Full method reference (for future apps):** [IOS-DEPLOY-METHOD.md](IOS-DEPLOY-METHOD.md) documents secrets, runner requirements, repo files, certificate pruning, and every lesson from the Echelon setup.
 
 ## One-time setup (~20 minutes)
 
@@ -100,6 +100,7 @@ Prints secret names and opens the right pages:
 | Error | Fix |
 |-------|-----|
 | Exit code **65** (~30s fail) | Usually missing Xcode scheme. Re-run on latest `main` (includes shared `App.xcscheme`). |
+| Exit code **65** (~50s) + `maximum number of certificates` | Apple cert quota full. Workflow runs `prune-ios-certificates.mjs` before archive. See [Certificate pruning](IOS-DEPLOY-METHOD.md#certificate-pruning-required). |
 | Exit code **70** at `GatherProvisioningInputs` | Archive needs App Store Connect API key on the `xcodebuild archive` command. Confirm bundle ID `rsvp.echelon.app` exists in [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list). |
 | Exit code **70** at **Export IPA** / `Cloud signing permission error` | API key must be **Admin**, not App Manager. Update `APPSTORE_KEY_ID` and `APPSTORE_PRIVATE_KEY`. |
 | `conflicting provisioning settings` on Capacitor/Pods | Do not pass global `CODE_SIGN_IDENTITY` to xcodebuild. Pods must have `CODE_SIGNING_ALLOWED=NO` (handled in `Podfile` + `patch-pods-signing.mjs`). |
@@ -109,6 +110,7 @@ Prints secret names and opens the right pages:
 | API key rejected | Paste full `.p8` into `APPSTORE_PRIVATE_KEY`, including `BEGIN` / `END` lines |
 | `pod install` failed | Re-run workflow; rare CocoaPods CDN glitch |
 | TestFlight upload: `iOS 26 SDK` required | Workflow uses `macos-26` + Xcode 26. Apple no longer accepts builds made with Xcode 16 / iOS 18 SDK. |
+| **ITMS-91061** GoogleSignIn / GTMAppAuth / GTMSessionFetcher privacy manifest | See [IOS-DEPLOY-METHOD.md](IOS-DEPLOY-METHOD.md) troubleshooting. CI runs `patch-google-signin-privacy.mjs`; bump build number and upload new binary. |
 | Blank app in TestFlight | Confirm https://echelon.rsvp/app/ loads on iPhone Safari |
 | Wrong / placeholder app icon in TestFlight | `AppIcon.appiconset` was missing the PNG. Re-run workflow on latest `main` (`patch-ios-icon.mjs` runs after `npm run build`). |
 | **Missing Compliance** on build | Echelon uses only standard HTTPS (exempt). `ITSAppUsesNonExemptEncryption=false` is in Info.plist. For **build 1 already uploaded**: TestFlight → click build → answer export compliance (encryption yes, exempt yes). Or re-run workflow for a new build. |

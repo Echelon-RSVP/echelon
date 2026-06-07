@@ -48,6 +48,7 @@ jobs:
           node scripts/patch-ios-icon.mjs
           node scripts/patch-ios-auth.mjs
           node scripts/patch-ios-signing.mjs
+          node scripts/patch-google-signin-privacy.mjs
 
       - name: Install CocoaPods
         env:
@@ -65,6 +66,11 @@ jobs:
           test -f Podfile.lock
           grep -q CapacitorCommunityAppleSignIn Podfile.lock
           grep -q CodetrixStudioCapacitorGoogleAuth Podfile.lock
+          grep -E "GoogleSignIn \\([7-9]\\." Podfile.lock || {
+            echo "::error::GoogleSignIn must be 7.1+ for PrivacyInfo.xcprivacy (ITMS-91061). Run patch-google-signin-privacy.mjs"
+            grep GoogleSignIn Podfile.lock || true
+            exit 1
+          }
           test -f App/App.entitlements
           grep -q applesignin App/App.entitlements
           if [ -z "${{ secrets.GOOGLE_IOS_URL_SCHEME }}" ]; then

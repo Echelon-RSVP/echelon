@@ -145,7 +145,7 @@ function accept_friend_request(PDO $pdo, array $cfg, array $me, string $requestI
     $ts = (int)(microtime(true) * 1000);
 
     $pdo->prepare('UPDATE friend_requests SET status = ?, responded_at = ? WHERE id = ?')->execute(['accepted', $ts, $requestId]);
-    $pdo->prepare('INSERT IGNORE INTO friendships (user_id, friend_id) VALUES (?, ?), (?, ?)')->execute([$fromId, $toId, $toId, $fromId]);
+    $pdo->prepare('INSERT IGNORE INTO friendships (user_id, friend_id) VALUES (?, ?)')->execute([$fromId, $toId]);
 
     $fromUser = $pdo->prepare('SELECT name FROM users WHERE id = ?');
     $fromUser->execute([$fromId]);
@@ -155,7 +155,7 @@ function accept_friend_request(PDO $pdo, array $cfg, array $me, string $requestI
     $label = follower_quality_percent_label($rate);
     $score = echelon_adjust_score_percent($pdo, $toId, $rate, 'follow_started', 'New follower', $fromName . ' followed you. Your score rose by ' . $label . '.', $fromId);
     echelon_notify($pdo, $fromId, 'friend_accept', 'Follow accepted', $me['name'] . ' accepted your follow request.', $toId);
-    echelon_notify($pdo, $toId, 'follow_started', '', '', $fromId);
+    echelon_notify($pdo, $toId, 'follow_started', 'New follower', $fromName . ' followed you.', $fromId);
 
     Response::json(['ok' => true, 'friendId' => $fromId, 'yourScore' => $score['score']]);
 }
@@ -779,12 +779,12 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
                 $id = 'fr_' . bin2hex(random_bytes(8));
                 $pdo->prepare('INSERT INTO friend_requests (id, from_user_id, to_user_id, status, ts, responded_at) VALUES (?, ?, ?, ?, ?, ?)')
                     ->execute([$id, $me['id'], $friendId, 'accepted', $ts, $ts]);
-                $pdo->prepare('INSERT IGNORE INTO friendships (user_id, friend_id) VALUES (?, ?), (?, ?)')
-                    ->execute([$me['id'], $friendId, $friendId, $me['id']]);
+                $pdo->prepare('INSERT IGNORE INTO friendships (user_id, friend_id) VALUES (?, ?)')
+                    ->execute([$me['id'], $friendId]);
                 $rate = follower_quality_rate_from_score((float)$me['score']);
                 $label = follower_quality_percent_label($rate);
                 $followed = echelon_adjust_score_percent($pdo, $friendId, $rate, 'follow_started', 'New follower', $me['name'] . ' followed you. Your score rose by ' . $label . '.', $me['id']);
-                echelon_notify($pdo, $friendId, 'follow_started', '', '', $me['id']);
+                echelon_notify($pdo, $friendId, 'follow_started', 'New follower', $me['name'] . ' followed you.', $me['id']);
                 Response::json(['ok' => true, 'friendId' => $friendId, 'requestId' => $id, 'theirScore' => $followed['score']]);
                 return;
             }

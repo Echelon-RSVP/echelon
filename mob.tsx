@@ -1978,7 +1978,8 @@ import React, {
           id: `nf_${Date.now()}`,
           kind: "follow_started",
           peer,
-          title: "",
+          title: `${peer.name?.split(" ")[0] || peer.name || "Someone"} followed you`,
+          body: `${peer.name || "Someone"} followed you.`,
           ts: Date.now(),
         } : null;
         return {

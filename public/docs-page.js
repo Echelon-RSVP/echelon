@@ -3,15 +3,12 @@
 const DOC_SECTIONS = [
   { id: "rating", core: true },
   { id: "score", core: true },
-  { id: "feed" },
+  { id: "media" },
   { id: "spark" },
+  { id: "followers" },
+  { id: "decay" },
   { id: "lens" },
   { id: "messages" },
-  { id: "friends" },
-  { id: "profile" },
-  { id: "events" },
-  { id: "parties" },
-  { id: "perks" },
 ];
 
 const DOC_TIPS = ["docs.tip1", "docs.tip2", "docs.tip3", "docs.tip4", "docs.tip5"];

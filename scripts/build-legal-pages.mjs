@@ -12,9 +12,9 @@ for (const name of pages) {
 
 const appSrc = src
   .replace('href="/"', 'href="/app/"')
-  .replace('src="/i18n.js"', 'src="i18n.js"')
-  .replace('src="/legal.js"', 'src="legal.js"')
-  .replace('src="/legal-page.js"', 'src="legal-page.js"')
+  .replace('src="/i18n.js"', 'src="i18n.browser.js"')
+  .replace('src="/legal.js"', 'src="legal.browser.js"')
+  .replace('src="/legal-page.js"', 'src="legal-page.browser.js"')
   .replace('href="/privacy.html"', 'href="privacy.html"')
   .replace('href="/cookies.html"', 'href="cookies.html"');
 

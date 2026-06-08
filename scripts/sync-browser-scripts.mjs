@@ -8,17 +8,21 @@ function stripExports(src) {
   return src.replace(/^export /gm, "");
 }
 
-function writeBrowserScript(name, src) {
+function writeBrowserScript(name, src, { publicName = name } = {}) {
   const stripped = stripExports(src);
-  for (const dir of [join(root, ".browser"), join(root, "public")]) {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, name), stripped);
-  }
-  console.log("Wrote", name, "to .browser/ and public/");
+  mkdirSync(join(root, ".browser"), { recursive: true });
+  writeFileSync(join(root, ".browser", name), stripped);
+  mkdirSync(join(root, "public"), { recursive: true });
+  writeFileSync(join(root, "public", publicName), stripped);
+  console.log("Wrote", name, "to .browser/ and public/" + publicName);
 }
 
-writeBrowserScript("i18n.js", readFileSync(join(root, "i18n.js"), "utf8"));
-writeBrowserScript("legal.js", readFileSync(join(root, "legal.js"), "utf8"));
+writeBrowserScript("i18n.js", readFileSync(join(root, "i18n.js"), "utf8"), {
+  publicName: "i18n.browser.js",
+});
+writeBrowserScript("legal.js", readFileSync(join(root, "legal.js"), "utf8"), {
+  publicName: "legal.browser.js",
+});
 
 const legalPage = stripExports(readFileSync(join(root, "legal-page.js"), "utf8"));
 const legalPageBundle = `${legalPage}
@@ -29,8 +33,8 @@ initLegalPage();
 })();
 `;
 
-for (const dir of [join(root, ".browser"), join(root, "public")]) {
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "legal-page.js"), legalPageBundle);
-}
-console.log("Wrote legal-page.js to .browser/ and public/");
+mkdirSync(join(root, ".browser"), { recursive: true });
+writeFileSync(join(root, ".browser", "legal-page.js"), legalPageBundle);
+mkdirSync(join(root, "public"), { recursive: true });
+writeFileSync(join(root, "public", "legal-page.browser.js"), legalPageBundle);
+console.log("Wrote legal-page.js to .browser/ and public/legal-page.browser.js");

@@ -44,7 +44,7 @@ const COMPANY = {
 };
 
 const CONTACT_LINE = `${COMPANY.legalName} (VAT ${COMPANY.vat}), ${COMPANY.address}. Email: ${COMPANY.email}.`;
-const UPDATED = "30 May 2026";
+const UPDATED = "8 June 2026";
 
 function doc(lang, type) {
   const bag = LEGAL[lang] || LEGAL.en;
@@ -109,7 +109,7 @@ const EN_PRIVACY = {
       "Depending on your settings and use of the Service, we may process the following categories of personal data:",
     ], list: [
       "Identity and account data: display name, username/handle, profile emoji or avatar, email address (where used), authentication identifiers from Sign in with Apple, Google Sign-In, or email/password registration, account creation date, onboarding status.",
-      "Onboarding imagery: a selfie or profile photo you submit during onboarding, processed to generate an initial in-app score suggestion via automated image analysis. We do not use this for biometric identification or government identity verification.",
+      "Face data / onboarding imagery: a selfie or profile photo you submit during onboarding, processed to generate an initial in-app Echelon Score suggestion via automated image analysis. We do not collect Face ID data, faceprints, face geometry templates, biometric identifiers, or government identity verification data.",
       "Echelon Score and reputation data: numeric score, tier, rating history (stars, sentiment tags, timestamps), score changes, boost status, reputation hold or lock flags, and derived access levels within the Service.",
       "Social graph and interaction data: friend connections, friend requests sent or received, ratings you give or receive, comments, likes, bookmarks, shares, story views, and feed interactions.",
       "Messaging data: direct message text, photos, videos, voice notes, reactions, reply metadata, read receipts, typing indicators, and ephemeral message settings (disappearing timers, view-once media). Recipients may capture content before it expires; we cannot control copies on their devices.",
@@ -119,6 +119,13 @@ const EN_PRIVACY = {
       "Technical and usage data: IP address, browser type, device characteristics, session tokens, server logs, timestamps, feature usage, error reports, and local storage preferences.",
       "Communications: in-app notifications (\"Pulse\" alerts), support emails, and records of data subject requests.",
       "Cookie and consent records: your cookie preferences and version of consent given.",
+    ]},
+    { heading: "4A. Face data collection, use, sharing, storage, and retention", paragraphs: [
+      "What face data we collect: during onboarding or a one-time retry, you may submit a selfie/profile photo. The submitted image may contain your face. We do not collect Apple Face ID data, biometric face templates, faceprints, facial geometry measurements, liveness maps, depth maps, or government ID data.",
+      "How we use face data: the submitted image is used only to create your profile avatar and to request an automated image-analysis score suggestion used as your initial in-app Echelon Score. The score is an entertainment/community metric inside Echelon only and is not used for identity verification, access to real-world services, credit, employment, housing, insurance, or legal decisions.",
+      "Third parties and sharing: we may send the submitted image to an AI/image-analysis processor configured for the Service solely to return the score suggestion. We do not sell face data, share it with data brokers, use it for advertising, use it to track users across apps or websites, or share it with Meta/Instagram, Google, or Apple except where you separately choose those providers for sign-in or account connection.",
+      "Storage: the uploaded image is stored on Echelon-controlled server storage as your profile avatar unless you replace it or delete your account. The numeric score result and score history are stored in our database as account/reputation data. We do not store a biometric template or faceprint.",
+      "Retention: your profile avatar is retained while your account is active or until you replace/delete it. After account deletion, face images and account data are deleted or anonymised within 30 days; encrypted backups may persist for up to 24 months for security and disaster recovery, then are purged. Server/security logs are typically retained up to 90 days.",
     ]},
     { heading: "5. Sources of data", paragraphs: [
       "We collect data directly from you, automatically through your use of the Service, from other users (e.g. ratings they submit about you), and from third parties you choose to connect (Apple, Google, Meta/Instagram).",
@@ -132,7 +139,7 @@ const EN_PRIVACY = {
       "Legal obligation (Art. 6(1)(c)): to comply with applicable law, respond to lawful requests from authorities, and maintain records required by regulation.",
     ]},
     { heading: "7. Automated processing, profiling, and the Echelon Score", paragraphs: [
-      "Your Echelon Score™ is calculated using automated processing, including profiling based on community ratings, rating recency, rater influence, onboarding analysis, and in-app rules. This may affect feature access within the Service (e.g. events, perks, feed visibility).",
+      "Your Echelon Score™ is calculated using automated processing, including profiling based on community ratings, rating recency, rater influence, onboarding analysis, and in-app rules. This may affect feature access within the Service (e.g. events, score-ranked visibility, feed ranking).",
       "Under GDPR Article 22, you have the right not to be subject to a decision based solely on automated processing that produces legal or similarly significant effects concerning you. Our Score affects in-app experiences only and is not intended to produce legal effects outside the Service. You may contact us to request human review of significant automated outcomes where applicable.",
       "Community ratings reflect the subjective opinions of other users. Fortune Comet does not endorse ratings and is not responsible for their accuracy or fairness.",
     ]},
@@ -151,7 +158,7 @@ const EN_PRIVACY = {
       "Infrastructure and hosting providers that operate echelon.rsvp (within the EEA or under EU Standard Contractual Clauses / adequacy decisions).",
       "Authentication providers: Apple (Sign in with Apple) and Google (Google Sign-In) when you choose those login methods.",
       "Meta Platforms (Instagram) when you connect your Instagram account, subject to Meta's terms and privacy policy.",
-      "AI / image analysis providers used during onboarding score suggestion (processed on your submitted photo only for that purpose).",
+      "AI / image analysis providers used during onboarding score suggestion (processed on your submitted photo only for that purpose; no biometric template or faceprint is stored by Echelon).",
       "ipapi.co for one-time IP-based country detection when no language preference is stored (IP address only).",
       "Professional advisers (lawyers, accountants) under confidentiality obligations.",
       "Public authorities, regulators, or courts when required by applicable law or to protect our rights, users, or the public.",
@@ -202,7 +209,7 @@ const EN_TERMS = {
       "Echelon is a social reputation platform that enables users to build a profile, interact with a community, receive and give ratings, and access in-app features tied to an Echelon Score™.",
       "THE ECHELON SCORE AND ALL COMMUNITY RATINGS ARE IN-APP METRICS ONLY. THEY ARE NOT CREDIT SCORES, CONSUMER REPORTS, EMPLOYMENT OR TENANCY REFERENCES, BACKGROUND CHECKS, INSURANCE SCORES, PROFESSIONAL LICENSES, OR GOVERNMENT-ISSUED IDENTIFIERS. YOU MUST NOT RELY ON THEM FOR DECISIONS OUTSIDE THE SERVICE.",
       "Fortune Comet does not guarantee the accuracy, fairness, completeness, or timeliness of any score, rating, or user-generated content. Ratings express the subjective opinions of individual users, not ours.",
-      "Features such as events, perks, Lens overlays, and access tiers are provided for in-app experience only and do not create legal entitlements to real-world goods, services, or privileges unless explicitly stated in a separate written agreement.",
+      "Features such as events, Lens overlays, score-ranked discovery, and access tiers are provided for in-app experience only and do not create legal entitlements to real-world goods, services, or privileges unless explicitly stated in a separate written agreement.",
     ]},
     { heading: "3. Eligibility", paragraphs: [
       "You must be at least 16 years old and have legal capacity to enter a binding contract in your jurisdiction.",
@@ -306,13 +313,15 @@ const EN_COOKIES = {
     ]},
     { heading: "3. Legal basis", paragraphs: [
       "Strictly necessary cookies are used based on our legitimate interest in providing a secure, functioning Service.",
-      "Functional and analytics cookies require your consent, obtained via our cookie banner or Settings.",
+      "Functional cookies require your consent, obtained via our cookie banner or Settings. Analytics cookies are not currently deployed.",
+      "We do not use cookies, local storage, or web content in the app for advertising, data brokerage, or tracking users across other companies' apps or websites.",
     ]},
     { heading: "4. Cookie categories", paragraphs: ["We use the following categories:"], list: [
       "Strictly necessary: required for security, session management, and storing your cookie consent choice. These cannot be disabled while using the Service.",
       "Functional: remember language, app preferences, demo state, and UI choices. Require consent.",
-      "Analytics: measure aggregated usage to improve the Service. Not currently deployed; if added, we will request consent first.",
+      "Analytics: not currently deployed. If added, analytics would be aggregate product analytics only and would require consent first.",
       "Marketing: not used.",
+      "Tracking/advertising: not used. We do not link app data with third-party data for advertising and do not share cookie data with data brokers.",
     ]},
     { heading: "5. Storage items we use", paragraphs: ["Current local storage and cookies include:"], list: [
       "echelon-cookie-consent (strictly necessary): stores your cookie choices and version. Duration: 24 months.",
@@ -325,9 +334,10 @@ const EN_COOKIES = {
       "We may load Google Fonts (typography) and use ipapi.co for optional one-time IP-based language detection. These providers may process IP address data under their own policies.",
       "Sign in with Apple, Google Sign-In, and Instagram OAuth are initiated by you and subject to those providers' cookies and policies.",
       "Non-essential third-party loading is deferred until you accept functional cookies where applicable.",
+      "These technologies are not used by Echelon for cross-app or cross-site tracking or advertising attribution.",
     ]},
     { heading: "7. Managing consent", paragraphs: [
-      "On first visit you will see a cookie banner with Accept all, Reject non-essential, and Manage preferences.",
+      "On first visit you will see a cookie banner with Allow functional, Reject non-essential, and Manage preferences.",
       "You may change or withdraw consent at any time via Cookie settings in the website footer or app Settings → Legal → Cookie settings.",
       "Withdrawal does not affect the lawfulness of processing before withdrawal.",
     ]},

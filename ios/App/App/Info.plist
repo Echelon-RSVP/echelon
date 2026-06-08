@@ -45,7 +45,17 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
+	    <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
+  <key>NSCameraUsageDescription</key>
+  <string>Echelon uses the camera for photos, videos, stories, and chat.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Echelon uses the microphone for voice messages, video, and calls.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>Echelon lets you pick photos and videos from your library.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key>
+  <string>Echelon can save photos you create in the app.</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Echelon uses your location for nearby discovery on the map.</string>
 </dict>
 </plist>

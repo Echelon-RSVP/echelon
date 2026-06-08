@@ -6,7 +6,9 @@ require_once __DIR__ . '/lib/Auth.php';
 require_once __DIR__ . '/lib/Helpers.php';
 require_once __DIR__ . '/lib/Scoring.php';
 
-const FRIEND_REMOVE_PENALTY = -0.08;
+const FOLLOWER_LOW_QUALITY_RATE = 0.0001;
+const FOLLOWER_MID_QUALITY_RATE = 0.0005;
+const FOLLOWER_HIGH_QUALITY_RATE = 0.001;
 
 /** Close pending/accepted follow rows so users can request again after unfollow or block. */
 function close_friend_requests_between(PDO $pdo, string $userA, string $userB, int $ts): void
@@ -43,6 +45,54 @@ function echelon_adjust_score(PDO $pdo, string $userId, float $delta, string $ki
     ]);
 
     return ['score' => $next, 'delta' => $actual, 'locked' => $locked];
+}
+
+/** @return array{score: float, delta: float, locked: bool} */
+function echelon_adjust_score_percent(PDO $pdo, string $userId, float $rate, string $kind, string $title, string $body, ?string $peerId = null): array
+{
+    $st = $pdo->prepare('SELECT score, locked FROM users WHERE id = ?');
+    $st->execute([$userId]);
+    $row = $st->fetch();
+    if (!$row) return ['score' => 0.0, 'delta' => 0.0, 'locked' => false];
+
+    $prev = (float)$row['score'];
+    $next = Scoring::applyPercentDelta($prev, $rate);
+    $actual = round($next - $prev, 2);
+    $locked = (bool)$row['locked'];
+    if ($next < 2.6) $locked = true;
+    elseif ($next >= 2.8) $locked = false;
+
+    $ts = (int)(microtime(true) * 1000);
+    $pdo->prepare('UPDATE users SET score = ?, locked = ? WHERE id = ?')->execute([$next, $locked ? 1 : 0, $userId]);
+    $pdo->prepare('INSERT INTO score_history (user_id, score, recorded_at) VALUES (?, ?, ?)')->execute([$userId, $next, $ts]);
+
+    $notifId = 'n' . bin2hex(random_bytes(8));
+    $pdo->prepare('INSERT INTO notifications (id, user_id, kind, title, body, rater_id, stars, delta, tag, appeal, ts) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?)')->execute([
+        $notifId, $userId, $kind, $title, $body, $peerId, $actual, $ts,
+    ]);
+
+    return ['score' => $next, 'delta' => $actual, 'locked' => $locked];
+}
+
+function follower_quality_rate_from_score(float $score): float
+{
+    $rounded = (int)round($score);
+    if ($rounded >= 5) return FOLLOWER_HIGH_QUALITY_RATE;
+    if ($rounded >= 4) return FOLLOWER_MID_QUALITY_RATE;
+    return FOLLOWER_LOW_QUALITY_RATE;
+}
+
+function follower_quality_rate(PDO $pdo, string $followerId): float
+{
+    $st = $pdo->prepare('SELECT score FROM users WHERE id = ?');
+    $st->execute([$followerId]);
+    $row = $st->fetch();
+    return follower_quality_rate_from_score($row ? (float)$row['score'] : 3.0);
+}
+
+function follower_quality_percent_label(float $rate): string
+{
+    return rtrim(rtrim(number_format(abs($rate) * 100, 2), '0'), '.') . '%';
 }
 
 function echelon_notify(PDO $pdo, string $userId, string $kind, string $title, string $body, ?string $peerId = null, ?string $tag = null): void
@@ -101,10 +151,13 @@ function accept_friend_request(PDO $pdo, array $cfg, array $me, string $requestI
     $fromUser->execute([$fromId]);
     $fromName = ($fromUser->fetch()['name'] ?? 'Someone');
 
+    $rate = follower_quality_rate($pdo, $fromId);
+    $label = follower_quality_percent_label($rate);
+    $score = echelon_adjust_score_percent($pdo, $toId, $rate, 'follow_started', 'New follower', $fromName . ' followed you. Your score rose by ' . $label . '.', $fromId);
     echelon_notify($pdo, $fromId, 'friend_accept', 'Follow accepted', $me['name'] . ' accepted your follow request.', $toId);
     echelon_notify($pdo, $toId, 'follow_started', '', '', $fromId);
 
-    Response::json(['ok' => true, 'friendId' => $fromId]);
+    Response::json(['ok' => true, 'friendId' => $fromId, 'yourScore' => $score['score']]);
 }
 
 function handle_auth(PDO $pdo, array $cfg, string $method, array $parts): void
@@ -300,6 +353,11 @@ function handle_bootstrap(PDO $pdo, array $cfg, string $method, array $parts, ar
 {
     if ($method !== 'GET') Response::error('Method not allowed', 405);
 
+    Scoring::applyInactivityDecay($pdo, $me['id']);
+    $freshMe = $pdo->prepare('SELECT * FROM users WHERE id = ?');
+    $freshMe->execute([$me['id']]);
+    $me = $freshMe->fetch() ?: $me;
+
     $feed = Helpers::feedRowsForUser($pdo, $me['id']);
     $gatherings = Helpers::eventsForUser($pdo, $me);
     $contacts = $pdo->prepare('SELECT * FROM users WHERE id != ? ORDER BY score DESC');
@@ -396,7 +454,12 @@ function handle_me(PDO $pdo, array $cfg, string $method, array $parts, array $me
         }
     }
 
-    if ($method === 'GET') Response::json(Helpers::userPublic($me));
+    if ($method === 'GET') {
+        Scoring::applyInactivityDecay($pdo, $me['id']);
+        $fresh = $pdo->prepare('SELECT * FROM users WHERE id = ?');
+        $fresh->execute([$me['id']]);
+        Response::json(Helpers::userPublic($fresh->fetch() ?: $me));
+    }
     if ($method === 'PATCH') {
         $body = Helpers::jsonBody();
         $fields = [];
@@ -421,6 +484,15 @@ function handle_me(PDO $pdo, array $cfg, string $method, array $parts, array $me
                 if ($k === 'heightM') {
                     $val = $val !== null && $val !== '' ? round((float)$val, 2) : null;
                     if ($val !== null && ($val < 1.0 || $val > 2.5)) Response::error('Height must be between 1.0 and 2.5 m', 400);
+                }
+                if ($k === 'handle') {
+                    $slug = strtolower(preg_replace('/[^a-z0-9_]/', '', ltrim((string)$val, '@')));
+                    if (strlen($slug) < 2) Response::error('Username must be at least 2 characters', 400);
+                    if (strlen($slug) > 30) Response::error('Username is too long', 400);
+                    $val = '@' . $slug;
+                    $stHandle = $pdo->prepare('SELECT id FROM users WHERE handle = ? AND id != ? LIMIT 1');
+                    $stHandle->execute([$val, $me['id']]);
+                    if ($stHandle->fetch()) Response::error('Username already taken', 409);
                 }
                 $fields[] = "$col = ?";
                 $params[] = $val;
@@ -479,6 +551,7 @@ function handle_onboard(PDO $pdo, array $cfg, string $method, array $parts, arra
     $pdo->prepare('UPDATE users SET onboarded = 1, lens_on = 1, score = ?, avatar_url = ?, face_scan_fallback = ? WHERE id = ?')->execute([
         $score, $avatarUrl, $fallback ? 1 : 0, $me['id'],
     ]);
+    $pdo->prepare('UPDATE user_settings SET lens = 1 WHERE user_id = ?')->execute([$me['id']]);
     $ts = (int)(microtime(true) * 1000);
     $pdo->prepare('INSERT INTO score_history (user_id, score, recorded_at) VALUES (?, ?, ?)')->execute([$me['id'], $score, $ts]);
 
@@ -510,9 +583,10 @@ function handle_ratings(PDO $pdo, array $cfg, string $method, array $parts, arra
             if ($chk->fetch()) {
                 Response::json(['canRate' => false, 'reason' => 'already_rated']);
             }
+            Response::json(['canRate' => true]);
         }
         $since = (int)(microtime(true) * 1000) - 86400000;
-        $chk = $pdo->prepare('SELECT ts FROM ratings WHERE rater_id = ? AND ratee_id = ? AND ts > ? ORDER BY ts DESC LIMIT 1');
+        $chk = $pdo->prepare('SELECT ts FROM ratings WHERE rater_id = ? AND ratee_id = ? AND post_id IS NULL AND ts > ? ORDER BY ts DESC LIMIT 1');
         $chk->execute([$me['id'], $targetId, $since]);
         $row = $chk->fetch();
         if ($row) {
@@ -560,8 +634,8 @@ function handle_ratings(PDO $pdo, array $cfg, string $method, array $parts, arra
     }
 
     $since = (int)(microtime(true) * 1000) - 86400000;
-    if (!$isUiTestPost) {
-        $chk = $pdo->prepare('SELECT 1 FROM ratings WHERE rater_id = ? AND ratee_id = ? AND ts > ? LIMIT 1');
+    if (!$isUiTestPost && !$postId) {
+        $chk = $pdo->prepare('SELECT 1 FROM ratings WHERE rater_id = ? AND ratee_id = ? AND post_id IS NULL AND ts > ? LIMIT 1');
         $chk->execute([$me['id'], $targetId, $since]);
         if ($chk->fetch()) {
             Response::error('You can only evaluate this person once every 24 hours', 429);
@@ -575,16 +649,21 @@ function handle_ratings(PDO $pdo, array $cfg, string $method, array $parts, arra
 
     $raterScore = (float)$me['score'];
     $prev = (float)$target['score'];
-    $newScore = Scoring::nudge($prev, $stars, $raterScore);
-    $delta = Scoring::round2($newScore - $prev);
     $ts = (int)(microtime(true) * 1000);
     $id = 'rt' . bin2hex(random_bytes(8));
 
     $pdo->prepare('INSERT INTO ratings (id, rater_id, ratee_id, stars, tag, context, post_id, rater_score, delta, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')->execute([
-        $id, $me['id'], $targetId, $stars, $tag, $context, $postId, $raterScore, $delta, $ts,
+        $id, $me['id'], $targetId, $stars, $tag, $context, $postId, $raterScore, 0, $ts,
     ]);
-    $pdo->prepare('UPDATE users SET score = ? WHERE id = ?')->execute([$newScore, $targetId]);
-    $pdo->prepare('INSERT INTO score_history (user_id, score, recorded_at) VALUES (?, ?, ?)')->execute([$targetId, $newScore, $ts]);
+    Scoring::markRatingActivity($pdo, $me['id'], $ts);
+    $scoreUpdate = Scoring::syncUserScore($pdo, $targetId, $prev, $ts);
+    $newScore = $scoreUpdate['score'];
+    $delta = $scoreUpdate['delta'];
+    $pdo->prepare('UPDATE ratings SET delta = ? WHERE id = ?')->execute([$delta, $id]);
+    Scoring::applyInactivityDecay($pdo, $targetId);
+    $freshTarget = $pdo->prepare('SELECT score FROM users WHERE id = ?');
+    $freshTarget->execute([$targetId]);
+    $newScore = (float)($freshTarget->fetch()['score'] ?? $newScore);
 
     [$title, $notifBody] = Helpers::feedbackCopy($delta, $stars);
     $notifId = 'n' . bin2hex(random_bytes(8));
@@ -702,8 +781,11 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
                     ->execute([$id, $me['id'], $friendId, 'accepted', $ts, $ts]);
                 $pdo->prepare('INSERT IGNORE INTO friendships (user_id, friend_id) VALUES (?, ?), (?, ?)')
                     ->execute([$me['id'], $friendId, $friendId, $me['id']]);
+                $rate = follower_quality_rate_from_score((float)$me['score']);
+                $label = follower_quality_percent_label($rate);
+                $followed = echelon_adjust_score_percent($pdo, $friendId, $rate, 'follow_started', 'New follower', $me['name'] . ' followed you. Your score rose by ' . $label . '.', $me['id']);
                 echelon_notify($pdo, $friendId, 'follow_started', '', '', $me['id']);
-                Response::json(['ok' => true, 'friendId' => $friendId, 'requestId' => $id]);
+                Response::json(['ok' => true, 'friendId' => $friendId, 'requestId' => $id, 'theirScore' => $followed['score']]);
                 return;
             }
 
@@ -763,7 +845,7 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
         require_once __DIR__ . '/lib/Geo.php';
         $myLat = isset($me['lat']) && $me['lat'] !== null ? (float)$me['lat'] : null;
         $myLng = isset($me['lng']) && $me['lng'] !== null ? (float)$me['lng'] : null;
-        $st = $pdo->prepare('SELECT u.* FROM friendships f JOIN users u ON u.id = f.friend_id WHERE f.user_id = ?');
+        $st = $pdo->prepare('SELECT u.* FROM friendships f JOIN users u ON u.id = f.friend_id WHERE f.user_id = ? AND u.lens_on = 1');
         $st->execute([$me['id']]);
         $out = [];
         foreach ($st->fetchAll() as $row) {
@@ -776,6 +858,7 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
                 $u['miles'] = ($myLat !== null && $myLng !== null)
                     ? round(Geo::haversineMiles($myLat, $myLng, (float)$lat, (float)$lng), 2)
                     : (float)$row['miles'];
+                $u['locationAt'] = isset($row['location_ts']) ? (int)$row['location_ts'] : null;
             } else {
                 $u['lat'] = null;
                 $u['lng'] = null;
@@ -801,8 +884,9 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
                 $me['id'], $friendId, $friendId, $me['id'],
             ]);
             close_friend_requests_between($pdo, $me['id'], $friendId, (int)(microtime(true) * 1000));
-            $mine = echelon_adjust_score($pdo, $me['id'], FRIEND_REMOVE_PENALTY, 'friend', 'Friend removed', 'You removed ' . $otherName . '. Your score dipped.', $friendId);
-            $theirs = echelon_adjust_score($pdo, $friendId, FRIEND_REMOVE_PENALTY, 'friend', 'Connection ended', $me['name'] . ' removed you as a friend. Your score dipped.', $me['id']);
+            $rate = -follower_quality_rate_from_score((float)$me['score']);
+            $label = follower_quality_percent_label($rate);
+            $theirs = echelon_adjust_score_percent($pdo, $friendId, $rate, 'friend', 'Follower lost', $me['name'] . ' unfollowed you. Your score dipped by ' . $label . '.', $me['id']);
             $pdo->commit();
         } catch (Throwable $e) {
             $pdo->rollBack();
@@ -811,8 +895,8 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
 
         Response::json([
             'ok' => true,
-            'penalty' => FRIEND_REMOVE_PENALTY,
-            'yourScore' => $mine['score'],
+            'penalty' => $rate,
+            'yourScore' => (float)$me['score'],
             'theirScore' => $theirs['score'],
         ]);
     }
@@ -1423,14 +1507,22 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
         if (!array_key_exists('lat', $body) || !array_key_exists('lng', $body)) {
             Response::error('lat and lng required');
         }
-        $lat = (float)$body['lat'];
-        $lng = (float)$body['lng'];
-        if (abs($lat) > 90 || abs($lng) > 180) Response::error('Invalid coordinates');
-
         $ts = (int)(microtime(true) * 1000);
         $lensOn = array_key_exists('lensOn', $body)
             ? (!empty($body['lensOn']) ? 1 : 0)
             : (int)$me['lens_on'];
+        $hideMapLocation = !empty($body['hideMapLocation']);
+
+        if ($hideMapLocation || $body['lat'] === null || $body['lng'] === null) {
+            $pdo->prepare('UPDATE users SET lat = NULL, lng = NULL, location_ts = NULL, lens_on = ? WHERE id = ?')->execute([
+                $lensOn, $me['id'],
+            ]);
+            Response::json(['ok' => true, 'ts' => $ts, 'hidden' => true]);
+        }
+
+        $lat = (float)$body['lat'];
+        $lng = (float)$body['lng'];
+        if (abs($lat) > 90 || abs($lng) > 180) Response::error('Invalid coordinates');
 
         $pdo->prepare('UPDATE users SET lat = ?, lng = ?, location_ts = ?, lens_on = ? WHERE id = ?')->execute([
             $lat, $lng, $ts, $lensOn, $me['id'],
@@ -1439,7 +1531,7 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
     }
 
     if ($method === 'GET' && ($parts[0] ?? '') === 'nearby') {
-        $radius = min($maxRadius, max(0.1, (float)($_GET['radiusMiles'] ?? 1)));
+        $radius = max($maxRadius, max(0.1, (float)($_GET['radiusMiles'] ?? $maxRadius)));
         $lensOnly = ($_GET['lensOnly'] ?? '1') !== '0';
         $cutoff = (int)(microtime(true) * 1000) - $staleMs;
 
@@ -1457,14 +1549,14 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
 
         $myLat = (float)$myLoc['lat'];
         $myLng = (float)$myLoc['lng'];
-        [$minLat, $maxLat, $minLng, $maxLng] = Geo::boundingBox($myLat, $myLng, $radius + 0.15);
 
         $st = $pdo->prepare(
-            'SELECT * FROM users WHERE id != ? AND onboarded = 1
-             AND lat IS NOT NULL AND lng IS NOT NULL AND location_ts >= ?
-             AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?'
+            'SELECT u.* FROM friendships f
+             JOIN users u ON u.id = f.friend_id
+             WHERE f.user_id = ? AND u.onboarded = 1
+             AND u.lat IS NOT NULL AND u.lng IS NOT NULL AND u.location_ts >= ?'
         );
-        $st->execute([$me['id'], $cutoff, $minLat, $maxLat, $minLng, $maxLng]);
+        $st->execute([$me['id'], $cutoff]);
 
         $nearby = [];
         foreach ($st->fetchAll() as $row) {
@@ -1472,12 +1564,12 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
             $lat = (float)$row['lat'];
             $lng = (float)$row['lng'];
             $miles = Geo::haversineMiles($myLat, $myLng, $lat, $lng);
-            if ($miles > $radius) continue;
 
             $bearing = Geo::bearingDeg($myLat, $myLng, $lat, $lng);
-            $hud = Geo::lensHudFromBearing($bearing, $miles, $radius);
+            $hud = Geo::lensHudFromBearing($bearing, $miles, max(1.0, $miles));
             $pub = Helpers::userPublic($row);
             $pub['miles'] = round($miles, 2);
+            $pub['locationAt'] = isset($row['location_ts']) ? (int)$row['location_ts'] : null;
             $pub['lensX'] = $hud['lensX'];
             $pub['lensY'] = $hud['lensY'];
             $pub['bearing'] = round($bearing, 1);
@@ -1917,8 +2009,10 @@ function handle_spark(PDO $pdo, array $cfg, string $method, array $parts, array 
                 'preferences' => Spark::preferencesForUser($pdo, $me['id']),
             ]);
         }
+        $deck = Spark::deckForUser($pdo, $me);
         Response::json([
-            'deck' => Spark::deckForUser($pdo, $me),
+            'deck' => $deck,
+            'recycled' => !empty($deck) && !empty($deck[0]['sparkRecycled']),
             'needsHeight' => false,
             'preferences' => Spark::preferencesForUser($pdo, $me['id']),
         ]);
@@ -2011,10 +2105,14 @@ function handle_spark(PDO $pdo, array $cfg, string $method, array $parts, array 
         }
 
         $ts = (int) (microtime(true) * 1000);
+        $passCount = $action === 'pass' ? 1 : 0;
         $pdo->prepare(
-            'INSERT INTO spark_swipes (from_user_id, to_user_id, action, ts) VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE action = VALUES(action), ts = VALUES(ts)'
-        )->execute([$me['id'], $targetId, $action, $ts]);
+            'INSERT INTO spark_swipes (from_user_id, to_user_id, action, ts, pass_count) VALUES (?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE
+               action = VALUES(action),
+               ts = VALUES(ts),
+               pass_count = IF(VALUES(action) = \'pass\', pass_count + 1, pass_count)'
+        )->execute([$me['id'], $targetId, $action, $ts, $passCount]);
 
         Spark::maybeApplySwipeScoreNudge($pdo, $me['id'], $target, $action);
 

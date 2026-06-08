@@ -23,12 +23,14 @@ const migrations = [
   "migrate-chat-typing.php",
   "migrate-stories.php",
   "migrate-spark.php",
+  "migrate-spark-pass-count.php",
   "migrate-party-events.php",
   "migrate-profile-spark.php",
   "migrate-social-features.php",
   "migrate-post-overlays.php",
   "migrate-post-likes.php",
   "migrate-party-extras.php",
+  "migrate-rating-engine.php",
 ];
 
 for (const file of migrations) {

@@ -16,6 +16,8 @@
     "seed:meta-reviewer": "node seed-meta-reviewer.mjs",
     "seed:appstore-reviewer": "node seed-appstore-reviewer.mjs",
     "seed:test-user": "node seed-test-user.mjs",
+    "seed:world-profiles": "node seed-world-profiles.mjs",
+    "gen:world-profiles": "node scripts/gen-world-profiles.mjs",
     "meta:test": "node scripts/meta-initiate-testing.mjs",
     "meta:test:open": "node scripts/meta-initiate-testing.mjs --open",
     "ios:prepare": "node scripts/ios-inject-appstore-meta.mjs",

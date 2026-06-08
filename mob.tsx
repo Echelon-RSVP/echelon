@@ -9,11 +9,11 @@
 
    ARCHITECTURE (mirrors a React Native app; ports 1:1 to Expo)
    ┌───────────────────────────────────────────────────────────────────────┐
-   │  config/        TIERS, FEATURE_GATES, EMOTION_TAGS                       │
+   │  config/        TIERS, EMOTION_TAGS                                      │
    │  services/      user registry, API client, scoring engine                 │
    │  store/         useReducer + Context  (global, live score updates)       │
    │  components/     Avatar, ScoreRing, TierPill, ScoreBadge, Mascot, ...     │
-   │  screens/        Onboarding, Feed, People, Perks, Alerts, Profile,        │
+   │  screens/        Onboarding, Feed, People, Alerts, Profile,               │
    │                  Settings, Interaction (sheet)                            │
    │  modals/         RatingModal, FeatureLockModal, AppealModal, FriendWarn   │
    └───────────────────────────────────────────────────────────────────────┘
@@ -36,10 +36,15 @@ import React, {
   import { openInstagramAuth } from "./instagram-auth.js";
   import { isScreenshotDemoMode, buildScreenshotDemoSession, SCREENSHOT_DEMO_USER_ID } from "./screenshot-demo.js";
   import {
+    mergeWorldProfilesIntoContacts,
+    mergeWorldPostsIntoFeed,
+    worldProfilesAsContacts,
+  } from "./world-profiles.js";
+  import {
     Star, Heart, Sparkles, Lock, Eye, EyeOff, Bell, User, Home, Users, Settings,
     Phone, MessageCircle, MapPin, TrendingUp, TrendingDown, ShieldAlert, Scale,
     Zap, Crown, Check, X, ChevronRight, ChevronLeft, ChevronDown, Plus, Search,
-    Camera, Award, Plane, Building2, CalendarHeart, Coffee, Info, Gauge, Loader,
+    Camera, CalendarHeart, Info, Gauge, Loader,
     Instagram, BadgeCheck, Volume2, VolumeX, Ticket, Radar, Crosshair, BellOff, Moon, Shield,
     Video, Image as ImageIcon, Play, Pause, Send, Mic, MicOff, Smile, LogOut, Smartphone, Share,
     Clock, UserMinus, UserPlus, UserCheck, Share2, Bookmark, Sparkles as SparklesIcon, MoreHorizontal, Trash2, Timer, Flame,
@@ -287,16 +292,6 @@ import React, {
   
   const getTier = (score) => TIERS.find((t) => score >= t.min) || TIERS[TIERS.length - 1];
   
-  // Feature gates: score thresholds that unlock or restrict real life.
-  const FEATURE_GATES = [
-    { id: "feed",    label: "Premium Radiance Feed", req: 4.0, icon: Sparkles, copy: "See the most beautiful, highest-rated lives. Mid & Low tiers receive a gentler, filtered feed." },
-    { id: "dining",  label: "Fine Dining Reservations", req: 4.0, icon: Coffee, copy: "Book curated venues that screen guests by score." },
-    { id: "travel",  label: "Priority Travel Lane",  req: 4.2, icon: Plane, copy: "Skip the standard queue. Board, drive, and arrive ahead of lower tiers." },
-    { id: "housing", label: "Premier Residences",    req: 4.5, icon: Building2, copy: "Unlock the 20% Prime Influencer housing discount and exclusive buildings." },
-    { id: "events",  label: "Invitation-Only Events", req: 4.5, icon: CalendarHeart, copy: "Weddings, galas, openings. The room is curated; the room curates you back." },
-    { id: "boost",   label: "Endorse & Boost Others", req: 4.5, icon: Zap, copy: "Lend your influence. Temporarily amplify someone you believe in." },
-  ];
-  
   // Optional one-tap emotional tags attached to a rating. Sweet on top, sour below.
   const EMOTION_TAGS = {
     positive: ["radiant ✨", "warm 🤍", "so authentic 💫", "uplifting 🌷", "polished 🪞", "kind 🍃", "magnetic 🔆", "effortless 🫧"],
@@ -368,7 +363,6 @@ import React, {
      2. SERVICES: user registry + scoring engine
   ============================================================================ */
   
-  const PROX_MILE = 1.0;
   const MIN_RATER_SCORE = 2.6;
   let contactRegistry = {};
   const byId = new Proxy({}, {
@@ -414,7 +408,6 @@ import React, {
     liveProximityActive(state) ? (state.nearbyUsers || []) : [];
 
   const milesOf = (state, c) => state.contactMiles[c.id] ?? c.miles;
-  const withinMile = (state, c) => milesOf(state, c) <= PROX_MILE;
   const MAP_LOCATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
   const friendLocationTs = (f) => {
@@ -438,8 +431,7 @@ import React, {
 
   const canRateFeed = (state, c) => {
     if (state.user.locked || state.user.score < MIN_RATER_SCORE) return false;
-    if (!hasHigherScoreThan(state, c)) return false;
-    if (!state.strangerRatings && !state.friends.includes(c.id)) return false;
+    if (!c?.id || !state.friends.includes(c.id)) return false;
     return true;
   };
 
@@ -451,7 +443,6 @@ import React, {
   };
 
   const canRateNearby = (state, c) => {
-    if (!withinMile(state, c)) return false;
     if (!mutualLens(state, c)) return false;
     return canRateFeed(state, c);
   };
@@ -465,17 +456,17 @@ import React, {
   };
   const canBeRatedByNearby = (state, c) => canRateNearby(state, c);
   const nearbyContacts = (state) =>
-    proximityPool(state).filter((c) => withinMile(state, c)).sort((a, b) => milesOf(state, a) - milesOf(state, b));
+    proximityPool(state).sort((a, b) => milesOf(state, a) - milesOf(state, b));
   const rateableNearby = (state) => proximityPool(state).filter((c) => canRateProximity(state, c));
   const lensVisibleNearby = (state) =>
     state.lens
-      ? proximityPool(state).filter((c) => withinMile(state, c) && c.lensOn)
+      ? proximityPool(state).filter((c) => c.lensOn)
       : [];
   const proxReason = (state, c) => {
     if (!state.lens) return "Your Lens is off";
     if (!c.lensOn) return "Their Lens is off";
-    if (state.friends.includes(c.id)) return "Friend · mutual Lens";
-    return "Mutual Lens";
+    if (state.friends.includes(c.id)) return "Following · Lens on";
+    return "Lens on";
   };
 
   const feedBlockReason = (state, c, tr) => {
@@ -483,25 +474,16 @@ import React, {
     if (state.user.score < MIN_RATER_SCORE) {
       return tr("rate.blockMinScore", { min: MIN_RATER_SCORE.toFixed(1), mine: state.user.score.toFixed(2) });
     }
-    if (!hasHigherScoreThan(state, c)) {
-      return tr("rate.blockScoreHierarchy", {
-        mine: state.user.score.toFixed(2),
-        theirs: (c?.score ?? 0).toFixed(2),
-      });
-    }
-    if (!state.strangerRatings && !state.friends.includes(c.id)) {
-      return tr("rate.blockFriendsOnly");
-    }
+    if (!state.friends.includes(c?.id)) return tr("rate.blockFriendsOnly");
     return "";
   };
 
   const lensBlockReason = (state, c, tr) => {
     const base = feedBlockReason(state, c, tr);
     if (base) return base;
-    if (!state.lens && !c.lensOn) return "Turn Lens on · they need Lens too (proximity only)";
-    if (!state.lens) return "Turn Lens on to rate nearby (within 1 mi)";
-    if (!c.lensOn) return "They need Lens on for proximity rating";
-    if (!withinMile(state, c)) return "Move within 1 mi for proximity rating";
+    if (!state.lens && !c.lensOn) return "Turn Lens on · they need Lens too";
+    if (!state.lens) return "Turn Lens on to rate followed users";
+    if (!c.lensOn) return "They need Lens on for map rating";
     const left = proxCooldownLeft(state, c.id);
     if (left > 0) return `Rated recently · try again in ${formatCooldown(left)}`;
     return "";
@@ -539,7 +521,7 @@ import React, {
     author: UI_TEST_USER_ID,
     uiTest: true,
     kind: "post",
-    caption: "UI test post · drag to rate, double-tap to like, tap comment or share",
+    caption: "UI test post · tap to rate, double-tap to like, tap comment or share",
     mediaUrl: "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=1080&q=80",
     mediaType: "image",
     source: "echelon",
@@ -598,30 +580,37 @@ import React, {
     return id === "test" || id === "@test" || id === "test@test.com";
   };
 
-  const buildLocalTestSession = (user) => ({
-    liveData: false,
-    user: {
-      ...user,
-      id: user.id || UI_TEST_USER_ID,
-      name: user.name || "test",
-      handle: user.handle || "@test",
-      email: user.email || "test@test.com",
-      score: user.score ?? 4.2,
-      onboarded: true,
-      authMethod: "password",
-      emoji: user.emoji || "✨",
-      color: user.color || "#E6DBFF",
-    },
-    contacts: [],
-    gatherings: [],
-    feed: [UI_TEST_POST_FALLBACK, ...DEMO_REEL_POSTS],
-    friends: [],
-    rsvps: [],
-    history: [{ t: Date.now() - 86400000, s: 4.1 }, { t: Date.now(), s: 4.2 }],
-    notifications: [],
-    settings: { lens: true, sound: true },
-    stories: [],
-  });
+  const buildLocalTestSession = (user) => {
+    const now = Date.now();
+    const worldContacts = worldProfilesAsContacts();
+    registerUsers(worldContacts);
+    return {
+      liveData: false,
+      user: {
+        ...user,
+        id: user.id || UI_TEST_USER_ID,
+        name: user.name || "test",
+        handle: user.handle || "@test",
+        email: user.email || "test@test.com",
+        score: user.score ?? 4.2,
+        onboarded: true,
+        authMethod: "password",
+        emoji: user.emoji || "✨",
+        color: user.color || "#E6DBFF",
+        heightM: user.heightM ?? 1.72,
+        birthYear: user.birthYear ?? 1994,
+      },
+      contacts: worldContacts,
+      gatherings: [],
+      feed: mergeWorldPostsIntoFeed([UI_TEST_POST_FALLBACK, ...DEMO_REEL_POSTS], now),
+      friends: [],
+      rsvps: [],
+      history: [{ t: now - 86400000, s: 4.1 }, { t: now, s: 4.2 }],
+      notifications: [],
+      settings: { lens: true, sound: true },
+      stories: [],
+    };
+  };
 
   const ensureTestAuthor = (state) => {
     if (!contactRegistry[UI_TEST_USER_ID]) {
@@ -690,13 +679,10 @@ import React, {
     const friends = new Set(state.friends || []);
     const hidden = hiddenPostIds(state);
     const prefs = algorithmPrefsFromState(state);
-    const ownPosts = feedGridPostsOnly(buildFeed(state))
-      .filter((p) => isPostOwner(state, p) && !hidden.has(p.id))
-      .sort((a, b) => (b.ts || 0) - (a.ts || 0));
     const posts = feedGridPostsOnly(buildFeed(state))
       .filter((p) => {
         if (isUiTestPost(p) || isPostOwner(state, p) || hidden.has(p.id)) return false;
-        if (prefs.boostFresh && now - (p.ts || 0) >= 86400000) return false;
+        if (prefs.boostFresh && now - normalizePostTs(p.ts || 0) >= 86400000) return false;
         if (postMatchesMute(p, prefs.muteTopics)) return false;
         return true;
       });
@@ -705,25 +691,20 @@ import React, {
       if (prefs.boostFollowing && friends.has(p.author)) s += 22;
       if (prefs.boostRated) s += (p.avgRating ?? 0) * 20;
       s += Math.min(36, (p.likes ?? 0) * 0.35);
-      if (prefs.boostFresh && now - (p.ts || 0) < 43200000) s += 8;
+      if (prefs.boostFresh && now - normalizePostTs(p.ts || 0) < 43200000) s += 8;
       if (postMatchesInterests(p, prefs.interests)) s += 14;
       if (prefs.mix === "reels" && isReelPost(p)) s += 12;
       if (prefs.mix === "posts" && !isReelPost(p)) s += 10;
       return s;
     };
     const ranked = [...posts].sort((a, b) => score(b) - score(a));
-    const ownIds = new Set(ownPosts.map((p) => p.id));
-    if (isScreenshotDemoMode()) {
-      return ranked.filter((p) => !ownIds.has(p.id)).sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    }
-    const tail = [...ownPosts, ...ranked.filter((p) => !ownIds.has(p.id))];
-    return testPost ? [testPost, ...tail] : tail;
+    return testPost ? [testPost, ...ranked] : ranked;
   };
 
   const globalExplorePosts = (state, now = Date.now()) => {
     const hidden = hiddenPostIds(state);
     return [...feedGridPostsOnly(buildFeed(state)), ...reelPostsOnly(buildFeed(state))]
-      .filter((p) => !isUiTestPost(p) && !hidden.has(p.id) && now - (p.ts || 0) < 86400000)
+      .filter((p) => !isUiTestPost(p) && !isPostOwner(state, p) && !hidden.has(p.id) && now - normalizePostTs(p.ts || 0) < 86400000)
       .sort((a, b) => (b.avgRating ?? 0) - (a.avgRating ?? 0) || (b.likes ?? 0) - (a.likes ?? 0));
   };
 
@@ -753,7 +734,10 @@ import React, {
       const handle = (u.handle || "").replace(/^@/, "").toLowerCase();
       const name = (u.name || "").toLowerCase();
       const bio = (u.bio || "").toLowerCase();
-      return handle.includes(needle) || name.includes(needle) || bio.includes(needle);
+      const country = (u.country || "").toLowerCase();
+      const city = (u.city || "").toLowerCase();
+      return handle.includes(needle) || name.includes(needle) || bio.includes(needle)
+        || country.includes(needle) || city.includes(needle);
     }).slice(0, 12);
   };
 
@@ -853,7 +837,7 @@ import React, {
       return { id: ME_ID, name: state.user.name, handle: state.user.handle, emoji: state.user.emoji, color: state.user.color, score: state.user.score, avatarUrl: state.user.avatarUrl };
     }
     const hit = byId[id] || state.contacts?.find((c) => c.id === id) || state.nearbyUsers?.find((c) => c.id === id);
-    return hit ? { id, ...hit } : { id, name: "User", handle: "@user", emoji: "😊", color: "#FFE0EC", score: 4.0 };
+    return hit ? { id, ...hit } : { id, name: "User", handle: "@user", emoji: "😊", color: "#FFE0EC", score: 4.0, avatarUrl: null };
   };
 
   const buildFeed = (state) => {
@@ -932,17 +916,28 @@ import React, {
     return queue.filter((id) => byAuthor.has(id));
   };
 
+  const normalizePostTs = (ts) => {
+    const n = Number(ts);
+    if (!n || !Number.isFinite(n)) return 0;
+    return n < 1e12 ? n * 1000 : n;
+  };
+
   const formatPostAge = (ts, now) => {
-    if (!ts) return "";
-    const diff = Math.max(0, now - ts);
+    const t = normalizePostTs(ts);
+    const n = normalizePostTs(now) || Date.now();
+    if (!t) return "";
+    const diff = Math.max(0, n - t);
     const m = Math.floor(diff / 60000);
     if (m < 1) return "now";
     if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
+    const h = Math.floor(diff / 3600000);
     if (h < 24) return `${h}h ago`;
-    const d = new Date(ts);
-    const y = d.getFullYear() !== new Date(now).getFullYear();
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(y ? { year: "numeric" } : {}) });
+    const d = Math.floor(diff / 86400000);
+    if (d < 30) return `${d}d ago`;
+    const mo = Math.floor(d / 30);
+    if (d < 365) return `${Math.max(1, mo)}mo ago`;
+    const y = Math.floor(d / 365);
+    return `${Math.max(1, y)}y ago`;
   };
 
   const formatPortfolioDate = (ts, now) => formatPostAge(ts, now);
@@ -1173,11 +1168,11 @@ import React, {
   const reelPostsOnly = (posts) => feedPostsOnly(posts).filter((p) => isReelPost(p));
 
   const friendFeedPosts = (state) =>
-    feedGridPostsOnly(buildFeed(state)).filter((p) => p.author !== ME_ID && state.friends.includes(p.author));
+    feedGridPostsOnly(buildFeed(state)).filter((p) => !isPostOwner(state, p) && state.friends.includes(p.author));
 
   const discoverFeedPosts = (state, now = Date.now()) =>
     feedPostsOnly(buildFeed(state))
-      .filter((p) => p.author !== ME_ID && now - (p.ts || 0) < 86400000)
+      .filter((p) => !isPostOwner(state, p) && now - normalizePostTs(p.ts || 0) < 86400000)
       .sort((a, b) => postPopularity(state, b) - postPopularity(state, a));
 
   const canRatePost = (state, post, author, canSeePremium, ratedPosts) => {
@@ -1185,7 +1180,7 @@ import React, {
     if (isUiTestPost(post)) return true;
     if (post.premium && !canSeePremium) return false;
     if (ratedPosts?.has?.(post.id)) return false;
-    return canRateFeed(state, author);
+    return !!author && !isPostOwner(state, post);
   };
 
   const canRateExplorePost = (state, post, author, canSeePremium, ratedPosts) => {
@@ -1193,10 +1188,7 @@ import React, {
     if (isUiTestPost(post)) return true;
     if (post.premium && !canSeePremium) return false;
     if (ratedPosts?.has?.(post.id)) return false;
-    if (state.user.locked) return false;
-    if (state.user.score < MIN_RATER_SCORE) return false;
-    if (!hasHigherScoreThan(state, author)) return false;
-    return true;
+    return !!author && !isPostOwner(state, post);
   };
 
   const postRateStarState = (state, post, author, canSeePremium, ratedPosts) => {
@@ -1206,10 +1198,7 @@ import React, {
     const eligible = isUiTestPost(post)
       ? true
       : !(post.premium && !canSeePremium)
-        && !state.user.locked
-        && state.user.score >= MIN_RATER_SCORE
-        && hasHigherScoreThan(state, author)
-        && (state.strangerRatings || state.friends.includes(author?.id));
+        && !!author;
     if (!eligible) return "hidden";
     return "empty";
   };
@@ -1235,7 +1224,7 @@ import React, {
     if (isUiTestPost(post)) return "";
     if (post?.premium && !canSeePremium) return tr("rate.blockPremium");
     if (ratedPosts?.has?.(post.id)) return tr("rate.blockPost");
-    return feedBlockReason(state, author, tr);
+    return "";
   };
 
   const saveFeedIx = (patch) => {
@@ -1406,14 +1395,14 @@ import React, {
     return ids;
   };
 
-  const DRAG_STAR_PX = 18;
-  const MIN_RATING_DRAG_PX = 14;
+  const DRAG_STAR_PX = 32;
+  const MIN_RATING_DRAG_PX = 8;
   const SCROLL_CANCEL_PX = 12;
   const RATING_HORIZONTAL_RATIO = 1.25;
 
-  /** Slide finger left (lower) / right (higher) to pick 1–5 stars. */
+  /** Slide finger left (lower) / right (higher) to pick 1–5 stars (continuous while dragging). */
   const starsFromHorizontalDrag = (startX, clientX, baseStars = 3) => {
-    const change = Math.round((clientX - startX) / DRAG_STAR_PX);
+    const change = (clientX - startX) / DRAG_STAR_PX;
     return Math.max(1, Math.min(5, baseStars + change));
   };
 
@@ -1465,6 +1454,8 @@ import React, {
   };
 
   const SPARK_SWIPES_KEY = "echelon-spark-swipes";
+  const SPARK_RECYCLE_MS = 86400000;
+
   const loadSparkSwipes = () => {
     try {
       const raw = localStorage.getItem(SPARK_SWIPES_KEY);
@@ -1475,19 +1466,77 @@ import React, {
     try { localStorage.setItem(SPARK_SWIPES_KEY, JSON.stringify(map)); } catch { /* ignore */ }
   };
 
+  const normalizeSparkSwipeEntry = (entry) => {
+    if (!entry || (typeof entry === "object" && entry._likesReceived)) return null;
+    if (typeof entry === "string") {
+      return { action: entry, ts: 0, passCount: entry === "pass" ? 1 : 0 };
+    }
+    if (typeof entry === "object" && entry.action) {
+      return {
+        action: entry.action,
+        ts: entry.ts || 0,
+        passCount: entry.passCount ?? (entry.action === "pass" ? 1 : 0),
+      };
+    }
+    return null;
+  };
+
+  const recordSparkSwipe = (sw, targetId, action) => {
+    const prev = normalizeSparkSwipeEntry(sw[targetId]);
+    if (action === "pass") {
+      sw[targetId] = { action: "pass", ts: Date.now(), passCount: (prev?.passCount || 0) + 1 };
+    } else {
+      sw[targetId] = { action, ts: Date.now(), passCount: prev?.passCount || 0 };
+    }
+    return sw;
+  };
+
+  const formatSparkDeckUser = (c, recycled = false) => ({
+    ...c,
+    avatarUrl: resolveMediaUrl(c.avatarUrl) || c.avatarUrl,
+    photos: c.avatarUrl ? [{ url: resolveMediaUrl(c.avatarUrl) || c.avatarUrl, type: "image", caption: "", scene: [c.color || "#FFE0EC", "#fff"] }] : [],
+    age: ageFromBirthYear(c.birthYear),
+    sparkRecycled: recycled || undefined,
+  });
+
   const buildLocalSparkDeck = (state) => {
-    if (!state.user.heightM) return [];
+    if (!state.user.heightM) return { deck: [], recycled: false };
     const swiped = loadSparkSwipes();
     const friendSet = new Set(state.friends);
-    const pool = (state.contacts?.length ? state.contacts : Object.values(contactRegistry))
-      .filter((c) => c && c.id && c.id !== ME_ID && !friendSet.has(c.id) && !swiped[c.id])
+    const now = Date.now();
+    const base = (state.contacts?.length ? state.contacts : Object.values(contactRegistry))
+      .filter((c) => c && c.id && c.id !== ME_ID && !friendSet.has(c.id));
+
+    const fresh = base
+      .filter((c) => !normalizeSparkSwipeEntry(swiped[c.id]))
       .filter((c) => passesSparkFilters(state, c));
-    return pool.sort(() => Math.random() - 0.5).slice(0, 24).map((c) => ({
-      ...c,
-      avatarUrl: resolveMediaUrl(c.avatarUrl) || c.avatarUrl,
-      photos: c.avatarUrl ? [{ url: resolveMediaUrl(c.avatarUrl) || c.avatarUrl, type: "image", caption: "", scene: [c.color || "#FFE0EC", "#fff"] }] : [],
-      age: ageFromBirthYear(c.birthYear),
-    }));
+
+    let recycled = false;
+    let pool = fresh.sort(() => Math.random() - 0.5).slice(0, 24);
+
+    if (!pool.length) {
+      const passed = base
+        .map((c) => ({ c, entry: normalizeSparkSwipeEntry(swiped[c.id]) }))
+        .filter(({ entry }) => entry?.action === "pass" && (now - (entry.ts || 0)) >= SPARK_RECYCLE_MS)
+        .filter(({ c }) => passesSparkFilters(state, c))
+        .sort((a, b) => {
+          const ca = a.entry.passCount || 1;
+          const cb = b.entry.passCount || 1;
+          if (ca !== cb) return ca - cb;
+          return (a.entry.ts || 0) - (b.entry.ts || 0);
+        })
+        .map(({ c }) => c)
+        .slice(0, 24);
+      if (passed.length) {
+        pool = passed;
+        recycled = true;
+      }
+    }
+
+    return {
+      deck: pool.map((c) => formatSparkDeckUser(c, recycled)),
+      recycled,
+    };
   };
   
   const raterInfluence = (raterScore) => 0.5 + (raterScore / 5); // 0.7 .. 1.5
@@ -1529,6 +1578,16 @@ import React, {
     const avg = scores.reduce((a, s) => a + s, 0) / scores.length;
     return Math.max(6, Math.min(99, Math.round(71 + (avg - 4.0) * 23)));
   }
+
+  function followerCountForUser(state, userId) {
+    const u = getAuthor(state, userId);
+    if (u?.followerCount != null) return u.followerCount;
+    if (userId === ME_ID || userId === state.user.id) return state.friends.length;
+    const seed = [...String(userId)].reduce((a, c) => a + c.charCodeAt(0), 0);
+    let n = Math.max(1, Math.round(((u?.score ?? 3) * 28) + (seed % 180)));
+    if (state.friends.includes(userId)) n = Math.max(n, 1);
+    return n;
+  }
   
   /* ============================================================================
      3. STORE: global state + reducer + Context (the live, shared score)
@@ -1546,6 +1605,7 @@ import React, {
     feedIgPane: "home",
     feedFilter: "foryou",
     liveSession: null,
+    activeCall: null,
     dmNotes: [],
     userStatuses: loadChatStatuses(),
     profileHighlights: [],
@@ -1553,7 +1613,7 @@ import React, {
     appToast: null,
     shareSuccess: null, // { message, composeMode }
     exploreTab: "posts",
-    lens: false,
+    lens: true,
     live: true,
     sound: true,
     proximityAlerts: true,
@@ -1587,6 +1647,7 @@ import React, {
     storyViewed: {},
     ratedPosts: [],
     sparkDeck: [],
+    sparkDeckRecycled: false,
     sparkMatches: [],
     sparkLikesReceived: 0,
     sparkMinScore: DEFAULT_SPARK_PREFS.minScore,
@@ -1613,17 +1674,20 @@ import React, {
         const p = action.payload;
         hydrateUsers(p);
         registerUsers((p.notifications || []).map((n) => n.peer).filter(Boolean));
-        contactRegistry = Object.fromEntries((p.contacts || []).map((c) => [c.id, { ...c, avatarUrl: resolveMediaUrl(c.avatarUrl) || c.avatarUrl }]));
+        const mergedContacts = mergeWorldProfilesIntoContacts(p.contacts || []);
+        registerUsers(mergedContacts);
+        contactRegistry = Object.fromEntries(mergedContacts.map((c) => [c.id, { ...c, avatarUrl: resolveMediaUrl(c.avatarUrl) || c.avatarUrl }]));
         const u = p.user;
         const s = p.settings || {};
+        const mergedFeed = mergeWorldPostsIntoFeed(p.feed || [], Date.now());
         const next = {
           ...state,
           liveData: p.liveData !== undefined ? !!p.liveData : true,
           sessionReady: true,
           onboarded: !!u.onboarded,
-          contacts: p.contacts || [],
+          contacts: mergedContacts,
           gatherings: p.gatherings || [],
-          feedPosts: mergeFeedPosts(p.feed, state.feedPosts, u.id || ME_ID, state.igExtras?.hiddenPosts),
+          feedPosts: mergeFeedPosts(mergedFeed, state.feedPosts, u.id || ME_ID, state.igExtras?.hiddenPosts),
           stories: p.stories || [],
           friends: p.friends || [],
           friendRequestsIncoming: p.friendRequests?.incoming || [],
@@ -1771,8 +1835,48 @@ import React, {
       }
       case "SET_LENS":    return { ...state, lens: action.value };
       case "TOGGLE_LIVE": return { ...state, live: !state.live };
-      case "OPEN_MODAL":  return { ...state, modal: { type: action.modal, payload: action.payload } };
+      case "OPEN_MODAL": {
+        const modal = { type: action.modal, payload: action.payload };
+        if (action.modal === "call" && action.payload?.id) {
+          const mode = action.payload.mode === "video" ? "video" : "voice";
+          const same = state.activeCall?.peerId === action.payload.id;
+          const activeCall = same ? state.activeCall : {
+            peerId: action.payload.id,
+            mode,
+            status: "ringing",
+            videoOn: mode === "video",
+            muted: false,
+            speakerOn: true,
+            camOff: false,
+            secs: 0,
+            startedAt: null,
+          };
+          return { ...state, modal, activeCall };
+        }
+        return { ...state, modal };
+      }
       case "CLOSE_MODAL": return { ...state, modal: null };
+      case "MINIMIZE_CALL": return { ...state, modal: null };
+      case "CALL_CONNECTED": {
+        if (!state.activeCall || state.activeCall.status !== "ringing") return state;
+        return {
+          ...state,
+          activeCall: { ...state.activeCall, status: "connected", startedAt: Date.now() },
+        };
+      }
+      case "CALL_NO_ANSWER": {
+        if (!state.activeCall || state.activeCall.status !== "ringing") return state;
+        return { ...state, activeCall: { ...state.activeCall, status: "no_answer" } };
+      }
+      case "CALL_TICK": {
+        if (!state.activeCall || state.activeCall.status !== "connected") return state;
+        return { ...state, activeCall: { ...state.activeCall, secs: state.activeCall.secs + 1 } };
+      }
+      case "UPDATE_CALL": {
+        if (!state.activeCall) return state;
+        return { ...state, activeCall: { ...state.activeCall, ...action.patch } };
+      }
+      case "END_CALL": return { ...state, activeCall: null };
       case "SET_CHAT_INBOX":
         return { ...state, chatInbox: { ...state.chatInbox, ...(action.inbox || {}) } };
       case "PATCH_CHAT_INBOX": {
@@ -1884,10 +1988,8 @@ import React, {
           friendRequestsOutgoing: state.friendRequestsOutgoing.filter((r) => (r.user?.id || r.userId) !== action.id),
         };
       case "REMOVE_FRIEND_RESULT": {
-        const penalty = action.penalty ?? -0.08;
-        const nextScore = round2(clampScore(state.user.score + penalty));
         const contacts = (state.contacts || []).map((c) =>
-          c.id === action.id ? { ...c, score: round2(clampScore((action.theirScore ?? c.score + penalty))) } : c
+          c.id === action.id ? { ...c, score: round2(clampScore((action.theirScore ?? c.score))) } : c
         );
         if (contacts.length) contactRegistry = Object.fromEntries(contacts.map((c) => [c.id, c]));
         return {
@@ -1895,9 +1997,9 @@ import React, {
           friends: state.friends.filter((f) => f !== action.id),
           friendRequestsIncoming: state.friendRequestsIncoming.filter((r) => r.user?.id !== action.id),
           friendRequestsOutgoing: state.friendRequestsOutgoing.filter((r) => r.user?.id !== action.id),
-          user: { ...state.user, score: action.yourScore ?? nextScore },
+          user: { ...state.user, score: action.yourScore ?? state.user.score },
           contacts,
-          history: [...state.history, { t: Date.now(), s: action.yourScore ?? nextScore }].slice(-48),
+          history: [...state.history, { t: Date.now(), s: action.yourScore ?? state.user.score }].slice(-48),
           modal: null,
         };
       }
@@ -2289,6 +2391,7 @@ import React, {
         return {
           ...state,
           sparkDeck: action.deck || [],
+          sparkDeckRecycled: !!action.recycled,
           sparkMinScore: action.preferences?.minScore ?? state.sparkMinScore,
           sparkMaxScore: action.preferences?.maxScore ?? state.sparkMaxScore,
           sparkMinAge: action.preferences?.minAge ?? state.sparkMinAge,
@@ -2316,15 +2419,21 @@ import React, {
 
       case "SPARK_SWIPE_LOCAL": {
         const sw = loadSparkSwipes();
-        sw[action.targetId] = action.action;
+        recordSparkSwipe(sw, action.targetId, action.action);
         saveSparkSwipes(sw);
+        const rate = action.action === "pass" ? -0.0005 : 0.0005;
         const deck = state.sparkDeck.filter((c) => c.id !== action.targetId);
+        const contacts = (state.contacts || []).map((c) =>
+          c.id === action.targetId ? { ...c, score: round2(clampScore((c.score ?? 3) * (1 + rate))) } : c
+        );
+        if (contacts.length) contactRegistry = Object.fromEntries(contacts.map((c) => [c.id, c]));
         let matches = state.sparkMatches;
         if (action.matched && action.peer) {
-          const entry = { matchId: action.matchId || ("sm_local_" + action.targetId), ts: Date.now(), user: action.peer };
+          const peer = { ...action.peer, score: round2(clampScore((action.peer.score ?? 3) * (1 + rate))) };
+          const entry = { matchId: action.matchId || ("sm_local_" + action.targetId), ts: Date.now(), user: peer };
           matches = [entry, ...matches.filter((m) => m.user?.id !== action.targetId)];
         }
-        return { ...state, sparkDeck: deck, sparkMatches: matches };
+        return { ...state, sparkDeck: deck, sparkMatches: matches, contacts };
       }
 
       case "SPARK_MATCH":
@@ -2345,6 +2454,29 @@ import React, {
 
       case "MARK_STORY_VIEWED":
         return { ...state, storyViewed: { ...state.storyViewed, [action.id]: true } };
+
+      case "RECORD_STORY_VIEW": {
+        const { storyId, itemId } = action;
+        if (!storyId || !itemId) return state;
+        const seenKey = `sv_${itemId}`;
+        try {
+          const seen = JSON.parse(localStorage.getItem("ech_story_views") || "{}");
+          if (seen[seenKey]) return state;
+          seen[seenKey] = true;
+          localStorage.setItem("ech_story_views", JSON.stringify(seen));
+        } catch { /* ignore */ }
+        const stories = state.stories.map((s) => {
+          if (s.id !== storyId) return s;
+          return {
+            ...s,
+            views: (s.views || 0) + 1,
+            items: (s.items || []).map((it) => (
+              it.id === itemId ? { ...it, views: (it.views || 0) + 1 } : it
+            )),
+          };
+        });
+        return { ...state, stories };
+      }
 
       case "TOGGLE_SOUND": {
         sfx.enabled = !state.sound;
@@ -2408,7 +2540,7 @@ import React, {
           kind: "proximity",
           rater: action.id,
           title: "📍 Someone nearby to rate",
-          body: `${c.name} is within 1 mi. Open Rate to evaluate.`,
+          body: `${c.name} has Lens on. Open Rate to evaluate.`,
           ts: Date.now(),
         };
         return { ...state, notifs: [notif, ...state.notifs].slice(0, 60) };
@@ -2947,73 +3079,83 @@ import React, {
     );
   }
 
-  /** Press and drag left/right on media to rate (no star overlay on the image). */
+  /** One tap opens star picker; two quick taps like. Tap outside stars to dismiss. */
   function FeedDragRate({ enabled, onRate, onDoubleTap, className = "", style, children }) {
     const tr = useT();
     const wrapRef = useRef(null);
-    const [preview, setPreview] = useState(0);
-    const [ratingGesture, setRatingGesture] = useState(false);
-    const dragRef = useRef({ active: false, pending: false, rating: false, x: 0, y: 0, moved: false, base: 3 });
+    const [ratingOpen, setRatingOpen] = useState(false);
+    const tapRef = useRef({ active: false, x: 0, y: 0, moved: false });
+    const lastTapRef = useRef(0);
+    const singleTapTimerRef = useRef(null);
 
-    const resetDrag = () => {
-      dragRef.current = { active: false, pending: false, rating: false, x: 0, y: 0, moved: false, base: 3 };
-      setPreview(0);
-      setRatingGesture(false);
+    const clearSingleTapTimer = () => {
+      if (singleTapTimerRef.current) {
+        clearTimeout(singleTapTimerRef.current);
+        singleTapTimerRef.current = null;
+      }
     };
 
-    const finishDrag = (clientX, pointerId) => {
-      if (!dragRef.current.active) return;
-      const { rating, moved, x, base } = dragRef.current;
-      const stars = rating && moved ? starsFromHorizontalDrag(x, clientX, base) : 0;
-      try { wrapRef.current?.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
-      if (rating && moved && stars >= 1) {
-        sfx.rateCommit(stars);
-        onRate?.(stars);
-      } else if (!rating && !moved) {
-        onDoubleTap?.();
+    const resetTap = () => {
+      tapRef.current = { active: false, x: 0, y: 0, moved: false };
+    };
+
+    const finishTap = () => {
+      if (!tapRef.current.active || tapRef.current.moved) {
+        resetTap();
+        return;
       }
-      resetDrag();
+      const nowTap = Date.now();
+      if (onDoubleTap && nowTap - lastTapRef.current < 300) {
+        clearSingleTapTimer();
+        lastTapRef.current = 0;
+        setRatingOpen(false);
+        onDoubleTap();
+        resetTap();
+        return;
+      }
+      lastTapRef.current = nowTap;
+      clearSingleTapTimer();
+      singleTapTimerRef.current = setTimeout(() => {
+        singleTapTimerRef.current = null;
+        lastTapRef.current = 0;
+        if (enabled) {
+          sfx.tap();
+          setRatingOpen(true);
+        }
+        resetTap();
+      }, 300);
+    };
+
+    useEffect(() => () => clearSingleTapTimer(), []);
+
+    const pickStars = (stars) => {
+      if (!stars) return;
+      sfx.rateCommit(stars);
+      setRatingOpen(false);
+      onRate?.(stars);
     };
 
     const onPointerDown = (e) => {
-      if (!enabled) return;
+      if (ratingOpen) return;
+      if (!enabled && !onDoubleTap) return;
       if (e.pointerType === "mouse" && e.button !== 0) return;
-      dragRef.current = { active: true, pending: true, rating: false, x: e.clientX, y: e.clientY, moved: false, base: 3 };
+      tapRef.current = { active: true, x: e.clientX, y: e.clientY, moved: false };
     };
 
     const onPointerMove = (e) => {
-      if (!dragRef.current.active || !enabled) return;
-      const dx = e.clientX - dragRef.current.x;
-      const dy = e.clientY - dragRef.current.y;
-      const adx = Math.abs(dx);
-      const ady = Math.abs(dy);
-
-      if (dragRef.current.pending) {
-        if (ady > SCROLL_CANCEL_PX && ady > adx * RATING_HORIZONTAL_RATIO) {
-          resetDrag();
-          return;
-        }
-        if (adx > MIN_RATING_DRAG_PX && adx > ady * RATING_HORIZONTAL_RATIO) {
-          dragRef.current.pending = false;
-          dragRef.current.rating = true;
-          dragRef.current.moved = true;
-          setRatingGesture(true);
-          setPreview(3);
-          try { wrapRef.current?.setPointerCapture?.(e.pointerId); } catch { /* ignore */ }
-          e.preventDefault();
-        }
-        return;
+      if (!tapRef.current.active) return;
+      const dx = e.clientX - tapRef.current.x;
+      const dy = e.clientY - tapRef.current.y;
+      if (Math.abs(dx) > SCROLL_CANCEL_PX || Math.abs(dy) > SCROLL_CANCEL_PX) {
+        tapRef.current.moved = true;
+        clearSingleTapTimer();
+        lastTapRef.current = 0;
       }
-
-      if (!dragRef.current.rating) return;
-      e.preventDefault();
-      dragRef.current.moved = true;
-      setPreview(starsFromHorizontalDrag(dragRef.current.x, e.clientX, dragRef.current.base));
     };
 
     const mergedStyle = {
       ...style,
-      touchAction: ratingGesture ? "none" : (style?.touchAction || "pan-y"),
+      touchAction: style?.touchAction || "pan-y",
       WebkitUserSelect: "none",
       userSelect: "none",
       WebkitTouchCallout: "none",
@@ -3022,30 +3164,26 @@ import React, {
     return (
       <div
         ref={wrapRef}
-        className={className + (ratingGesture ? " feed-drag-rate--active" : "")}
+        className={className + (ratingOpen ? " feed-tap-rate--open" : "")}
         style={mergedStyle}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={(e) => finishDrag(e.clientX, e.pointerId)}
-        onPointerCancel={(e) => finishDrag(e.clientX, e.pointerId)}
+        onPointerUp={finishTap}
+        onPointerCancel={() => { clearSingleTapTimer(); resetTap(); }}
       >
         {children}
-        {preview > 0 && (
-          <div className="feed-drag-stars">
-            <div className="feed-drag-stars-row">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <Star
-                  key={n}
-                  size={36}
-                  strokeWidth={1.5}
-                  fill={n <= preview ? "#FFD56B" : "none"}
-                  color={n <= preview ? "#E8B84A" : "rgba(255,255,255,.35)"}
-                  className={n <= preview ? "lit" : ""}
-                />
-              ))}
+        {ratingOpen && (
+          <div className="feed-tap-rate-overlay" role="dialog" aria-label={tr("rate.tapStars")}>
+            <button
+              type="button"
+              className="feed-tap-rate-backdrop"
+              aria-label={tr("legal.close")}
+              onClick={() => setRatingOpen(false)}
+            />
+            <div className="feed-tap-rate-panel" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+              <EchRateStars size="xl" showLabels value={0} onPick={pickStars} onDark />
+              <p className="feed-tap-rate-hint">{tr("feed.rateTapHint")}</p>
             </div>
-            <span className="feed-drag-stars-label">{preview} · {tr("rate.label" + preview)}</span>
-            <span className="feed-drag-stars-hint">{tr("feed.rateDragHint")}</span>
           </div>
         )}
       </div>
@@ -3196,7 +3334,11 @@ import React, {
     return (
       <div className={`onb-logo-wrap${className ? ` ${className}` : ""}`} style={{ width: size, height: size }}>
         <div className="onb-logo-glow" aria-hidden />
-        <img src="/app/icons/icon-192.png" alt="" width={size} height={size} className="onb-logo-img" />
+        <div className="onb-logo-img" aria-hidden>
+          <span className="onb-logo-orbit" />
+          <span className="onb-logo-dot" />
+          <span className="onb-logo-letter">e</span>
+        </div>
       </div>
     );
   }
@@ -4506,7 +4648,7 @@ import React, {
         {post.source === "instagram" && !viewerMode && (
           <span className="feed-post-badge feed-post-badge--ig" aria-hidden><Instagram size={11} /></span>
         )}
-        {post.premium && !locked && <span className="feed-post-badge feed-post-badge--premium" aria-label="Radiance"><Crown size={11} /></span>}
+        {post.premium && !locked && <span className="feed-post-badge feed-post-badge--premium" aria-label={tr("feed.premiumTitle")}><Crown size={11} /></span>}
         {locked && (
           <div className="feed-post-lock">
             <div className="feed-post-lock-inner">
@@ -4729,8 +4871,6 @@ import React, {
     const displayLikes = post.likes ?? 0;
     const alreadyRated = ratedPosts?.has?.(post.id);
     const myStars = alreadyRated && !isUiTestPost(post) ? getRatedPostScore(post.id) : null;
-    const mediaWrapRef = useRef(null);
-    const lastTapRef = useRef(0);
     const postReaction = feedReactions?.[post.id];
     const isLegacyOverlay = !post.captionStyle?.overlays && post.caption;
     const captionText = displayPostCaption(post);
@@ -4745,15 +4885,7 @@ import React, {
     };
 
     const canDragRate = !locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post));
-    const onDoubleTapLike = () => {
-      const nowTap = Date.now();
-      if (nowTap - lastTapRef.current < 300) {
-        lastTapRef.current = 0;
-        onLike(post.id);
-      } else {
-        lastTapRef.current = nowTap;
-      }
-    };
+    const onDoubleTapLike = () => onLike(post.id);
 
     return (
       <article className={"feed-post feed-post--focus" + (featured ? " feed-post--featured" : "")}>
@@ -4779,7 +4911,9 @@ import React, {
             </button>
             <div className="feed-post-overlay-top-actions">
               {!isMe && isFollowing && (
-                <span className="feed-post-overlay-sent feed-post-overlay-sent--following" aria-label={tr("friends.following")}><UserCheck size={14} /></span>
+                <button type="button" className="feed-post-overlay-btn feed-post-overlay-sent feed-post-overlay-sent--following" aria-label={tr("friends.remove")} onClick={(e) => { e.stopPropagation(); promptUnfollow(dispatch, state, a.id); }}>
+                  <UserCheck size={14} />
+                </button>
               )}
               {!isMe && !isFollowing && followPending && (
                 <span className="feed-post-overlay-sent feed-post-overlay-sent--pending" aria-label={tr("friends.requestSent")}><Clock size={14} /></span>
@@ -5215,7 +5349,16 @@ import React, {
     );
   }
   
-  const FRIEND_REMOVE_PENALTY = -0.08;
+  const followerQualityRate = (score) => {
+    const rounded = Math.round(Number(score) || 3);
+    if (rounded >= 5) return 0.001;
+    if (rounded >= 4) return 0.0005;
+    return 0.0001;
+  };
+  const followerQualityLabel = (rate) => {
+    const pct = Math.abs(rate) * 100;
+    return `${Number(pct.toFixed(2))}%`;
+  };
 
   function sendFriendRequest(dispatch, state, id) {
     if (state.friends.includes(id)) return;
@@ -5238,6 +5381,25 @@ import React, {
     }).catch(() => dispatch({ type: "CANCEL_FRIEND_REQUEST", id }));
   }
 
+  function promptUnfollow(dispatch, state, id) {
+    if (!id || !state.friends.includes(id)) return;
+    sfx.tap();
+    if (!state.liveData) {
+      const peer = getAuthor(state, id);
+      const penalty = -followerQualityRate(state.user.score);
+      const theirScore = round2(clampScore((peer?.score ?? 4) * (1 + penalty)));
+      dispatch({
+        type: "REMOVE_FRIEND_RESULT",
+        id,
+        yourScore: state.user.score,
+        theirScore,
+        penalty,
+      });
+      return;
+    }
+    dispatch({ type: "OPEN_MODAL", modal: "removefriend", payload: { id } });
+  }
+
   function acceptFriendRequestAction(dispatch, state, requestId) {
     const row = state.friendRequestsIncoming.find((r) => r.requestId === requestId);
     const friendId = row?.user?.id;
@@ -5247,6 +5409,9 @@ import React, {
       api.acceptFriendRequest(requestId).then((res) => {
         if (res.friendId && res.friendId !== friendId) {
           dispatch({ type: "ACCEPT_FRIEND_REQUEST", requestId, friendId: res.friendId, peer });
+        }
+        if (res.yourScore != null) {
+          dispatch({ type: "SYNC_USER", user: { ...state.user, score: res.yourScore } });
         }
       }).catch(() => {});
     }
@@ -5294,7 +5459,7 @@ import React, {
   }
 
   // ---- SPARK (rank-gated Tinder) -------------------------------------------- //
-  function SparkCard({ person, style, dragX, exiting, exitDir, stackScale }) {
+  function SparkCard({ person, style, dragX, exiting, exitDir, stackScale, onOpenProfile }) {
     const tr = useT();
     const tier = getTier(person.score);
     const photo = person.photos?.[0];
@@ -5317,10 +5482,24 @@ import React, {
         {dragX < -40 && <div className="spark-stamp spark-stamp-pass">PASS</div>}
         <div className="spark-card-info">
           <div className="spark-card-name-row">
-            <b>{person.name}</b>
+            <button
+              type="button"
+              className="spark-card-name"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); onOpenProfile?.(person.id); }}
+            >
+              {person.name}
+            </button>
             <span className="spark-card-score">{person.score.toFixed(2)}</span>
           </div>
-          <span className="spark-card-handle">{person.handle}</span>
+          <button
+            type="button"
+            className="spark-card-handle"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onOpenProfile?.(person.id); }}
+          >
+            {person.handle}
+          </button>
           <TierPill score={person.score} small />
           {(person.age || person.miles != null) && (
             <span className="spark-card-meta">
@@ -5407,12 +5586,19 @@ import React, {
           const data = await api.sparkDeck();
           const users = (data.deck || []).map((u) => ({ ...u, avatarUrl: resolveMediaUrl(u.avatarUrl) || u.avatarUrl }));
           registerUsers(users);
-          dispatch({ type: "SET_SPARK_DECK", deck: users, preferences: data.preferences });
+          dispatch({
+            type: "SET_SPARK_DECK",
+            deck: users,
+            recycled: !!data.recycled || users.some((u) => u.sparkRecycled),
+            preferences: data.preferences,
+          });
         } else {
-          dispatch({ type: "SET_SPARK_DECK", deck: buildLocalSparkDeck(state) });
+          const local = buildLocalSparkDeck(state);
+          dispatch({ type: "SET_SPARK_DECK", deck: local.deck, recycled: local.recycled });
         }
       } catch {
-        dispatch({ type: "SET_SPARK_DECK", deck: buildLocalSparkDeck(state) });
+        const local = buildLocalSparkDeck(state);
+        dispatch({ type: "SET_SPARK_DECK", deck: local.deck, recycled: local.recycled });
       } finally {
         setLoading(false);
       }
@@ -5480,7 +5666,8 @@ import React, {
           sparkMaxHeightM: next.maxHeightM,
           sparkGenderPref: next.genderPref,
         };
-        dispatch({ type: "SET_SPARK_DECK", deck: buildLocalSparkDeck(merged) });
+        const local = buildLocalSparkDeck(merged);
+        dispatch({ type: "SET_SPARK_DECK", deck: local.deck, recycled: local.recycled });
       }
     };
 
@@ -5509,6 +5696,9 @@ import React, {
           dispatch({ type: "SPARK_SWIPE_LOCAL", targetId: target.id, action, matched, peer, matchId });
           setExiting(null);
           setBusy(false);
+          if ((state.sparkDeck?.length || 0) <= 1) {
+            loadDeck(true);
+          }
           if (matched && peer) {
             sfx.success();
             dispatch({ type: "OPEN_MODAL", modal: "sparkmatch", payload: { peer } });
@@ -5527,7 +5717,7 @@ import React, {
           if (res.matched) refreshMatches();
         } else {
           const sw = loadSparkSwipes();
-          sw[target.id] = action;
+          recordSparkSwipe(sw, target.id, action);
           saveSparkSwipes(sw);
           let matched = false;
           let peer = null;
@@ -5697,7 +5887,8 @@ import React, {
                           }).then(() => loadDeck()).catch(() => {});
                         } else {
                           const merged = { ...state, sparkMinHeightM: preset.min, sparkMaxHeightM: preset.max };
-                          dispatch({ type: "SET_SPARK_DECK", deck: buildLocalSparkDeck(merged) });
+                          const local = buildLocalSparkDeck(merged);
+                          dispatch({ type: "SET_SPARK_DECK", deck: local.deck, recycled: local.recycled });
                         }
                       }}
                     >
@@ -5717,6 +5908,13 @@ import React, {
           <div className="spark-likes-banner">
             <Heart size={14} fill="#FF7EB3" stroke="none" />
             <span>{state.sparkLikesReceived} {tr("spark.likesYou")}</span>
+          </div>
+        )}
+
+        {state.sparkDeckRecycled && mode === "discover" && !needsHeight && deck.length > 0 && (
+          <div className="spark-recycle-banner">
+            <RotateCcw size={13} strokeWidth={2.2} />
+            <span>{tr("spark.recycleHint")}</span>
           </div>
         )}
 
@@ -5809,7 +6007,7 @@ import React, {
                   onPointerCancel={onPointerUp}
                 >
                   {deck.slice(1, 3).reverse().map((p, i) => (
-                    <SparkCard key={p.id} person={p} style={{ zIndex: i }} dragX={0} stackScale={0.94 - i * 0.04} />
+                    <SparkCard key={p.id} person={p} style={{ zIndex: i }} dragX={0} stackScale={0.94 - i * 0.04} onOpenProfile={(id) => openUserProfile(dispatch, id)} />
                   ))}
                   <SparkCard
                     person={current}
@@ -5817,14 +6015,12 @@ import React, {
                     dragX={exiting ? 0 : dragX}
                     exiting={!!exiting}
                     exitDir={exiting?.dir ?? 1}
+                    onOpenProfile={(id) => openUserProfile(dispatch, id)}
                   />
                 </div>
                 <div className="spark-actions">
-                  <button type="button" className="spark-act pass" aria-label={tr("spark.pass")} disabled={busy} onClick={() => commitSwipe("pass")}>
-                    <X size={26} />
-                  </button>
-                  <button type="button" className="spark-act super" aria-label={tr("spark.super")} disabled={busy} onClick={() => commitSwipe("super")}>
-                    <Zap size={22} />
+                  <button type="button" className="spark-act pass spark-act-next" aria-label={tr("spark.next")} disabled={busy} onClick={() => commitSwipe("pass")}>
+                    <span>NEXT</span>
                   </button>
                   <button type="button" className="spark-act like" aria-label={tr("spark.like")} disabled={busy} onClick={() => commitSwipe("like")}>
                     <Heart size={28} fill="#fff" stroke="none" />
@@ -6119,7 +6315,7 @@ import React, {
     );
   }
 
-  // ---- PROXIMITY RATE (1 mi), panel inside merged Lens tab ---------------- //
+  // ---- Lens follow rating panel inside merged Lens tab -------------------- //
   function RatePanel() {
     const { state, dispatch } = useStore();
     const tr = useT();
@@ -6144,7 +6340,7 @@ import React, {
               <div className="radar-ring" />
               <div className="radar-sweep" />
               <div className="radar-core">
-                <span className="radar-label">{state.liveData ? "Live · 1 mi" : "Scanning · 1 mi"}</span>
+                <span className="radar-label">{state.liveData ? "Live follows" : "Scanning follows"}</span>
                 <span className="radar-count">{rateable.length}</span>
               </div>
             </div>
@@ -6155,7 +6351,7 @@ import React, {
         )}
 
         {!state.lens && (
-          <p className="lens-rate-note"><EyeOff size={14} /> Turn on Lens to rate nearby.</p>
+          <p className="lens-rate-note"><EyeOff size={14} /> Turn on Lens to rate followed users.</p>
         )}
 
         {state.lens && state.proximityScan && state.liveData && state.geoError && (
@@ -6163,7 +6359,7 @@ import React, {
         )}
 
         {state.lens && state.proximityScan && !state.geoError && rateable.length === 0 && state.liveData && (
-          <p className="lens-rate-note">No one to rate within 1 mi.</p>
+          <p className="lens-rate-note">No followed users with Lens on to rate.</p>
         )}
 
         {state.proximityScan && rateable.length > 0 && (
@@ -6173,7 +6369,7 @@ import React, {
         {state.proximityScan && rateable.map((c) => {
           const dist = milesOf(state, c);
           const rateNearby = (stars) => {
-            if (!canRateProximity(state, c) || !hasHigherScoreThan(state, c)) return;
+            if (!canRateProximity(state, c)) return;
             sfx.rateCommit(stars);
             if (state.liveData) {
               api.rate(c.id, stars, null, "proximity", null).then(() => {
@@ -6241,8 +6437,6 @@ import React, {
     const canRateFriendMap = (f) => {
       if (!f) return false;
       if (proxCooldownLeft(state, f.id) > 0) return false;
-      const dist = f.miles ?? milesOf(state, f);
-      if (dist == null || dist > PROX_MILE) return false;
       if (!state.lens || !f.lensOn) return false;
       return canRateFeed(state, f);
     };
@@ -6400,7 +6594,7 @@ import React, {
                   <Star size={13} /> {tr("viewfinder.rate")}
                 </button>
               ) : (
-                <span className="viewfinder-muted">{!state.lens ? tr("viewfinder.lensOff") : (sel.miles > PROX_MILE ? tr("viewfinder.tooFar") : tr("viewfinder.notRateable"))}</span>
+                <span className="viewfinder-muted">{!state.lens ? tr("viewfinder.lensOff") : tr("viewfinder.notRateable")}</span>
               )}
             </div>
           </div>
@@ -6553,51 +6747,6 @@ import React, {
         )}
         </Scroll>
       </div>
-    );
-  }
-  
-  // ---- PERKS / ACCESS CONTROL ----------------------------------------------- //
-  function PerksScreen() {
-    const { state, dispatch } = useStore();
-    const [now] = useTick();
-    const { effective, tier } = useDerived(state, now);
-  
-    return (
-      <Scroll>
-        <ScreenTitle title="Access" icon={Award} />
-        <div className="card" style={{ background: grad(tier.grad), textAlign: "center" }}>
-          <span className="muted" style={{ fontSize: 12 }}>Current standing</span>
-          <div style={{ fontWeight: 700, fontSize: 34, color: tier.ink }}>{effective.toFixed(2)}</div>
-          <TierPill score={effective} />
-        </div>
-  
-        {FEATURE_GATES.map((f) => {
-          const Icon = f.icon;
-          const open = effective >= f.req;
-          return (
-            <button
-              key={f.id}
-              className="card gate"
-              onClick={() => {
-                open ? sfx.success() : sfx.lock();
-                dispatch({ type: "OPEN_MODAL", modal: open ? "perkok" : "lock", payload: { feature: f } });
-              }}
-              style={{ opacity: open ? 1 : 0.92, filter: open ? "none" : "saturate(.55)" }}
-            >
-              <div className="gate-ic" style={{ background: open ? getTier(f.req).soft : "#EFE9EF" }}>
-                <Icon size={20} color={open ? getTier(f.req).accent : "#B0A4AE"} />
-              </div>
-              <div style={{ flex: 1, textAlign: "left" }}>
-                <b style={{ fontSize: 14 }}>{f.label}</b>
-                <p className="muted" style={{ fontSize: 11.5, lineHeight: 1.45 }}>{f.copy}</p>
-              </div>
-              {open
-                ? <span className="badge-ok"><Check size={12} /> {f.req.toFixed(1)}+</span>
-                : <span className="badge-lock"><Lock size={11} /> {f.req.toFixed(1)}</span>}
-            </button>
-          );
-        })}
-      </Scroll>
     );
   }
   
@@ -8404,6 +8553,80 @@ import React, {
   }
 
   // ---- SETTINGS ------------------------------------------------------------- //
+  function HandleSettingsCard({ tr }) {
+    const { state, dispatch } = useStore();
+    const [handle, setHandle] = useState(() => state.user.handle?.replace(/^@/, "") || "");
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const [saved, setSaved] = useState(false);
+
+    useEffect(() => {
+      setHandle(state.user.handle?.replace(/^@/, "") || "");
+    }, [state.user.handle]);
+
+    const save = async () => {
+      const normalized = normalizeHandle(handle);
+      if (normalized.length < 2) {
+        setError(tr("settings.handleTooShort"));
+        setSaved(false);
+        return;
+      }
+      if (normalized === normalizeHandle(state.user.handle)) {
+        setError("");
+        setSaved(false);
+        return;
+      }
+      setSaving(true);
+      setError("");
+      setSaved(false);
+      try {
+        if (state.liveData) {
+          const res = await api.patchMe({ handle: normalized });
+          dispatch({ type: "SYNC_USER", user: res });
+        } else {
+          dispatch({ type: "SYNC_USER", user: { ...state.user, handle: "@" + normalized } });
+        }
+        sfx.success();
+        setSaved(true);
+      } catch (e) {
+        setError(e.message || tr("settings.handleError"));
+        sfx.penalty();
+      } finally {
+        setSaving(false);
+      }
+    };
+
+    return (
+      <div className="card ig-settings-card" style={{ padding: "12px 14px" }}>
+        <p className="muted" style={{ fontSize: 11.5, marginBottom: 10 }}>{tr("settings.handleSub")}</p>
+        <label className="onb-label" htmlFor="settings-handle">{tr("settings.handle")}</label>
+        <div className="onb-handle-wrap">
+          <span className="onb-handle-at" aria-hidden>@</span>
+          <input
+            id="settings-handle"
+            className="onb-input onb-input-handle"
+            value={handle}
+            onChange={(e) => { setHandle(e.target.value.replace(/^@+/, "").replace(/\s/g, "")); setSaved(false); setError(""); }}
+            autoComplete="username"
+            spellCheck={false}
+            placeholder="yourname"
+          />
+        </div>
+        {error && <p className="onb-error" style={{ marginTop: 8 }}>{error}</p>}
+        {saved && !error && <p className="muted" style={{ fontSize: 11.5, marginTop: 8, color: "#2ECC71" }}>{tr("settings.handleSaved")}</p>}
+        <button
+          type="button"
+          className="btn primary"
+          style={{ width: "100%", marginTop: 12 }}
+          onClick={save}
+          disabled={saving || normalizeHandle(handle) === normalizeHandle(state.user.handle)}
+        >
+          {saving ? tr("settings.handleSaving") : tr("settings.handleSave")}
+        </button>
+      </div>
+    );
+  }
+
   function SettingsScreen() {
     const { state, dispatch } = useStore();
     const tr = useT();
@@ -8446,6 +8669,9 @@ import React, {
           <IgTopChrome compact />
         </header>
         <Scroll className="ech-settings-scroll">
+        <SectionLabel>{tr("settings.accountSec")}</SectionLabel>
+        <HandleSettingsCard tr={tr} />
+
         <SectionLabel>{tr("settings.language")}</SectionLabel>
         <div className="card ig-settings-card" style={{ padding: "12px 14px" }}>
           <p className="muted" style={{ fontSize: 11.5, marginBottom: 10 }}>{tr("settings.languageSub")}</p>
@@ -8548,14 +8774,12 @@ import React, {
           icon={MapPin}
         />
         <Toggle label={tr("settings.privateProfile")} sub={state.privateProfile ? tr("settings.privateProfileOn") : tr("settings.privateProfileOff")} on={state.privateProfile} onClick={() => dispatch({ type: "TOGGLE_PRIVATE_PROFILE" })} icon={Lock} />
-        <Toggle label={tr("settings.strangers")} sub={tr("settings.strangersSub")} on={state.strangerRatings} onClick={() => dispatch({ type: "TOGGLE_STRANGER_RATINGS" })} icon={Users} />
         <Toggle label={tr("settings.showScore")} sub={state.publicScore ? tr("settings.showScoreOn") : tr("settings.showScoreOff")} on={state.publicScore} onClick={() => dispatch({ type: "TOGGLE_PUBLIC_SCORE" })} icon={state.publicScore ? Eye : EyeOff} />
         <Toggle label={tr("settings.showTier")} sub={tr("settings.showTierSub")} on={state.publicTier} onClick={() => dispatch({ type: "TOGGLE_PUBLIC_TIER" })} icon={Crown} />
 
         <SectionLabel>{tr("settings.a11ySec")}</SectionLabel>
         <Toggle label={tr("settings.reduceMotion")} sub={tr("settings.reduceMotionSub")} on={state.reduceMotion} onClick={() => dispatch({ type: "TOGGLE_REDUCE_MOTION" })} icon={Moon} />
 
-        <SectionLabel>{tr("settings.accountSec")}</SectionLabel>
         <button type="button" className="card row settings-link" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "instagram" }); }}>
           <div className="gate-ic" style={{ background: "#EFE9FF", width: 38, height: 38 }}><Instagram size={17} color="#C13584" /></div>
           <div style={{ flex: 1, textAlign: "left" }}>
@@ -8661,7 +8885,7 @@ import React, {
     const [liked, setLiked] = useState(() => new Set(ixBoot.liked));
     const [saved, setSaved] = useState(() => new Set(ixBoot.saved || []));
     const [ratedPosts, setRatedPosts] = useState(() => new Set([...(state.ratedPosts || []), ...ixBoot.ratedPosts]));
-    const mediaWrapRef = useRef(null);
+    const [heartBurst, setHeartBurst] = useState(false);
 
     useEffect(() => {
       const prev = document.body.style.overflow;
@@ -8710,8 +8934,29 @@ import React, {
         saveFeedIx({ liked: [...next] });
         return next;
       });
-      dispatch({ type: "PATCH_FEED_POST_LIKES", postId, likes: Math.max(0, displayLikes + (wasLiked ? -1 : 1)) });
+      if (!wasLiked) {
+        setHeartBurst(true);
+        setTimeout(() => setHeartBurst(false), 700);
+      }
+      const optimisticLikes = Math.max(0, displayLikes + (wasLiked ? -1 : 1));
+      dispatch({ type: "PATCH_FEED_POST_LIKES", postId, likes: optimisticLikes });
+      if (state.liveData) {
+        const call = wasLiked ? api.unlikePost(postId) : api.likePost(postId);
+        call.then((r) => {
+          if (r?.likes != null) dispatch({ type: "PATCH_FEED_POST_LIKES", postId, likes: r.likes });
+        }).catch(() => {
+          dispatch({ type: "PATCH_FEED_POST_LIKES", postId, likes: displayLikes });
+          setLiked((prev) => {
+            const next = new Set(prev);
+            if (wasLiked) next.add(postId); else next.delete(postId);
+            saveFeedIx({ liked: [...next] });
+            return next;
+          });
+        });
+      }
     };
+
+    const onDoubleTapLike = () => onLike();
 
     const isFollowing = state.friends.includes(author.id);
     const captionOnMedia = overlaysFromPost(post).length > 0;
@@ -8737,9 +8982,15 @@ import React, {
           <FeedDragRate
             enabled={!locked && !isMe && canRate && (!alreadyRated || isUiTestPost(post))}
             onRate={onRatePost}
+            onDoubleTap={locked || isMe ? undefined : onDoubleTapLike}
             className="ech-media-viewer-media"
           >
             <PostMedia post={post} locked={locked} cinematic feedMode={false} viewerMode tr={tr} dispatch={dispatch} />
+            {heartBurst && (
+              <div className="feed-heart-burst" aria-hidden>
+                <Heart size={72} color="#fff" fill="#FF8FB1" />
+              </div>
+            )}
           </FeedDragRate>
           <header className="ech-media-viewer-top">
             <button type="button" className="ech-media-viewer-back" aria-label="Back" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
@@ -8753,7 +9004,9 @@ import React, {
             </button>
             <div className="ech-media-viewer-top-actions">
               {!isMe && isFollowing && (
-                <span className="ech-media-viewer-iconbtn ech-media-viewer-iconbtn--state" aria-label={tr("friends.following")}><UserCheck size={18} strokeWidth={2} /></span>
+                <button type="button" className="ech-media-viewer-iconbtn ech-media-viewer-iconbtn--state" aria-label={tr("friends.remove")} onClick={() => promptUnfollow(dispatch, state, author.id)}>
+                  <UserCheck size={18} strokeWidth={2} />
+                </button>
               )}
               {!isMe && !isFollowing && followUi === "pending" && (
                 <span className="ech-media-viewer-iconbtn ech-media-viewer-iconbtn--state" aria-label={tr("friends.requestSent")}><Clock size={18} strokeWidth={1.75} /></span>
@@ -8802,7 +9055,7 @@ import React, {
               {(post.shares ?? 0) > 0 && <span>{formatEngagementCount(post.shares ?? 0)}</span>}
             </button>
             {post.ts != null && (
-              <time className="feed-post-time" dateTime={new Date(post.ts).toISOString()}>{formatPostAge(post.ts, Date.now())}</time>
+              <time className="feed-post-time" dateTime={new Date(normalizePostTs(post.ts)).toISOString()}>{formatPostAge(post.ts, now)}</time>
             )}
             <button
               type="button"
@@ -9176,7 +9429,7 @@ import React, {
       ? true
       : afterInteraction
         ? serverBlock
-        : (serverBlock || postAlreadyRated || (isProx ? !canRateProximity(state, c) : !canRateFeed(state, c)));
+        : (serverBlock || postAlreadyRated || (postId ? false : (isProx ? !canRateProximity(state, c) : !canRateFeed(state, c))));
 
     useEffect(() => {
       if (!state.liveData || !c?.id) return;
@@ -9200,7 +9453,7 @@ import React, {
         ? tr("rate.afterCall")
         : tr("rate.howWas");
 
-    const scoreEligible = c && hasHigherScoreThan(state, c);
+    const scoreEligible = !!c && (postId || canRateFeed(state, c));
 
     const submitStars = (stars) => {
       if (blocked || !c || !stars || !scoreEligible) return;
@@ -9600,6 +9853,7 @@ import React, {
     const userStory = state.stories.find((s) => s.author === u.id);
     const hasStory = !!(userStory && activeStories([userStory], now).length);
     const followUi = followUiForUser(state, u.id);
+    const followers = followerCountForUser(state, u.id);
     const openUserStory = () => {
       if (!hasStory) return;
       sfx.tap();
@@ -9609,13 +9863,34 @@ import React, {
 
     return (
       <div className="ech-user-profile-screen">
-        <header className="ech-user-profile-head">
+        <header className="ech-user-profile-head ech-user-profile-head--unified">
           <button type="button" className="ech-screen-back" aria-label="Back" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
             <ChevronLeft size={20} />
           </button>
-          <div className="ech-screen-head-titles">
-            <h1>{u.handle?.replace(/^@/, "") || u.name.split(" ")[0]}</h1>
-            <p>{tier.label} · {u.score?.toFixed?.(2) ?? "—"}</p>
+          <div className="ech-user-profile-inline">
+            <button type="button" className={"ech-user-avatar-btn" + (hasStory ? " has-story" : "")} onClick={openUserStory} aria-label={hasStory ? tr("feed.storyTap") : u.name}>
+              <Avatar c={u} size={48} ring={hasStory} showScore={false} />
+            </button>
+            <div className="ech-user-profile-inline-main">
+              <div className="ech-user-profile-inline-id">
+                <h2>{u.name}{u.instagram?.verified && <BadgeCheck size={13} color="#8C6BD8" style={{ marginLeft: 3 }} />}</h2>
+                <span className="ech-profile-handle">{u.handle?.startsWith("@") ? u.handle : `@${(u.handle || "").replace(/^@/, "")}`}</span>
+              </div>
+              <div className="ech-user-profile-inline-stats">
+                <span><b>{followers}</b> {tr("profile.followers")}</span>
+                <span className="ech-profile-stat-dot" aria-hidden>·</span>
+                <span>{tier.label} · {u.score?.toFixed?.(2) ?? "—"}</span>
+                {hasStory && (
+                  <>
+                    <span className="ech-profile-stat-dot" aria-hidden>·</span>
+                    <span className="ech-user-story-live">{tr("feed.momentum")}</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="ech-user-profile-inline-score">
+              <TierPill score={u.score} small />
+            </div>
           </div>
         </header>
         <Scroll className="ech-user-profile-scroll">
@@ -9633,18 +9908,7 @@ import React, {
             </div>
           ) : (
             <>
-              <div className="ech-user-profile-id">
-                <button type="button" className={"ech-user-avatar-btn" + (hasStory ? " has-story" : "")} onClick={openUserStory} aria-label={hasStory ? tr("feed.storyTap") : u.name}>
-                  <Avatar c={u} size={52} ring={hasStory} showScore={false} />
-                  {hasStory && <span className="ech-user-story-hint">{tr("feed.momentum")}</span>}
-                </button>
-                <div className="ech-user-profile-meta">
-                  <b>{u.name}{u.instagram?.verified && <BadgeCheck size={14} color="#8C6BD8" style={{ marginLeft: 4 }} />}</b>
-                  <span>{u.handle}</span>
-                  {u.bio && <p>{u.bio}</p>}
-                </div>
-                <TierPill score={u.score} small />
-              </div>
+              {u.bio && <p className="ech-user-profile-bio">{u.bio}</p>}
 
               <section className="ech-user-profile-content">
                 <div className="ech-section-head">
@@ -9673,10 +9937,10 @@ import React, {
                   </button>
                 )}
                 {friend ? (
-                  <span className="ech-user-qbtn ech-user-qbtn--state" aria-label={tr("friends.following")}>
+                  <button type="button" className="ech-user-qbtn ech-user-qbtn--state" aria-label={tr("friends.unfollow")} onClick={() => promptUnfollow(dispatch, state, u.id)}>
                     <UserCheck size={18} strokeWidth={2} />
-                    <span>{tr("friends.following")}</span>
-                  </span>
+                    <span>{tr("friends.unfollow")}</span>
+                  </button>
                 ) : followUi === "pending" ? (
                   <span className="ech-user-qbtn ech-user-qbtn--state" aria-label={tr("friends.requestSent")}>
                     <Clock size={18} strokeWidth={1.75} />
@@ -10346,7 +10610,14 @@ import React, {
       setReplyTo(m.voice ? { ...m, text: tr("chat.replyVoice") } : m);
       setSelectedId(null);
       inputRef.current?.focus();
+      requestAnimationFrame(() => inputRef.current?.focus());
     };
+
+    useEffect(() => {
+      if (!replyTo) return;
+      const t = setTimeout(() => inputRef.current?.focus(), 0);
+      return () => clearTimeout(t);
+    }, [replyTo?.id]);
 
     const scrollToMessage = (msgId) => {
       if (!msgId) return;
@@ -10832,11 +11103,11 @@ import React, {
         )}
 
         <div className="dm-burn-bar">
-          <button type="button" className={"dm-burn-opt" + (burnMode === "off" ? " on" : "")} onClick={() => setBurnMode("off")}>{tr("chat.burnOff")}</button>
-          <button type="button" className={"dm-burn-opt" + (burnMode === "timer" ? " on" : "")} onClick={() => setBurnMode("timer")}>
+          <button type="button" className={"dm-burn-opt" + (burnMode === "off" ? " on" : "")} onClick={() => { setBurnMode("off"); requestAnimationFrame(() => inputRef.current?.focus()); }}>{tr("chat.burnOff")}</button>
+          <button type="button" className={"dm-burn-opt" + (burnMode === "timer" ? " on" : "")} onClick={() => { setBurnMode("timer"); requestAnimationFrame(() => inputRef.current?.focus()); }}>
             <Timer size={13} /> {tr("chat.burnTimer")}
           </button>
-          <button type="button" className={"dm-burn-opt" + (burnMode === "view_once" ? " on" : "")} onClick={() => setBurnMode("view_once")}>
+          <button type="button" className={"dm-burn-opt" + (burnMode === "view_once" ? " on" : "")} onClick={() => { setBurnMode("view_once"); requestAnimationFrame(() => inputRef.current?.focus()); }}>
             <Eye size={13} /> {tr("chat.viewOnce")}
           </button>
           {burnMode === "timer" && (
@@ -10888,60 +11159,43 @@ import React, {
     );
   }
 
-  function CallModal({ payload }) {
-    const { state, dispatch } = useStore();
-    const tr = useT();
-    const c = payload?.id ? getAuthor(state, payload.id) : null;
-    const startVideo = payload?.mode === "video";
-    const [accepted, setAccepted] = useState(false);
-    const [noAnswer, setNoAnswer] = useState(false);
-    const [videoOn, setVideoOn] = useState(startVideo);
-    const [secs, setSecs] = useState(0);
-    const [muted, setMuted] = useState(false);
-    const [speakerOn, setSpeakerOn] = useState(true);
-    const [camOff, setCamOff] = useState(false);
-    const [camError, setCamError] = useState(null);
-    const [mediaReady, setMediaReady] = useState(false);
-    const localRef = useRef(null);
-    const streamRef = useRef(null);
-    const ringTimer = useRef(null);
-    const audioOutRef = useRef(null);
-    const showVideo = videoOn && accepted;
-
-    useEffect(() => {
-      if (accepted || noAnswer) return;
-      sfx.ring();
-      ringTimer.current = setInterval(() => sfx.ring(), 2400);
-      const timeout = setTimeout(() => {
-        if (ringTimer.current) clearInterval(ringTimer.current);
-        setNoAnswer(true);
-      }, 45000);
-      return () => {
-        if (ringTimer.current) clearInterval(ringTimer.current);
-        clearTimeout(timeout);
-      };
-    }, [accepted, noAnswer]);
-
-    useEffect(() => {
-      if (!accepted) return;
-      const iv = setInterval(() => setSecs((s) => s + 1), 1000);
-      return () => clearInterval(iv);
-    }, [accepted]);
-
-    const ensureStream = async (wantVideo) => {
-      const stream = streamRef.current;
+  const callEngine = {
+    stream: null,
+    ringIv: null,
+    acceptTO: null,
+    noAnswerTO: null,
+    tickIv: null,
+    localVideoEl: null,
+    stop() {
+      if (this.ringIv) clearInterval(this.ringIv);
+      if (this.acceptTO) clearTimeout(this.acceptTO);
+      if (this.noAnswerTO) clearTimeout(this.noAnswerTO);
+      if (this.tickIv) clearInterval(this.tickIv);
+      this.ringIv = null;
+      this.acceptTO = null;
+      this.noAnswerTO = null;
+      this.tickIv = null;
+      this.stream?.getTracks().forEach((t) => t.stop());
+      this.stream = null;
+      if (this.localVideoEl) this.localVideoEl.srcObject = null;
+      this.localVideoEl = null;
+    },
+    bindLocalVideo(el) {
+      this.localVideoEl = el;
+      if (el && this.stream) {
+        el.srcObject = this.stream;
+        el.play().catch(() => {});
+      }
+    },
+    async ensureStream(wantVideo) {
+      const stream = this.stream;
       if (stream) {
         const hasVideo = stream.getVideoTracks().length > 0;
         if (wantVideo && !hasVideo) {
-          try {
-            const cam = await navigator.mediaDevices.getUserMedia({
-              video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-            });
-            cam.getVideoTracks().forEach((t) => stream.addTrack(t));
-            setCamError(null);
-          } catch {
-            setCamError(tr("call.camError"));
-          }
+          const cam = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+          });
+          cam.getVideoTracks().forEach((t) => stream.addTrack(t));
         }
         if (!wantVideo && hasVideo) {
           stream.getVideoTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });
@@ -10952,93 +11206,158 @@ import React, {
         video: wantVideo ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } } : false,
         audio: true,
       });
-      streamRef.current = next;
+      this.stream = next;
+      if (this.localVideoEl) this.bindLocalVideo(this.localVideoEl);
       return next;
-    };
+    },
+    applyTracks(call) {
+      const stream = this.stream;
+      if (!stream || !call) return;
+      stream.getAudioTracks().forEach((t) => { t.enabled = !call.muted; });
+      const showVideo = call.videoOn && call.status === "connected";
+      stream.getVideoTracks().forEach((t) => { t.enabled = showVideo && !call.camOff; });
+    },
+  };
+
+  function CallSession() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const call = state.activeCall;
+    const [mediaReady, setMediaReady] = useState(false);
+    const [camError, setCamError] = useState(null);
 
     useEffect(() => {
+      if (!call) {
+        callEngine.stop();
+        setMediaReady(false);
+        setCamError(null);
+        return;
+      }
       let cancelled = false;
       setCamError(null);
-      setMediaReady(false);
       (async () => {
         try {
-          await ensureStream(startVideo);
+          const wantVideo = call.videoOn || call.mode === "video";
+          await callEngine.ensureStream(wantVideo);
           if (cancelled) return;
           setMediaReady(true);
-        } catch {
-          if (!cancelled) setCamError(tr("call.camError"));
-        }
-      })();
-      return () => {
-        cancelled = true;
-        streamRef.current?.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-        if (audioOutRef.current) {
-          audioOutRef.current.pause();
-          audioOutRef.current.srcObject = null;
-          audioOutRef.current = null;
-        }
-        setMediaReady(false);
-      };
-    }, [startVideo, tr]);
-
-    useEffect(() => {
-      if (!accepted || !mediaReady) return;
-      let cancelled = false;
-      (async () => {
-        try {
-          await ensureStream(videoOn);
-          if (cancelled) return;
-          setMediaReady(true);
+          callEngine.applyTracks(call);
         } catch {
           if (!cancelled) setCamError(tr("call.camError"));
         }
       })();
       return () => { cancelled = true; };
-    }, [videoOn, accepted, tr]);
+    }, [call?.peerId, tr]);
 
     useEffect(() => {
-      const video = localRef.current;
-      const stream = streamRef.current;
-      if (!video || !stream || !showVideo || !mediaReady) return;
-      video.srcObject = stream;
-      video.play().catch(() => {});
-    }, [mediaReady, showVideo]);
+      if (!call) return;
+      callEngine.applyTracks(call);
+    }, [call?.muted, call?.camOff, call?.videoOn, call?.status, mediaReady]);
 
     useEffect(() => {
-      const stream = streamRef.current;
-      if (!stream || !mediaReady) return;
-      stream.getVideoTracks().forEach((t) => { t.enabled = showVideo && !camOff; });
-    }, [camOff, mediaReady, showVideo]);
-
-    useEffect(() => {
-      const stream = streamRef.current;
-      if (!stream || !mediaReady) return;
-      stream.getAudioTracks().forEach((t) => { t.enabled = !muted; });
-    }, [muted, mediaReady]);
-
-    useEffect(() => {
-      const stream = streamRef.current;
-      if (!stream || !mediaReady || !accepted) return;
-      if (!audioOutRef.current) {
-        audioOutRef.current = new Audio();
-        audioOutRef.current.autoplay = true;
-      }
-      const audio = audioOutRef.current;
-      audio.srcObject = new MediaStream(stream.getAudioTracks());
-      audio.muted = false;
-      audio.volume = speakerOn ? 1 : 0.35;
-      if (typeof audio.setSinkId === "function") {
-        audio.setSinkId("").catch(() => {});
-      }
-      audio.play().catch(() => {});
+      if (!call || call.status !== "ringing") return;
+      sfx.ring();
+      callEngine.ringIv = setInterval(() => sfx.ring(), 2400);
+      callEngine.acceptTO = setTimeout(() => dispatch({ type: "CALL_CONNECTED" }), 2800);
+      callEngine.noAnswerTO = setTimeout(() => dispatch({ type: "CALL_NO_ANSWER" }), 45000);
       return () => {
-        audio.pause();
-        audio.srcObject = null;
+        if (callEngine.ringIv) clearInterval(callEngine.ringIv);
+        if (callEngine.acceptTO) clearTimeout(callEngine.acceptTO);
+        if (callEngine.noAnswerTO) clearTimeout(callEngine.noAnswerTO);
+        callEngine.ringIv = null;
+        callEngine.acceptTO = null;
+        callEngine.noAnswerTO = null;
       };
-    }, [speakerOn, mediaReady, accepted]);
+    }, [call?.peerId, call?.status, dispatch]);
 
+    useEffect(() => {
+      if (!call || call.status !== "connected") return;
+      callEngine.tickIv = setInterval(() => dispatch({ type: "CALL_TICK" }), 1000);
+      return () => {
+        if (callEngine.tickIv) clearInterval(callEngine.tickIv);
+        callEngine.tickIv = null;
+      };
+    }, [call?.status, call?.peerId, dispatch]);
+
+    useEffect(() => {
+      if (!call) return;
+      let cancelled = false;
+      (async () => {
+        try {
+          await callEngine.ensureStream(call.videoOn);
+          if (cancelled) return;
+          setMediaReady(true);
+          setCamError(null);
+          callEngine.applyTracks(call);
+        } catch {
+          if (!cancelled) setCamError(tr("call.camError"));
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [call?.videoOn, call?.peerId, tr]);
+
+    return camError ? <span className="call-engine-err" aria-hidden>{camError}</span> : null;
+  }
+
+  function CallBanner() {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const call = state.activeCall;
+    if (!call || state.modal?.type === "call") return null;
+    const c = getAuthor(state, call.peerId);
     if (!c) return null;
+    const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    const connected = call.status === "connected";
+    const label = call.status === "no_answer"
+      ? tr("call.noAnswer")
+      : call.status === "ringing"
+        ? tr("call.ringing")
+        : fmt(call.secs);
+    const modeLabel = call.videoOn ? tr("call.video") : tr("call.title");
+    return (
+      <button
+        type="button"
+        className={"call-banner" + (connected ? " live" : "") + (call.videoOn ? " video" : "")}
+        aria-label={tr("call.returnToCall")}
+        onClick={() => {
+          sfx.tap();
+          dispatch({ type: "OPEN_MODAL", modal: "call", payload: { id: call.peerId, mode: call.videoOn ? "video" : "voice" } });
+        }}
+      >
+        <span className="call-banner-pulse" aria-hidden />
+        <Phone size={14} strokeWidth={2.2} className="call-banner-ic" />
+        <span className="call-banner-main">
+          <b>{tr("call.onCall")}</b>
+          <span>{c.name.split(" ")[0]} · {modeLabel}</span>
+        </span>
+        <span className="call-banner-time">{label}</span>
+        <ChevronDown size={16} className="call-banner-expand" style={{ transform: "rotate(180deg)" }} />
+      </button>
+    );
+  }
+
+  function CallModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const tr = useT();
+    const call = state.activeCall;
+    const c = call?.peerId ? getAuthor(state, call.peerId) : (payload?.id ? getAuthor(state, payload.id) : null);
+    const localRef = useRef(null);
+    const [camError, setCamError] = useState(null);
+    const [mediaReady, setMediaReady] = useState(!!callEngine.stream);
+    const accepted = call?.status === "connected";
+    const showVideo = call && call.videoOn && (accepted || call.mode === "video");
+
+    useEffect(() => {
+      if (!call) return;
+      callEngine.bindLocalVideo(localRef.current);
+      setMediaReady(!!callEngine.stream);
+    }, [showVideo, accepted, call?.videoOn, call]);
+
+    if (!c || !call) return null;
+
+    const noAnswer = call.status === "no_answer";
+    const videoOn = call.videoOn;
+    const { muted, speakerOn, camOff, secs } = call;
 
     const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
     const statusLabel = noAnswer
@@ -11047,11 +11366,13 @@ import React, {
         ? tr("call.ringing")
         : fmt(secs);
 
+    const patchCall = (patch) => dispatch({ type: "UPDATE_CALL", patch });
+
     const enableVideo = async () => {
       sfx.tap();
-      setVideoOn(true);
+      patchCall({ videoOn: true });
       try {
-        await ensureStream(true);
+        await callEngine.ensureStream(true);
         setMediaReady(true);
         setCamError(null);
       } catch {
@@ -11059,39 +11380,29 @@ import React, {
       }
     };
 
-    const stopStream = () => {
-      if (ringTimer.current) clearInterval(ringTimer.current);
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-      if (localRef.current) localRef.current.srcObject = null;
+    const endCallSession = () => {
+      callEngine.stop();
+      dispatch({ type: "END_CALL" });
     };
 
     const finishCall = async () => {
-      stopStream();
       sfx.tap();
-      if (!accepted || secs < 1) {
-        dispatch({ type: "CLOSE_MODAL" });
-        return;
-      }
+      const wasConnected = accepted && secs >= 1;
+      endCallSession();
+      dispatch({ type: "CLOSE_MODAL" });
+      if (!wasConnected) return;
       if (state.liveData) {
         try {
           const r = await api.canRate(c.id, "call");
-          if (!r.canRate) {
-            dispatch({ type: "CLOSE_MODAL" });
-            return;
-          }
-        } catch {
-          dispatch({ type: "CLOSE_MODAL" });
-          return;
-        }
+          if (!r.canRate) return;
+        } catch { return; }
       }
       dispatch({ type: "OPEN_MODAL", modal: "rate", payload: { id: c.id, forced: true, afterCall: true, callAccepted: true } });
     };
 
-    const hangUp = () => {
-      stopStream();
+    const minimizeCall = () => {
       sfx.tap();
-      dispatch({ type: "CLOSE_MODAL" });
+      dispatch({ type: "MINIMIZE_CALL" });
     };
 
     const renderCtrl = (key, btnClass, icon, label, onClick) => (
@@ -11103,13 +11414,13 @@ import React, {
       </div>
     );
 
-    if (showVideo || (startVideo && !accepted)) {
+    if (showVideo || (call.mode === "video" && !accepted)) {
       return (
         <div className={"call-screen call-screen--video" + (accepted ? " live" : " ringing") + (noAnswer ? " no-answer" : "")}>
           <div className="call-video-stage">
-            <div className={"call-video-remote" + (!accepted ? " pulsing" : "")} style={{ background: grad([c.color, "#fff"]) }}>
+            <div className={"call-video-remote" + (!accepted ? " pulsing" : " connected")} style={{ background: grad([c.color, "#fff"]) }}>
               {c.avatarUrl
-                ? <img src={resolveMediaUrl(c.avatarUrl)} alt="" className="call-video-remote-img" referrerPolicy="no-referrer" />
+                ? <img src={resolveMediaUrl(c.avatarUrl)} alt="" className={"call-video-remote-img" + (accepted ? " live" : "")} referrerPolicy="no-referrer" />
                 : <span className="call-video-remote-emoji">{c.emoji}</span>}
               <div className="call-video-remote-shade" />
               {!accepted && (
@@ -11128,7 +11439,7 @@ import React, {
               </div>
             )}
             <div className="call-video-top">
-              <button type="button" className="call-back" onClick={hangUp} aria-label={tr("call.endCall")}>
+              <button type="button" className="call-back" onClick={minimizeCall} aria-label={tr("call.minimize")}>
                 <ChevronDown size={22} />
               </button>
               <TierPill score={c.score} small />
@@ -11139,10 +11450,10 @@ import React, {
             </div>
           </div>
           <div className="call-controls call-controls--video">
-            {accepted && renderCtrl("cam", "call-ctrl" + (camOff ? " on" : ""), camOff ? <EyeOff size={22} /> : <Video size={22} />, camOff ? tr("call.camOn") : tr("call.camOff"), () => { sfx.tap(); setCamOff((v) => !v); })}
-            {renderCtrl("speaker", "call-ctrl" + (speakerOn ? " on" : ""), speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />, speakerOn ? tr("call.speakerOn") : tr("call.speakerOff"), () => { sfx.tap(); setSpeakerOn((v) => !v); })}
-            {renderCtrl("mic", "call-ctrl" + (muted ? " on" : ""), muted ? <MicOff size={22} /> : <Mic size={22} />, muted ? tr("call.unmute") : tr("call.mute"), () => { sfx.tap(); setMuted((m) => !m); })}
-            {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), noAnswer ? hangUp : finishCall)}
+            {accepted && renderCtrl("cam", "call-ctrl" + (camOff ? " on" : ""), camOff ? <EyeOff size={22} /> : <Video size={22} />, camOff ? tr("call.camOn") : tr("call.camOff"), () => { sfx.tap(); patchCall({ camOff: !camOff }); })}
+            {renderCtrl("speaker", "call-ctrl" + (speakerOn ? " on" : ""), speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />, speakerOn ? tr("call.speakerOn") : tr("call.speakerOff"), () => { sfx.tap(); patchCall({ speakerOn: !speakerOn }); })}
+            {renderCtrl("mic", "call-ctrl" + (muted ? " on" : ""), muted ? <MicOff size={22} /> : <Mic size={22} />, muted ? tr("call.unmute") : tr("call.mute"), () => { sfx.tap(); patchCall({ muted: !muted }); })}
+            {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), noAnswer ? () => { endCallSession(); dispatch({ type: "CLOSE_MODAL" }); } : finishCall)}
           </div>
         </div>
       );
@@ -11151,7 +11462,7 @@ import React, {
     return (
       <div className={"call-screen" + (!accepted ? " ringing" : "") + (noAnswer ? " no-answer" : "")}>
         <div className="call-top">
-          <button type="button" className="call-back" onClick={hangUp} aria-label={tr("call.endCall")}>
+          <button type="button" className="call-back" onClick={minimizeCall} aria-label={tr("call.minimize")}>
             <ChevronDown size={22} />
           </button>
         </div>
@@ -11170,9 +11481,9 @@ import React, {
         </div>
         <div className="call-controls">
           {accepted && !videoOn && renderCtrl("video", "call-ctrl", <Video size={22} />, tr("call.enableVideo"), enableVideo)}
-          {renderCtrl("speaker", "call-ctrl" + (speakerOn ? " on" : ""), speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />, speakerOn ? tr("call.speakerOn") : tr("call.speakerOff"), () => { sfx.tap(); setSpeakerOn((v) => !v); })}
-          {renderCtrl("mic", "call-ctrl" + (muted ? " on" : ""), muted ? <MicOff size={22} /> : <Mic size={22} />, muted ? tr("call.unmute") : tr("call.mute"), () => { sfx.tap(); setMuted((m) => !m); })}
-          {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), noAnswer ? hangUp : finishCall)}
+          {renderCtrl("speaker", "call-ctrl" + (speakerOn ? " on" : ""), speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />, speakerOn ? tr("call.speakerOn") : tr("call.speakerOff"), () => { sfx.tap(); patchCall({ speakerOn: !speakerOn }); })}
+          {renderCtrl("mic", "call-ctrl" + (muted ? " on" : ""), muted ? <MicOff size={22} /> : <Mic size={22} />, muted ? tr("call.unmute") : tr("call.mute"), () => { sfx.tap(); patchCall({ muted: !muted }); })}
+          {renderCtrl("end", "call-ctrl end", <Phone size={22} style={{ transform: "rotate(135deg)" }} />, tr("call.endCall"), noAnswer ? () => { endCallSession(); dispatch({ type: "CLOSE_MODAL" }); } : finishCall)}
         </div>
       </div>
     );
@@ -11198,24 +11509,9 @@ import React, {
           You're at <b>{effective.toFixed(2)}</b> · this opens at <b>{f.req.toFixed(1)}</b>
         </p>
         <p className="muted" style={{ textAlign: "center", fontSize: 11.5, marginTop: 6 }}>
-          You're so close. A few more radiant interactions and the door opens. ✨
+          You're close. A few more positive interactions can improve your standing.
         </p>
         <button className="btn soft" style={{ marginTop: 16 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>Maybe soon</button>
-      </Sheet>
-    );
-  }
-  
-  function PerkOkModal({ payload }) {
-    const { dispatch } = useStore();
-    const f = payload.feature;
-    return (
-      <Sheet>
-        <div style={{ textAlign: "center", padding: "8px 0" }}>
-          <div style={{ fontSize: 46 }}>🎉</div>
-          <h3 style={{ margin: "10px 0 4px", color: "#5A4A60" }}>{f.label}: unlocked</h3>
-          <p className="muted" style={{ fontSize: 13, padding: "0 12px" }}>Reserved & confirmed. Your tier opens this door automatically. Enjoy, radiant one. ✨</p>
-          <button className="btn primary" style={{ marginTop: 18 }} onClick={() => dispatch({ type: "CLOSE_MODAL" })}>Lovely</button>
-        </div>
       </Sheet>
     );
   }
@@ -11282,34 +11578,45 @@ import React, {
   function RemoveFriendModal({ payload }) {
     const { state, dispatch } = useStore();
     const tr = useT();
-    const c = byId[payload.id];
+    const friendId = payload?.id;
+    const c = friendId ? getAuthor(state, friendId) : null;
     const [busy, setBusy] = useState(false);
+    const qualityPenalty = -followerQualityRate(state.user.score);
+    const qualityPenaltyLabel = followerQualityLabel(qualityPenalty);
 
     const confirm = () => {
-      if (busy) return;
+      if (busy || !friendId || !c?.id) return;
       setBusy(true);
       sfx.tap();
       if (state.liveData) {
-        api.removeFriend(c.id).then((res) => {
+        api.removeFriend(friendId).then((res) => {
           dispatch({
             type: "REMOVE_FRIEND_RESULT",
-            id: c.id,
+            id: friendId,
             yourScore: res.yourScore,
             theirScore: res.theirScore,
-            penalty: res.penalty ?? FRIEND_REMOVE_PENALTY,
+            penalty: res.penalty ?? qualityPenalty,
           });
         }).catch(() => setBusy(false));
         return;
       }
-      const penalty = FRIEND_REMOVE_PENALTY;
+      const penalty = qualityPenalty;
       dispatch({
         type: "REMOVE_FRIEND_RESULT",
-        id: c.id,
-        yourScore: round2(clampScore(state.user.score + penalty)),
-        theirScore: round2(clampScore(c.score + penalty)),
+        id: friendId,
+        yourScore: state.user.score,
+        theirScore: round2(clampScore((c.score ?? 4) * (1 + penalty))),
         penalty,
       });
     };
+
+    if (!friendId || !c?.id) {
+      return (
+        <Sheet dismissable>
+          <p className="muted" style={{ textAlign: "center" }}>{tr("friends.empty")}</p>
+        </Sheet>
+      );
+    }
 
     return (
       <Sheet>
@@ -11317,7 +11624,7 @@ import React, {
           <div className="warn-hero pulse-soft"><UserMinus size={26} color="#fff" /></div>
           <h3 style={{ margin: "12px 0 2px", color: "#5A4A60" }}>{tr("friends.removeTitle")}</h3>
           <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, padding: "0 10px" }}>
-            {tr("friends.removeBody", { name: c.name, penalty: Math.abs(FRIEND_REMOVE_PENALTY).toFixed(2) })}
+            {tr("friends.removeBody", { name: c.name, penalty: qualityPenaltyLabel })}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
@@ -12884,17 +13191,36 @@ import React, {
       return () => cancelAnimationFrame(t);
     }, [editingOverlay, selectedOverlay]);
 
-    const addLocationOverlay = () => {
+    const placeLocationOverlay = (label) => {
+      const text = label || tr("stickers.locationDefault");
+      setEditingOverlay(null);
+      setOverlays((list) => {
+        const withoutDupes = list.filter((o) => {
+          if (o.type === "location") return false;
+          if (o.type === "text" && !String(o.text || "").trim()) return false;
+          return true;
+        });
+        const replaceId = selectedOverlay && list.find((o) => o.id === selectedOverlay && o.type === "text" && !String(o.text || "").trim())?.id;
+        if (replaceId) {
+          return withoutDupes.map((o) => (o.id === replaceId ? { ...o, type: "location", text } : o));
+        }
+        const id = overlayId();
+        setSelectedOverlay(id);
+        return [...withoutDupes, { id, type: "location", text, x: 50, y: 55, color: captionColor, align: "center" }];
+      });
       sfx.tap();
+    };
+
+    const addLocationOverlay = () => {
       setDrawActive(false);
-      const placeFallback = () => addOverlay(createStorySticker("location", tr));
+      const placeFallback = () => placeLocationOverlay(createStorySticker("location", tr).text);
       if (!navigator.geolocation) {
         placeFallback();
         return;
       }
       navigator.geolocation.getCurrentPosition(async (pos) => {
         const label = await reverseGeocodeLabel(pos.coords.latitude, pos.coords.longitude);
-        if (label) addOverlay({ type: "location", text: label, x: 50, y: 55, color: captionColor, align: "center" });
+        if (label) placeLocationOverlay(label);
         else placeFallback();
       }, placeFallback, { timeout: 9000, maximumAge: 120000 });
     };
@@ -13437,9 +13763,20 @@ import React, {
                   canvasRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
                 }}><Type size={17} /></button>
                 <button type="button" className="compose-icon-btn" aria-label="Add location" onClick={() => {
+                  if (mode === "story" || mode === "reel" || payload?.fromCamera) {
+                    addLocationOverlay();
+                    return;
+                  }
                   const loc = overlays.find((o) => o.type === "location");
                   if (loc) { setSelectedOverlay(loc.id); return; }
-                  addOverlay({ type: "location", text: "" });
+                  setOverlays((list) => {
+                    const filtered = list.filter((o) => !(o.type === "text" && !String(o.text || "").trim()) && o.type !== "location");
+                    const id = overlayId();
+                    setSelectedOverlay(id);
+                    setEditingOverlay(id);
+                    return [...filtered, { id, type: "location", text: "", x: 50, y: 45, color: captionColor, align: captionAlign }];
+                  });
+                  sfx.tap();
                 }}><MapPin size={17} /></button>
                 <button type="button" className={"compose-icon-btn" + (tagOpen ? " on" : "")} aria-label="Tag person" onClick={() => { setTagOpen((v) => !v); setMentionOpen(false); }}><AtSign size={17} /></button>
                 <span className="compose-tool-sep" />
@@ -13740,6 +14077,13 @@ import React, {
       dispatch({ type: "MARK_STORY_VIEWED", id: story.id });
     }, [story?.id, dispatch]);
 
+    useEffect(() => {
+      if (!story || !item) return;
+      const isOwnStory = authorId === ME_ID || authorId === state.user.id;
+      if (isOwnStory) return;
+      dispatch({ type: "RECORD_STORY_VIEW", storyId: story.id, itemId: item.id, authorId });
+    }, [story?.id, item?.id, authorId, state.user.id, dispatch]);
+
     const goNext = () => {
       if (!story) {
         if (qIdx < queue.length - 1) {
@@ -13831,9 +14175,13 @@ import React, {
     const slideCaption = item.caption || "";
     const capStyle = item.captionStyle || { color: "#fff", align: "center" };
 
+    const isOwnStory = authorId === ME_ID || authorId === state.user.id;
     const storyRated = item ? ratedStories.has(item.id) : false;
     const storyStars = storyRated ? getRatedStoryScore(item.id) : null;
-    const canRateStory = authorId !== ME_ID && canRateFeed(state, a) && !storyRated;
+    const canRateStory = !isOwnStory && canRateFeed(state, a) && !storyRated;
+    const storyItemViews = item?.views || 0;
+    const storyReachPct = computeReach(state.friends);
+    const storyReachCount = Math.min(followerCountForUser(state, authorId), Math.max(storyItemViews, Math.round(storyItemViews * 0.82 + 1)));
 
     const commitStoryRating = (stars) => {
       if (!item || storyRated || !canRateFeed(state, a)) return;
@@ -13889,6 +14237,28 @@ import React, {
           </FeedDragRate>
           <button type="button" className="story-tap-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); goPrev(); }} />
           <button type="button" className="story-tap-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); goNext(); }} />
+          {isOwnStory && (
+            <footer className="story-viewer-foot story-viewer-foot--stats">
+              <button
+                type="button"
+                className="story-stats-btn"
+                aria-label={tr("feed.storyStats")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  sfx.tap();
+                  dispatch({ type: "OPEN_MODAL", modal: "insights", payload: { type: "stories", range: "7d" } });
+                }}
+              >
+                <Eye size={16} strokeWidth={2} />
+                <span className="story-stats-metric"><b>{storyItemViews}</b> {tr("insights.views")}</span>
+                <span className="story-stats-dot" aria-hidden>·</span>
+                <span className="story-stats-metric"><b>{storyReachCount}</b> {tr("insights.reach")}</span>
+                <span className="story-stats-dot" aria-hidden>·</span>
+                <span className="story-stats-metric"><b>{storyReachPct}%</b> {tr("insights.reachScore")}</span>
+              </button>
+              <span className="story-stats-hint">{tr("feed.storyStatsTap")}</span>
+            </footer>
+          )}
         </div>
       </div>
     );
@@ -13923,15 +14293,12 @@ import React, {
     const sections = [
       { k: "rating", icon: Scale, tint: "#F3EEFF", accent: "#8C6BD8", core: true, screen: null },
       { k: "score", icon: Gauge, tint: "#FFF8E6", accent: "#E8B84A", core: true, screen: "profile" },
-      { k: "feed", icon: Home, tint: "#FFF0F6", accent: "#FF8FB1", screen: "feed" },
+      { k: "media", icon: ImageIcon, tint: "#FFF0F6", accent: "#FF8FB1", screen: "feed" },
       { k: "spark", icon: Flame, tint: "#FFF5EE", accent: "#FF9A6C", screen: "spark" },
+      { k: "followers", icon: Users, tint: "#F3EEFF", accent: "#B79CF0", screen: "friends" },
+      { k: "decay", icon: Timer, tint: "#F0F8FF", accent: "#6B9FD4", screen: null },
       { k: "lens", icon: Eye, tint: "#EEFAF4", accent: "#2ECC71", screen: "lens" },
       { k: "messages", icon: MessageCircle, tint: "#F0F8FF", accent: "#6B9FD4", screen: "messages" },
-      { k: "friends", icon: Users, tint: "#F3EEFF", accent: "#B79CF0", screen: "friends" },
-      { k: "profile", icon: User, tint: "#FFF8FC", accent: "#C9A0DC", screen: "profile" },
-      { k: "events", icon: CalendarHeart, tint: "#FFF4F8", accent: "#FF9DC0", screen: "explore" },
-      { k: "parties", icon: Ticket, tint: "#F5EEFF", accent: "#9B7FD4", screen: "explore" },
-      { k: "perks", icon: Award, tint: "#EEFAF4", accent: "#4FA98C", screen: "perks" },
     ];
     const toggleSection = (k) => {
       sfx.tap();
@@ -13952,15 +14319,15 @@ import React, {
       setTipIdx((i) => (i + 1) % DOC_TIP_KEYS.length);
     };
     return (
-      <div className="sheet-overlay" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
+      <div className="sheet-overlay sheet-overlay--keep-dock" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
         <div className="sheet echelon-guide" onClick={(e) => e.stopPropagation()}>
-          <EchModalClose className="echelon-guide-close" onClick={() => dispatch({ type: "CLOSE_MODAL" })} />
           <div className="echelon-guide-hero">
             <div className="echelon-guide-hero-icon"><BookOpen size={22} color="#fff" /></div>
             <div>
               <h3>{tr("docs.title")}</h3>
               <p>{tr("docs.lead")}</p>
             </div>
+            <EchModalClose className="echelon-guide-close echelon-guide-close--hero" onClick={() => dispatch({ type: "CLOSE_MODAL" })} />
           </div>
           <Scroll className="echelon-guide-scroll">
             <button type="button" className="echelon-guide-tipcard" onClick={nextTip}>
@@ -14042,26 +14409,6 @@ import React, {
                 </div>
               );
             })}
-
-            <div className="echelon-guide-gates">
-              <span className="echelon-guide-block-label">{tr("docs.gatesTitle")}</span>
-              {FEATURE_GATES.slice(0, 4).map((g) => {
-                const unlocked = effective >= g.req;
-                const GateIcon = g.icon;
-                return (
-                  <div key={g.id} className={"echelon-guide-gate" + (unlocked ? " on" : "")}>
-                    <span className="echelon-guide-gate-ic" style={{ background: unlocked ? getTier(g.req).soft : "#F5F0F8" }}>
-                      <GateIcon size={14} color={unlocked ? getTier(g.req).accent : "#C9B8C6"} />
-                    </span>
-                    <div>
-                      <b>{g.label}</b>
-                      <span>{g.req.toFixed(1)}+ · {unlocked ? tr("docs.gateOpen") : tr("docs.gateLocked")}</span>
-                    </div>
-                    {unlocked ? <Check size={14} color="#2ECC71" /> : <Lock size={14} color="#C9A0DC" />}
-                  </div>
-                );
-              })}
-            </div>
 
             <div className="echelon-guide-footer">
               <span className="echelon-guide-footer-label">{tr("docs.moreTitle")}</span>
@@ -15276,11 +15623,13 @@ import React, {
       const fast = (state.boostUntil && state.boostUntil > Date.now())
         || state.modal === "story"
         || state.modal === "call";
-      const ms = fast ? 1000 : 45000;
+      const freshTime = ["feed", "explore", "profile", "messages", "alerts"].includes(state.screen)
+        || state.modal === "postviewer";
+      const ms = fast ? 1000 : freshTime ? 60000 : 45000;
       setTick(Date.now());
       const iv = setInterval(() => setTick(Date.now()), ms);
       return () => clearInterval(iv);
-    }, [state.boostUntil, state.modal]);
+    }, [state.boostUntil, state.modal, state.screen]);
   
     // Auto-scan when opening Rate tab (if enabled) or Lens tab (live mode)
     useEffect(() => {
@@ -15291,7 +15640,7 @@ import React, {
       if (wantScan && !state.proximityScan) dispatch({ type: "START_PROXIMITY" });
     }, [state.onboarded, state.proximityAutoScan, state.screen, state.liveData, state.proximityScan]);
 
-    // Live geolocation + nearby users (real devices within 1 mi)
+    // Live geolocation + followed Lens users
     useEffect(() => {
       if (!state.liveData || !state.onboarded) return;
       const scanning = state.proximityScan || state.screen === "lens";
@@ -15317,7 +15666,7 @@ import React, {
 
       const fetchNearby = async () => {
         try {
-          const data = await api.nearby(1, false);
+          const data = await api.nearby(50, true);
           if (data.needLocation) {
             dispatch({ type: "SET_GEO_ERROR", message: "Getting your location… allow GPS if prompted." });
             return;
@@ -15435,13 +15784,13 @@ import React, {
   
     const screens = {
       feed: <FeedScreen />, spark: <SparkScreen />, lens: <LensRateScreen />, explore: <ExploreScreen />,
-      messages: <MessagesScreen />, friends: <FriendsScreen />, parties: <PartiesScreen />, perks: <PerksScreen />,
+      messages: <MessagesScreen />, friends: <FriendsScreen />, parties: <PartiesScreen />,
       alerts: <AlertsScreen />, profile: <ProfileScreen />, settings: <SettingsScreen />,
     };
   
     const modals = {
       rate: RatingModal, chat: ChatModal, deletechat: DeleteChatModal, call: CallModal, userprofile: UserProfileModal, lock: FeatureLockModal,
-      perkok: PerkOkModal, friendwarn: FriendWarnModal, removefriend: RemoveFriendModal, mediapick: MediaPickModal, createcontent: CreateContentModal, compose: ComposeRedirectModal, mentionsviewer: MentionsViewerModal,
+      friendwarn: FriendWarnModal, removefriend: RemoveFriendModal, mediapick: MediaPickModal, createcontent: CreateContentModal, compose: ComposeRedirectModal, mentionsviewer: MentionsViewerModal,
       story: StoryViewerModal, sharepost: SharePostModal, sparkmatch: SparkMatchModal,
       rsvp: RsvpModal, instagram: InstagramModal, legal: LegalDocModal, cookies: CookiePrefsModal,
       postcomments: PostCommentsModal, postviewer: PostViewerModal, createparty: CreatePartyModal, party: PartyDetailModal, guide: EchelonGuideModal,
@@ -15463,7 +15812,9 @@ import React, {
         <InstallHelpCtx.Provider value={installHelpApi}>
         <Styles />
         <div className="stage">
-          <div className={"phone" + (getTier(state.user.score).key === "low" ? " grim" : "") + (state.reduceMotion ? " calm" : "")}>
+          <div className={"phone" + (getTier(state.user.score).key === "low" ? " grim" : "") + (state.reduceMotion ? " calm" : "") + (state.activeCall && state.modal?.type !== "call" ? " phone--call-banner" : "")}>
+            {state.activeCall && <CallSession />}
+            <CallBanner />
             {!state.sessionReady ? (
               <div className="onb" style={{ background: grad(["#FFF4F8", "#EEF4FF"], 160), display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100%" }}>
                 <Loader size={36} className="spin" color="#C9A0DC" />
@@ -15473,11 +15824,11 @@ import React, {
             ) : (
               <>
                 {!["feed", "alerts", "spark", "lens", "explore", "messages", "profile", "friends", "settings"].includes(state.screen) && <StatusBar />}
-                <div className={"appbody" + (["feed", "alerts", "spark", "lens", "explore", "messages", "profile", "friends", "settings"].includes(state.screen) ? " appbody--ig" : "")}>
+                <div className={"appbody" + (["feed", "alerts", "spark", "lens", "explore", "messages", "profile", "friends", "settings"].includes(state.screen) ? " appbody--ig" : "") + (state.activeCall && state.modal?.type !== "call" ? " appbody--call-banner" : "")}>
                   {state.lens && state.screen !== "lens" && <LensFilm />}
                   <div className="screen-stack">{screens[state.screen]}</div>
                 </div>
-                {(!state.modal || state.modal?.type === "userprofile") && <AppIgTabBar />}
+                {(!state.modal || state.modal?.type === "userprofile" || state.modal?.type === "guide") && <AppIgTabBar />}
               </>
             )}
             {ModalComp && <ModalComp payload={state.modal.payload} />}
@@ -15524,6 +15875,7 @@ import React, {
     --border-subtle:#efefef;
     --surface:#ffffff;
     --surface-muted:#fafafa;
+    --call-banner-h:44px;
   }
 
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -15626,18 +15978,29 @@ import React, {
   .install-coach-share-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:14px;padding:14px 18px}
   .install-coach-card--action .install-coach-foot{margin-top:12px;font-size:12px;color:#8C6BD8}
   .feed-post-media-wrap{position:relative;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:pan-y;-webkit-user-select:none;user-select:none}
-  .feed-drag-rate--active,.feed-post-media-wrap.feed-drag-rate--active,.reel-slide-media.feed-drag-rate--active,.ech-media-viewer-media.feed-drag-rate--active,.story-slide.feed-drag-rate--active{touch-action:none!important}
+  .feed-tap-rate--open,.feed-post-media-wrap.feed-tap-rate--open,.reel-slide-media.feed-tap-rate--open,.ech-media-viewer-media.feed-tap-rate--open,.story-slide.feed-tap-rate--open{touch-action:none!important}
   .feed-post-media-wrap .post-media,.feed-post-media-wrap video{pointer-events:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .feed-post-media-wrap .media-overlay{pointer-events:none!important}
   .feed-post-media-wrap .media-overlay--tag{pointer-events:auto!important;z-index:9;cursor:pointer;touch-action:manipulation}
   .feed-rating-overlay{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#000;touch-action:none;pointer-events:none;transition:opacity .18s ease}
   .feed-rating-overlay.commit{background:#000}
-  .feed-drag-stars{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(0,0,0,.72);touch-action:none;pointer-events:none}
+  .feed-tap-rate-overlay{position:absolute;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;padding:20px;touch-action:none}
+  .feed-tap-rate-backdrop{position:absolute;inset:0;border:none;padding:0;margin:0;background:radial-gradient(circle at 50% 42%,rgba(255,213,107,.18),transparent 32%),linear-gradient(180deg,rgba(0,0,0,.5),rgba(0,0,0,.82));cursor:pointer;backdrop-filter:blur(4px)}
+  .feed-tap-rate-panel{position:relative;z-index:1;width:min(92%,390px);display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 18px 18px;border-radius:28px;background:linear-gradient(135deg,rgba(255,255,255,.18),rgba(255,255,255,.06));border:1px solid rgba(255,255,255,.22);box-shadow:0 22px 70px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.18);pointer-events:auto;backdrop-filter:blur(18px);animation:ratePanelIn .22s cubic-bezier(.2,1,.2,1)}
+  .feed-tap-rate-panel::before{content:"";position:absolute;inset:-1px;border-radius:inherit;background:linear-gradient(135deg,rgba(255,213,107,.34),rgba(255,143,177,.12),rgba(183,156,240,.24));opacity:.7;pointer-events:none;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);padding:1px;mask-composite:exclude;-webkit-mask-composite:xor}
+  .feed-tap-rate-panel .ech-rate-stars--xl{gap:8px;justify-content:center;align-items:center;max-width:100%}
+  .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star{min-width:58px;width:58px;height:76px;padding:9px 5px;border-radius:20px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.2);box-shadow:0 10px 26px rgba(0,0,0,.22);animation:rateStarFloat .42s cubic-bezier(.2,1,.2,1) both}
+  .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star:nth-child(2){animation-delay:.025s}
+  .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star:nth-child(3){animation-delay:.05s}
+  .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star:nth-child(4){animation-delay:.075s}
+  .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star:nth-child(5){animation-delay:.1s}
+  .feed-tap-rate-panel .ech-rate-star-label{color:rgba(255,255,255,.78);text-shadow:0 1px 8px rgba(0,0,0,.35)}
+  .feed-tap-rate-panel .ech-star-svg{filter:drop-shadow(0 0 10px rgba(255,255,255,.18))}
+  .feed-tap-rate-panel .ech-rate-star:hover .ech-star-svg,.feed-tap-rate-panel .ech-rate-star:active .ech-star-svg{transform:scale(1.12);filter:drop-shadow(0 0 16px rgba(255,213,107,.65))}
+  .feed-tap-rate-hint{font-size:12px;font-weight:800;color:rgba(255,255,255,.92);text-align:center;max-width:90%;line-height:1.35;margin:0;text-shadow:0 1px 10px rgba(0,0,0,.55)}
+  @keyframes ratePanelIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+  @keyframes rateStarFloat{from{opacity:0;transform:translateY(14px) scale(.9)}to{opacity:1;transform:translateY(0) scale(1)}}
   .feed-post-media-wrap,.reel-slide-media,.ech-media-viewer-media,.story-slide{position:relative}
-  .feed-drag-stars-row{display:flex;align-items:center;justify-content:center;gap:12px;padding:0 8px}
-  .feed-drag-stars-row svg{transition:transform .1s ease,color .1s ease,fill .1s ease}
-  .feed-drag-stars-row .lit{filter:drop-shadow(0 0 14px rgba(255,213,107,.7));transform:scale(1.08)}
-  .feed-drag-stars-label{font-size:15px;font-weight:800;color:#fff;letter-spacing:.04em;text-shadow:0 2px 8px rgba(0,0,0,.4)}
   .appbody--ig{padding-bottom:58px}
   .feed-scroll--ig{padding-bottom:58px;background:#fff}
   .feed-scroll--ig .scroll-pad{height:72px}
@@ -16227,7 +16590,6 @@ import React, {
   .compose-enhance-cell{display:flex;flex-direction:column;gap:3px}
   .compose-enhance-cell>span{font-size:10px;font-weight:700;color:#7A6890}
   .compose-enhance-cell input[type=range]{width:100%;height:4px;accent-color:#B79CF0;margin:0}
-  .feed-drag-stars-hint{font-size:11px;font-weight:600;color:rgba(255,255,255,.85);text-align:center;max-width:90%;line-height:1.35}
   .rate-drag-zone{padding:8px 4px;border-radius:16px;touch-action:none}
   .rate-drag-zone.active{background:rgba(183,156,240,.12)}
   .rate-drag-hint{font-size:11px;margin:6px 0 0}
@@ -16651,17 +17013,21 @@ import React, {
   .spark-filter-range input[type=number]{width:72px;padding:6px 8px;border-radius:10px;border:1px solid rgba(183,156,240,.3);font-size:13px;font-weight:700}
   .spark-filter-row input[type=range]{width:100%}
   .spark-likes-banner{display:flex;align-items:center;gap:8px;margin:0 16px 10px;padding:10px 14px;border-radius:14px;background:linear-gradient(135deg,#FFF0F6,#F5EEFF);font-size:13px;font-weight:700;color:#B79CF0}
+  .spark-recycle-banner{display:flex;align-items:center;gap:8px;margin:0 16px 10px;padding:9px 12px;border-radius:12px;background:linear-gradient(135deg,#F3EEFF,#FFF8F0);border:1px solid rgba(183,156,240,.2);font-size:11px;font-weight:700;color:#7A5FA8;line-height:1.35}
   .spark-height-gate{margin:12px 16px;padding:24px 20px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:10px}
   .spark-height-gate h3{margin:0;font-size:17px}
   .spark-height-input{display:flex;align-items:center;gap:8px;margin:8px 0}
   .spark-height-input input{width:100px;padding:10px 12px;border-radius:12px;border:1px solid rgba(183,156,240,.35);font-size:18px;font-weight:800;text-align:center}
   .ech-docs-btn:active{transform:scale(.96)}
-  .echelon-guide{position:relative;max-height:min(92vh,720px);padding:0;overflow:hidden;display:flex;flex-direction:column;border-radius:0}
-  .echelon-guide-hero{position:relative;padding:20px 18px 18px;background:linear-gradient(135deg,#B79CF0 0%,#FF8FB1 55%,#FFD56B 100%);color:#fff;display:flex;align-items:flex-start;gap:14px;flex-shrink:0;border-radius:0}
+  .sheet-overlay--keep-dock{align-items:center;padding:max(14px,env(safe-area-inset-top)) 18px calc(var(--dock-h,74px) + max(14px,env(safe-area-inset-bottom)))}
+  .sheet-overlay--keep-dock .sheet{width:min(100%,420px)}
+  .echelon-guide{position:relative;max-height:min(78dvh,650px);padding:0;overflow:hidden;display:flex;flex-direction:column;border-radius:26px;box-shadow:0 24px 60px rgba(90,74,96,.22)}
+  .echelon-guide-hero{position:relative;padding:22px 58px 20px 20px;background:linear-gradient(135deg,#B79CF0 0%,#FF8FB1 55%,#FFD56B 100%);color:#fff;display:flex;align-items:flex-start;gap:14px;flex-shrink:0;border-radius:26px 26px 0 0}
   .echelon-guide-hero h3{margin:0 0 6px;font-size:18px;font-weight:800;letter-spacing:-.03em;color:#fff}
   .echelon-guide-hero p{margin:0;font-size:13px;line-height:1.5;opacity:.92;color:#fff}
   .echelon-guide-hero-icon{width:44px;height:44px;border-radius:14px;background:rgba(255,255,255,.22);display:grid;place-items:center;flex-shrink:0;backdrop-filter:blur(6px)}
-  .echelon-guide-scroll{padding:14px 16px 16px;background:linear-gradient(180deg,#FFFBFE 0%,#F8F2FF 100%)}
+  .echelon-guide-close--hero{top:14px!important;right:14px!important;border-radius:14px!important;background:rgba(255,255,255,.2)!important;color:#fff!important;box-shadow:none!important;border:1px solid rgba(255,255,255,.3)!important;backdrop-filter:blur(10px)}
+  .echelon-guide-scroll{padding:14px 16px 26px;background:linear-gradient(180deg,#FFFBFE 0%,#F8F2FF 100%)}
   .echelon-guide-tipcard{width:100%;display:flex;align-items:flex-start;gap:10px;padding:12px 14px;margin-bottom:12px;border-radius:16px;border:1px solid rgba(183,156,240,.2);background:linear-gradient(135deg,#FFF8FC,#F3EEFF);cursor:pointer;text-align:left;font:inherit}
   .echelon-guide-tipcard-label{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin-bottom:4px}
   .echelon-guide-tipcard p{margin:0;font-size:12px;line-height:1.45;color:#6B5080;font-weight:600}
@@ -16707,7 +17073,7 @@ import React, {
   .echelon-guide-section-head b,.echelon-guide-section b{display:block;font-size:14px;font-weight:800;color:var(--text-primary);letter-spacing:-.02em;flex:1;min-width:0;text-align:left}
   .echelon-guide-core-pill{font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:rgba(140,107,216,.12);color:#8C6BD8}
   .echelon-guide-section p{margin:0;font-size:13px;line-height:1.55;color:var(--text-secondary)}
-  .echelon-guide-footer{margin-top:4px;padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.75);border:1px solid rgba(183,156,240,.16)}
+  .echelon-guide-footer{margin-top:4px;margin-bottom:6px;padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.75);border:1px solid rgba(183,156,240,.16)}
   .echelon-guide-footer-label{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin-bottom:10px}
   .echelon-guide-footer-links{display:flex;flex-wrap:wrap;gap:8px}
   .echelon-guide-footer-links a,.echelon-guide-footer-links button{font-size:12px;font-weight:700;color:#8C6BD8;background:rgba(243,238,255,.9);border:1px solid rgba(183,156,240,.22);border-radius:999px;padding:7px 12px;cursor:pointer;text-decoration:none}
@@ -16784,6 +17150,12 @@ import React, {
   .story-drag-stars{z-index:8}
   .story-rate-hint{text-align:center;font-size:11px;font-weight:700;color:rgba(255,255,255,.72);padding:6px 12px 10px;margin:0;z-index:3}
   .story-viewer-foot{display:none}
+  .story-viewer-foot--stats{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 14px 16px;z-index:3;background:linear-gradient(180deg,transparent,rgba(0,0,0,.55))}
+  .story-stats-btn{display:flex;align-items:center;gap:8px;border:none;background:rgba(255,255,255,.14);color:#fff;border-radius:999px;padding:8px 14px;font-size:11px;font-weight:700;cursor:pointer;backdrop-filter:blur(8px)}
+  .story-stats-btn b{font-size:13px;font-weight:800}
+  .story-stats-metric{display:inline-flex;align-items:center;gap:3px}
+  .story-stats-dot{opacity:.55}
+  .story-stats-hint{font-size:10px;color:rgba(255,255,255,.72);font-weight:600}
   .story-tap-prev,.story-tap-next{position:absolute;top:72px;bottom:72px;width:30%;border:none;background:transparent;cursor:pointer;z-index:4}
   .story-tap-prev{left:0}
   .story-tap-next{right:0;width:70%}
@@ -16898,7 +17270,22 @@ import React, {
   .legal-modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px max(48px,env(safe-area-inset-left)) 10px max(14px,env(safe-area-inset-right));padding-top:max(16px,env(safe-area-inset-top));border-bottom:1px solid #ECE8EF;flex-shrink:0}
   .ech-modal-close{position:absolute;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));z-index:12;width:36px;height:36px;border-radius:12px;border:1px solid rgba(183,156,240,.28);background:rgba(255,255,255,.96);color:#6B5080;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 14px rgba(120,90,140,.14)}
   .ech-modal-close:active{transform:scale(.94)}
-  .ech-modal-close.echelon-guide-close{top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right))}
+  .ech-modal-close.echelon-guide-close{width:40px;height:40px}
+  .ech-modal-close.echelon-guide-close:active{background:rgba(255,255,255,.28)}
+  .call-banner{position:absolute;top:0;left:0;right:0;z-index:42;display:flex;align-items:center;gap:10px;min-height:var(--call-banner-h);padding:6px 12px;padding-top:max(6px,env(safe-area-inset-top));border:none;background:linear-gradient(90deg,#2d1b4e 0%,#4a2f7a 55%,#8C6BD8 100%);color:#fff;cursor:pointer;font:inherit;text-align:left;box-shadow:0 2px 12px rgba(45,27,78,.35)}
+  .call-banner.live{background:linear-gradient(90deg,#1a5c3a 0%,#2d8f5c 55%,#5ecf9a 100%)}
+  .call-banner.video.live{background:linear-gradient(90deg,#1a3a5c 0%,#2d5f8f 55%,#6BA8FF 100%)}
+  .call-banner-pulse{width:8px;height:8px;border-radius:50%;background:#7CFFB2;flex-shrink:0;animation:callPulse 1.2s ease-in-out infinite}
+  .call-banner-ic{flex-shrink:0;opacity:.9}
+  .call-banner-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+  .call-banner-main b{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+  .call-banner-main span{font-size:12px;font-weight:600;opacity:.9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .call-banner-time{font-size:12px;font-weight:800;font-variant-numeric:tabular-nums;flex-shrink:0}
+  .call-banner-expand{flex-shrink:0;opacity:.75}
+  .phone--call-banner .appbody--call-banner{padding-top:calc(var(--call-banner-h) + max(6px,env(safe-area-inset-top)))}
+  .phone--call-banner .ech-user-profile-screen{top:calc(var(--call-banner-h) + max(6px,env(safe-area-inset-top)))}
+  .call-engine-err{display:none}
+  .echelon-guide-hero{border-radius:26px 26px 0 0}
   .legal-modal-head h2{font-family:var(--font-display);margin:0;font-size:18px;color:#1A1520;font-weight:800}
   .legal-modal-body{overflow:auto;padding:14px max(14px,env(safe-area-inset-left)) max(24px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right));-webkit-overflow-scrolling:touch}
   .legal-modal-body h3{font-family:var(--font-display);font-size:14px;color:#5A4A60;margin:16px 0 8px}
@@ -17004,9 +17391,10 @@ import React, {
   .spark-stamp-pass{left:20px;color:#B07E7E;border-color:#B07E7E}
   .spark-card-info{position:absolute;left:0;right:0;bottom:0;padding:18px 16px 16px;color:#fff;z-index:2}
   .spark-card-name-row{display:flex;align-items:baseline;gap:8px}
-  .spark-card-name-row b{font-size:22px;font-weight:800;letter-spacing:-.02em}
+  .spark-card-name{border:none;background:transparent;color:#fff;padding:0;margin:0;font:inherit;font-size:22px;font-weight:800;letter-spacing:-.02em;cursor:pointer;text-align:left;text-shadow:0 2px 10px rgba(0,0,0,.24)}
+  .spark-card-name:hover,.spark-card-handle:hover{text-decoration:underline}
   .spark-card-score{font-size:14px;font-weight:700;background:rgba(255,255,255,.2);padding:3px 8px;border-radius:999px}
-  .spark-card-handle{display:block;font-size:13px;opacity:.85;margin:2px 0 8px}
+  .spark-card-handle{display:block;border:none;background:transparent;color:#fff;padding:0;font:inherit;font-size:13px;opacity:.85;margin:2px 0 8px;cursor:pointer;text-align:left}
   .spark-card-meta{display:block;font-size:12px;opacity:.75;margin:-4px 0 8px;font-weight:600}
   .spark-card-caption{font-size:12px;line-height:1.4;margin:8px 0 0;opacity:.9;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .spark-card-gate{font-size:11px;margin:8px 0 0;color:#FFD6E4}
@@ -17015,6 +17403,8 @@ import React, {
   .spark-act:active{transform:scale(.92)}
   .spark-act:disabled{opacity:.45;cursor:not-allowed}
   .spark-act.pass{background:#fff;color:#B07E7E;border:2px solid #F0E0E0}
+  .spark-act-next{width:64px;height:64px}
+  .spark-act-next span{font-size:12px;font-weight:950;letter-spacing:.02em}
   .spark-act.like{background:linear-gradient(135deg,#FF7EB3,#FF9DC0);color:#fff;width:64px;height:64px;box-shadow:0 10px 28px rgba(255,126,179,.45)}
   .spark-act.super{background:linear-gradient(135deg,#FFE9A8,#FFD6E4);color:#9B7CC0;border:2px solid rgba(255,255,255,.8)}
   .spark-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;color:var(--text-secondary)}
@@ -17036,8 +17426,11 @@ import React, {
   /* sheets / modals */
   .backdrop{position:absolute;inset:0;background:rgba(90,60,90,.34);backdrop-filter:blur(3px);display:flex;align-items:flex-end;z-index:20;animation:fade .2s}
   .sheet{width:100%;background:#fff;border-radius:0 28px 0 0;padding:14px 20px 26px;box-shadow:0 -16px 50px rgba(120,80,110,.28);animation:slideup .32s cubic-bezier(.2,.9,.2,1);max-height:88%;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
+  .sheet.echelon-guide{border-radius:0;box-shadow:0 -8px 40px rgba(120,80,110,.22)}
   .sheet::-webkit-scrollbar{display:none;width:0;height:0}
   .sheet-overlay{position:absolute;inset:0;z-index:25;background:rgba(90,60,90,.34);backdrop-filter:blur(3px);display:flex;flex-direction:column;animation:fade .2s}
+  .sheet-overlay--keep-dock{bottom:calc(58px + max(8px,env(safe-area-inset-bottom)));z-index:20}
+  .sheet-overlay--keep-dock .echelon-guide{max-height:100%}
   .sheet-grab{width:42px;height:5px;border-radius:5px;background:#EBDEE9;margin:0 auto 14px}
   .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
   .chip{border:1px solid #EEE2EE;background:#FBF6FB;color:#8B7A92;font-weight:700;font-size:12px;padding:8px 13px;border-radius:18px;cursor:pointer;transition:.15s}
@@ -17073,7 +17466,11 @@ import React, {
   .onb-hero{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:10px;padding-top:2px}
   .onb-logo-wrap{position:relative;display:grid;place-items:center;flex-shrink:0}
   .onb-logo-glow{position:absolute;inset:-14px;border-radius:28px;background:conic-gradient(from 200deg,#FFE9A8,#FF9DC0,#B79CF0,#7FB8F0,#FFE9A8);filter:blur(18px);opacity:.55;animation:onbLogoGlow 6s ease-in-out infinite alternate}
-  .onb-logo-img{position:relative;z-index:1;width:100%;height:100%;border-radius:22px;box-shadow:0 14px 36px rgba(150,110,150,.22),inset 0 0 0 2px rgba(255,255,255,.85);object-fit:cover}
+  .onb-logo-img{position:relative;z-index:1;width:100%;height:100%;border-radius:24px;overflow:hidden;display:grid;place-items:center;background:linear-gradient(135deg,#F49CC6 0%,#C9A2F3 48%,#7FC0F4 100%);box-shadow:0 14px 36px rgba(150,110,150,.22),inset 0 0 0 2px rgba(255,255,255,.45)}
+  .onb-logo-img::before{content:"";position:absolute;inset:-18% -8% auto auto;width:62%;height:62%;border-radius:999px;background:rgba(255,255,255,.28);filter:blur(12px)}
+  .onb-logo-orbit{position:absolute;width:62%;height:62%;border:2.5px solid rgba(255,255,255,.9);border-radius:50%;box-shadow:0 0 16px rgba(255,255,255,.4)}
+  .onb-logo-dot{position:absolute;left:45%;top:15%;width:7%;height:7%;border-radius:50%;background:#fff;box-shadow:0 0 8px rgba(255,255,255,.75)}
+  .onb-logo-letter{position:relative;font-family:Georgia,serif;font-size:54%;font-weight:700;line-height:1;color:#fff;text-shadow:0 2px 12px rgba(90,60,140,.36)}
   @keyframes onbLogoGlow{0%{transform:scale(.92) rotate(0deg);opacity:.45}100%{transform:scale(1.06) rotate(12deg);opacity:.62}}
   .onb-pills{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:4px;max-width:280px}
   .onb-pill{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.78);color:#8B6FA8;border:1px solid rgba(255,255,255,.95);box-shadow:0 4px 12px rgba(150,110,150,.08)}
@@ -17479,7 +17876,9 @@ import React, {
   .call-screen--video{background:#0d0818;justify-content:flex-end}
   .call-video-stage{flex:1;min-height:0;position:relative;overflow:hidden;display:flex;flex-direction:column}
   .call-video-remote{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
-  .call-video-remote-img{width:100%;height:100%;object-fit:cover;opacity:.55;filter:blur(2px)}
+  .call-video-remote-img{width:100%;height:100%;object-fit:cover;opacity:.55;filter:blur(2px);transition:opacity .4s ease,filter .4s ease}
+  .call-video-remote-img.live{opacity:.92;filter:blur(0)}
+  .call-video-remote.connected .call-video-remote-emoji{opacity:.65;transform:scale(1.05)}
   .call-video-remote-emoji{font-size:120px;opacity:.35}
   .call-video-remote-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(13,8,24,.55) 0%,rgba(13,8,24,.25) 40%,rgba(13,8,24,.85) 100%)}
   .call-video-remote-meta{position:absolute;bottom:20px;left:0;right:0;text-align:center;z-index:2;padding:0 16px}
@@ -17596,6 +17995,7 @@ import React, {
   .feed-post-overlay-handle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .feed-post-overlay-btn{width:34px;height:34px;border:1px solid rgba(255,255,255,.22);border-radius:12px;background:rgba(20,12,28,.38);backdrop-filter:blur(12px);color:#fff;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.18)}
   .feed-post-overlay-sent{width:34px;height:34px;border-radius:12px;background:rgba(20,12,28,.32);color:rgba(255,255,255,.85);display:grid;place-items:center;pointer-events:none;touch-action:none}
+  button.feed-post-overlay-sent{pointer-events:auto;touch-action:manipulation;cursor:pointer;border:none}
   .feed-post-overlay-sent--following{background:rgba(95,214,160,.35);color:#eafff5}
   .feed-post-overlay-sent--pending{background:rgba(183,156,240,.35);color:#fff}
   .feed-post-overlay-author{position:absolute;left:12px;bottom:12px;z-index:6;display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(255,255,255,.18);background:rgba(20,12,28,.4);backdrop-filter:blur(14px);color:#fff;padding:5px 11px 5px 5px;border-radius:999px;font-size:11px;font-weight:700;cursor:pointer;max-width:calc(100% - 24px);box-shadow:0 4px 16px rgba(0,0,0,.2)}
@@ -17812,7 +18212,9 @@ import React, {
   .ech-media-viewer-media .feed-post-media,.ech-media-viewer-media .post-img,.ech-media-viewer-media video,.ech-media-viewer-media img{width:100%;height:100%;object-fit:cover;border-radius:0}
   .ech-media-viewer-top{position:absolute;top:0;left:0;right:0;z-index:8;display:flex;align-items:center;gap:8px;padding:max(8px,env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) 10px max(10px,env(safe-area-inset-left));background:linear-gradient(180deg,rgba(0,0,0,.55),transparent)}
   .ech-media-viewer-back,.ech-media-viewer-iconbtn{border:none;background:rgba(30,20,40,.5);color:#fff;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(10px);flex-shrink:0}
-  .ech-media-viewer-iconbtn--state{cursor:default;background:rgba(95,214,160,.28);color:#eafff5;pointer-events:none;touch-action:none}
+  .ech-media-viewer-iconbtn--state{background:rgba(95,214,160,.28);color:#eafff5}
+  button.ech-media-viewer-iconbtn--state{cursor:pointer;pointer-events:auto;touch-action:manipulation}
+  span.ech-media-viewer-iconbtn--state{cursor:default;pointer-events:none;touch-action:none}
   .ech-media-viewer-iconbtn--danger{background:rgba(255,59,122,.32);color:#fff}
   .ech-media-viewer-top-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
   .ech-media-viewer-author-chip{flex:1;min-width:0;border:none;background:rgba(30,20,40,.45);color:#fff;border-radius:999px;padding:5px 11px 5px 8px;display:inline-flex;align-items:center;gap:7px;cursor:pointer;backdrop-filter:blur(10px);font-family:var(--font-sans)}
@@ -17966,22 +18368,28 @@ import React, {
   .ech-privacy-field input::placeholder{color:#9B8FA8}
   .ech-privacy-hint{font-size:11px;margin:8px 0 0;line-height:1.45}
   .ech-user-profile-screen{position:absolute;inset:0 0 76px 0;z-index:45;display:flex;flex-direction:column;min-height:0;background:#fff}
-  .ech-user-profile-head{display:flex;align-items:center;gap:8px;padding:10px max(12px,env(safe-area-inset-left)) 8px max(12px,env(safe-area-inset-right))}
-  .ech-user-profile-scroll{flex:1;min-height:0;padding:0 max(12px,env(safe-area-inset-left)) 120px max(12px,env(safe-area-inset-right))}
-  .ech-user-profile-id{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin-bottom:10px;border-radius:16px;background:rgba(255,255,255,.85);border:1px solid rgba(183,156,240,.14)}
+  .ech-user-profile-head{display:flex;align-items:flex-start;gap:8px;padding:8px max(12px,env(safe-area-inset-left)) 10px max(12px,env(safe-area-inset-right));border-bottom:1px solid rgba(183,156,240,.12);background:#fff}
+  .ech-user-profile-head--unified .ech-screen-back{margin-top:6px;flex-shrink:0}
+  .ech-user-profile-inline{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+  .ech-user-profile-inline-main{flex:1;min-width:0;overflow:hidden}
+  .ech-user-profile-inline-id{display:flex;flex-direction:column;gap:1px;margin-bottom:3px;min-width:0}
+  .ech-user-profile-inline-id h2{margin:0;font-size:15px;font-weight:800;color:#1A1520;letter-spacing:-.02em;display:flex;align-items:center;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ech-user-profile-inline-stats{display:flex;align-items:center;gap:5px;flex-wrap:wrap;font-size:10px;font-weight:600;color:#8A7A98}
+  .ech-user-profile-inline-stats b{color:#1A1520;font-weight:800;font-size:11px}
+  .ech-user-profile-inline-score{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;padding-left:2px}
+  .ech-user-profile-scroll{flex:1;min-height:0;padding:8px max(12px,env(safe-area-inset-left)) 120px max(12px,env(safe-area-inset-right))}
   .ech-user-avatar-btn{border:none;background:transparent;padding:0;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;flex-shrink:0}
   .ech-user-avatar-btn.has-story .avatar-ring{border-color:#B79CF0;box-shadow:0 0 0 2px rgba(183,156,240,.35)}
-  .ech-user-story-hint{font-size:9px;font-weight:800;color:#9B7FD4;text-transform:uppercase;letter-spacing:.06em}
-  .ech-user-profile-meta{flex:1;min-width:0}
-  .ech-user-profile-meta b{display:block;font-size:14px;font-weight:800;color:#5A4A60}
-  .ech-user-profile-meta span{display:block;font-size:11px;color:#9B8FA8;font-weight:600}
-  .ech-user-profile-meta p{margin:4px 0 0;font-size:11px;line-height:1.4;color:#6B5080}
-  .ech-user-profile-content{margin-top:4px}
+  .ech-user-story-live{font-size:9px;font-weight:800;color:#9B7FD4;text-transform:uppercase;letter-spacing:.05em}
+  .ech-user-profile-bio{margin:0 0 10px;font-size:12px;line-height:1.45;color:#6B5080}
+  .ech-user-profile-content{margin-top:0}
   .ech-user-quickbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:space-around;gap:4px;flex-wrap:wrap;padding:8px max(10px,env(safe-area-inset-left)) 10px max(10px,env(safe-area-inset-right));background:rgba(255,255,255,.94);border-top:1px solid rgba(183,156,240,.14);backdrop-filter:blur(12px);z-index:2}
   .ech-user-qbtn--block.on{color:#8C6BD8}
   .ech-user-qbtn.on{color:#8C6BD8}
   .ech-user-qbtn{flex:1;min-width:0;border:none;background:transparent;display:flex;flex-direction:column;align-items:center;gap:2px;color:#6B5080;font-size:9px;font-weight:700;cursor:pointer;padding:4px 2px}
-  .ech-user-qbtn--state{cursor:default;opacity:.85;color:#8C6BD8;pointer-events:none;touch-action:none}
+  .ech-user-qbtn--state{opacity:.85;color:#8C6BD8}
+  button.ech-user-qbtn--state{cursor:pointer;pointer-events:auto;touch-action:manipulation}
+  span.ech-user-qbtn--state{cursor:default;pointer-events:none;touch-action:none}
 
 
   /* ---- mobile: full-screen native feel ---- */

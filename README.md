@@ -34,6 +34,8 @@ npm run build        # production build
 npm run deploy:app   # deploy web to echelon.rsvp
 ```
 
+Rating model: see [docs/RATING-ENGINE.md](docs/RATING-ENGINE.md).
+
 ## iOS App Store (free, from Windows)
 
 1. Add GitHub Actions secrets (see [store-listing/BUILD-FREE.md](store-listing/BUILD-FREE.md))

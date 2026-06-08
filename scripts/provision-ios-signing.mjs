@@ -140,10 +140,16 @@ async function getOrCreateDistributionCert(csrContent) {
 
 async function getOrCreateProfile(bundleIdId, certificateId) {
   const all = await asc("GET", "/v1/profiles?filter[profileType]=IOS_APP_STORE&limit=50");
-  const match = all.data?.find((p) => p.attributes?.name === PROFILE_NAME);
-  if (match) {
-    console.log(`provision-ios-signing: found profile ${match.id}`);
-    return match;
+  for (const profile of all.data || []) {
+    if (profile.attributes?.name !== PROFILE_NAME) continue;
+    const detail = await asc("GET", `/v1/profiles/${profile.id}?include=certificates`);
+    const certIds = detail.included?.filter((x) => x.type === "certificates").map((x) => x.id) || [];
+    if (certIds.includes(certificateId)) {
+      console.log(`provision-ios-signing: found profile ${profile.id}`);
+      return profile;
+    }
+    console.warn(`provision-ios-signing: deleting stale profile ${profile.id}`);
+    await asc("DELETE", `/v1/profiles/${profile.id}`);
   }
   const created = await asc("POST", "/v1/profiles", {
     data: {

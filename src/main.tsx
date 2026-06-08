@@ -6,7 +6,7 @@ import EchelonApp from "../mob";
 
 
 
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && !import.meta.env.DEV) {
   navigator.serviceWorker.register("/app/sw.js").catch(() => {});
 }
 

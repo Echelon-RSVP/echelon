@@ -4,8 +4,8 @@ declare(strict_types=1);
 /** Spark matching with user-defined filters (age, distance, height, rating). */
 final class Spark
 {
-    public const LIKE_SCORE_DELTA = 0.02;
-    public const PASS_SCORE_DELTA = -0.01;
+    public const LIKE_SCORE_RATE = 0.0005;
+    public const PASS_SCORE_RATE = -0.0005;
 
     /** @return array<string, mixed> */
     public static function defaultPreferences(): array
@@ -111,14 +111,18 @@ final class Spark
         return array_column($st->fetchAll(), 'friend_id');
     }
 
-    /** @return array<string, string> to_user_id => action */
-    public static function swipesByUser(PDO $pdo, string $userId): array
+    /** @return array<string, array{action:string,ts:int,passCount:int}> */
+    public static function swipeDetailsByUser(PDO $pdo, string $userId): array
     {
-        $st = $pdo->prepare('SELECT to_user_id, action FROM spark_swipes WHERE from_user_id = ?');
+        $st = $pdo->prepare('SELECT to_user_id, action, ts, pass_count FROM spark_swipes WHERE from_user_id = ?');
         $st->execute([$userId]);
         $out = [];
         foreach ($st->fetchAll() as $row) {
-            $out[(string)$row['to_user_id']] = (string)$row['action'];
+            $out[(string)$row['to_user_id']] = [
+                'action' => (string)$row['action'],
+                'ts' => (int)$row['ts'],
+                'passCount' => (int)($row['pass_count'] ?? 0),
+            ];
         }
         return $out;
     }
@@ -132,7 +136,8 @@ final class Spark
 
         $prefs = self::preferencesForUser($pdo, $me['id']);
         $friendIds = self::excludedFriendIds($pdo, $me['id']);
-        $swiped = self::swipesByUser($pdo, $me['id']);
+        $swipes = self::swipeDetailsByUser($pdo, $me['id']);
+        $recycleCutoff = (int)(microtime(true) * 1000) - 86400000;
 
         $st = $pdo->prepare(
             'SELECT * FROM users
@@ -140,20 +145,41 @@ final class Spark
              ORDER BY score DESC LIMIT 300'
         );
         $st->execute([$me['id']]);
+        $rows = $st->fetchAll();
         $candidates = [];
+        $recycle = [];
 
-        foreach ($st->fetchAll() as $row) {
+        foreach ($rows as $row) {
             $id = (string)$row['id'];
             if (in_array($id, $friendIds, true)) continue;
-            if (isset($swiped[$id])) continue;
             if (!self::passesFilters($me, $row, $prefs)) continue;
-            $candidates[] = $row;
+
+            $sw = $swipes[$id] ?? null;
+            if (!$sw) {
+                $candidates[] = $row;
+                continue;
+            }
+            if ($sw['action'] !== 'pass') continue;
+
+            if ($sw['ts'] <= $recycleCutoff) {
+                $recycle[] = ['row' => $row, 'passCount' => $sw['passCount'], 'ts' => $sw['ts']];
+            }
         }
 
-        shuffle($candidates);
-        $candidates = array_slice($candidates, 0, $limit);
+        $usingRecycle = false;
+        if (!$candidates && $recycle) {
+            usort($recycle, static function ($a, $b) {
+                if ($a['passCount'] !== $b['passCount']) return $a['passCount'] <=> $b['passCount'];
+                return $a['ts'] <=> $b['ts'];
+            });
+            $candidates = array_map(static fn($r) => $r['row'], array_slice($recycle, 0, $limit));
+            $usingRecycle = true;
+        } else {
+            shuffle($candidates);
+            $candidates = array_slice($candidates, 0, $limit);
+        }
 
-        return array_map(function ($row) use ($pdo, $me, $prefs) {
+        $deck = array_map(function ($row) use ($pdo, $me, $prefs, $usingRecycle) {
             $u = Helpers::userPublic($row);
             $stPosts = $pdo->prepare(
                 'SELECT media_url, media_type, caption, scene_json FROM posts WHERE author_id = ? AND media_url IS NOT NULL ORDER BY ts DESC LIMIT 3'
@@ -182,8 +208,13 @@ final class Spark
                 $u['miles'] = round($dist, 2);
             }
             $u['age'] = self::ageFromBirthYear(isset($row['birth_year']) ? (int)$row['birth_year'] : null);
+            if ($usingRecycle) {
+                $u['sparkRecycled'] = true;
+            }
             return $u;
         }, $candidates);
+
+        return $deck;
     }
 
     /** @return list<array> */
@@ -233,15 +264,8 @@ final class Spark
     public static function maybeApplySwipeScoreNudge(PDO $pdo, string $fromUserId, array $target, string $action): bool
     {
         $now = (int)(microtime(true) * 1000);
-        $st = $pdo->prepare('SELECT ts FROM spark_score_nudges WHERE from_user_id = ? AND to_user_id = ?');
-        $st->execute([$fromUserId, $target['id']]);
-        $prev = $st->fetch();
-        if ($prev && ($now - (int)$prev['ts']) < 86400000) {
-            return false;
-        }
-
-        $delta = $action === 'pass' ? self::PASS_SCORE_DELTA : self::LIKE_SCORE_DELTA;
-        $next = Scoring::applyDelta((float)$target['score'], $delta);
+        $rate = $action === 'pass' ? self::PASS_SCORE_RATE : self::LIKE_SCORE_RATE;
+        $next = Scoring::applyPercentDelta((float)$target['score'], $rate);
         $pdo->prepare('UPDATE users SET score = ? WHERE id = ?')->execute([$next, $target['id']]);
 
         $pdo->prepare(

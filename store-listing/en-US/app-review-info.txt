@@ -24,11 +24,17 @@ hi@echelon.rsvp
 
 === Notes (paste into Notes field) ===
 
-Echelon is a social reputation app. Users sign in, browse a feed, message friends, discover people, and rate other users (limited to once per 24 hours per person when eligible).
+Echelon is a social reputation app. Users sign in, browse a feed, message friends, discover people, and rate other users. Direct person ratings are limited to once every 24 hours per rated person across Lens/map, chat, calls, and video calls. Media ratings are independent and can be submitted once per media item.
 
-Demo account (email login):
+Demo accounts (email/password login):
+
+App Review account:
 - Email: review@echelon.rsvp
 - Password: EchelonReview2026!
+
+QA test account:
+- Identifier: test (or @test)
+- Password: test
 
 Sign in steps:
 1. Open the app and tap Sign in.
@@ -39,13 +45,28 @@ How to test main features:
 1. Feed: scroll posts, open a post, like or comment. Stories row at top (Momentum).
 2. Messages: open a chat with Naomi or Iris, send a text message.
 3. Profile: view portfolio, score graph, and settings.
-4. Match (Spark): swipe cards after height is saved (demo account already has height set).
-5. Map/Discover: optional location permission for nearby users.
+4. Match: tap Match. The demo account already has height set. Tap a username/handle to open the profile, tap NEXT to pass, or tap the heart to like.
+5. Rate others once every 24 hours: use either of these paths:
+   - Match/Map path: tap the Map/Lens tab. Lens is on by default. Followed users with Lens on appear on the map; tap a user and tap Rate. After rating, the same user is blocked by the 24-hour cooldown.
+   - Chat path: open Messages, select an existing chat, tap End Chat, then submit the required rating. The same 24-hour direct rating cooldown applies.
+6. Media ratings: open Feed, single-tap a post to show empty stars, then tap a star. This rates the media item only and does not consume the direct person-rating cooldown.
 
 Permissions (only requested when used):
 - Camera/microphone: chat media and stories.
 - Photo library: attach images.
-- Location: optional, for nearby discovery on Map.
+- Location: optional, for Lens/map discovery of followed users who have Lens on.
+
+Face data:
+- The onboarding face scan collects only the selfie/profile photo the user submits.
+- It is used only to create the profile avatar and request an automated image-analysis score suggestion for the initial in-app Echelon Score.
+- Echelon does not collect Apple Face ID data, biometric face templates, faceprints, facial geometry, liveness maps, depth maps, or government ID data.
+- The image may be sent to an AI/image-analysis processor solely for the score suggestion. It is stored on Echelon-controlled storage as the profile avatar until replaced or account deletion. No biometric template is stored.
+- See Privacy Policy section "4A. Face data collection, use, sharing, storage, and retention".
+
+Cookies/tracking:
+- The app does not use cookies/local storage for advertising, data brokers, or cross-app/cross-site tracking.
+- The cookie prompt is for strictly necessary storage and optional functional preferences only. Analytics are not currently deployed.
+- See Cookie Policy sections 3, 4, 5, and 6.
 
 User safety: users can block, mute, report posts, and delete their own messages.
 

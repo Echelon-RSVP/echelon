@@ -44,7 +44,7 @@ META / INSTAGRAM INTEGRATION
 
 STEP-BY-STEP — GENERAL APP ACCESS
 1. Open https://echelon.rsvp/app/ in Chrome or Safari.
-2. On the cookie banner, tap “Accept all” (or “Accept” / manage preferences — functional cookies help store language preference).
+2. On the cookie banner, tap “Allow functional” (or manage preferences — functional storage helps store language preference).
 3. Create an account OR sign in with the test credentials provided in Field 3 below.
 4. Complete onboarding:
    - Choose display name and username (@handle).

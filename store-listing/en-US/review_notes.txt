@@ -13,7 +13,7 @@ How to test:
 1. Feed: scroll posts, open a post, like or comment. Stories row at top (Momentum).
 2. Messages: open a chat with Naomi or Iris, send a text message.
 3. Profile: view portfolio, score graph, and settings.
-4. Match (Spark): swipe profile cards.
+4. Match: swipe profile cards.
 5. Map/Discover: optional location permission for nearby users.
 
 Permissions:

@@ -585,6 +585,13 @@ final class Helpers
         return (bool)$st->fetch();
     }
 
+    public static function followerCount(PDO $pdo, string $userId): int
+    {
+        $st = $pdo->prepare('SELECT COUNT(*) FROM friendships WHERE friend_id = ?');
+        $st->execute([$userId]);
+        return (int)$st->fetchColumn();
+    }
+
     public static function isBlocked(PDO $pdo, string $blockerId, string $blockedId): bool
     {
         $st = $pdo->prepare('SELECT 1 FROM user_blocks WHERE blocker_id = ? AND blocked_id = ?');
@@ -620,7 +627,9 @@ final class Helpers
     {
         $id = (string)$row['id'];
         if (!$viewerId || $viewerId === $id) {
-            return self::userPublic($row);
+            $out = self::userPublic($row);
+            $out['followerCount'] = self::followerCount($pdo, $id);
+            return $out;
         }
         if (self::isBlocked($pdo, $viewerId, $id) || self::isBlocked($pdo, $id, $viewerId)) {
             return [
@@ -644,7 +653,9 @@ final class Helpers
                 'profileLocked' => true,
             ];
         }
-        return self::userPublic($row);
+        $out = self::userPublic($row);
+        $out['followerCount'] = self::followerCount($pdo, $id);
+        return $out;
     }
 
     public static function assertCanInteract(PDO $pdo, string $viewerId, string $targetId): void

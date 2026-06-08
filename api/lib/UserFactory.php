@@ -40,7 +40,7 @@ final class UserFactory
         $colors = ['#FFD1E1', '#FFE9A8', '#D8ECFF', '#E6DBFF', '#CFF5E7', '#FFD9B0'];
         $emojis = ['🙂', '✨', '🌸', '😎', '🫧', '🌿'];
 
-        $st = $pdo->prepare('INSERT INTO users (id, apple_sub, google_sub, email, password_hash, auth_method, name, handle, emoji, color, score, miles, lens_on, lens_x, lens_y, uid_code, onboarded, birth_year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 3.00, 0.50, 0, 50, 50, ?, 0, ?)');
+        $st = $pdo->prepare('INSERT INTO users (id, apple_sub, google_sub, email, password_hash, auth_method, name, handle, emoji, color, score, miles, lens_on, lens_x, lens_y, uid_code, onboarded, birth_year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 3.00, 0.50, 1, 50, 50, ?, 0, ?)');
         $st->execute([
             $id,
             $opts['apple_sub'] ?? null,

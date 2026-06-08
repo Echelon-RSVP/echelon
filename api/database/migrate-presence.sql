@@ -6,4 +6,7 @@ ALTER TABLE users
   ADD COLUMN lng DECIMAL(11, 7) NULL,
   ADD COLUMN location_ts BIGINT NULL;
 
+ALTER TABLE users
+  ADD COLUMN map_hidden TINYINT(1) NOT NULL DEFAULT 0;
+
 CREATE INDEX idx_users_location ON users (location_ts, lat, lng);

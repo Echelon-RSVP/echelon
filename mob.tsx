@@ -53,7 +53,7 @@ import React, {
     RotateCcw, LayoutGrid, Infinity, Link2, Download, Music2, Pencil, SquarePlay, ChevronUp, Circle,
     Disc3, Radio, UserRound, BarChart2, Hash, Scissors, ArrowUpDown,
   } from "lucide-react";
-  import ViewFinderMap, { resetViewfinderMapView } from "./viewfinder-map";
+  import ViewFinderMap from "./viewfinder-map";
   import PartyPinMap from "./party-pin-map";
   import {
     LANGS, saveLang, t as translate, langFromBrowser, detectLangFromIp, LANG_KEY,
@@ -417,14 +417,20 @@ import React, {
   };
 
   const isMapVisibleFriend = (f) => {
-    if (!f?.lensOn) return false;
+    if (!f) return false;
+    if (f.mapHidden || f.hideMapLocation) return false;
     if (f.lat == null || f.lng == null) return false;
     const ts = friendLocationTs(f);
     if (!ts || Number.isNaN(ts)) return false;
     return Date.now() - ts <= MAP_LOCATION_MAX_AGE_MS;
   };
 
-  const mutualLens = (state, c) => state.lens && c.lensOn;
+  const hasRecentLensPresence = (c) => {
+    const ts = friendLocationTs(c);
+    return !!ts && !Number.isNaN(ts) && Date.now() - ts <= MAP_LOCATION_MAX_AGE_MS;
+  };
+
+  const mutualLens = (state, c) => state.lens && (c.lensOn || c.recentLens || hasRecentLensPresence(c));
 
   const scoreForCompare = (s) => Math.round((Number(s) || 0) * 100) / 100;
   const hasHigherScoreThan = (state, c) => scoreForCompare(state.user.score) > scoreForCompare(c?.score ?? 0);
@@ -460,11 +466,11 @@ import React, {
   const rateableNearby = (state) => proximityPool(state).filter((c) => canRateProximity(state, c));
   const lensVisibleNearby = (state) =>
     state.lens
-      ? proximityPool(state).filter((c) => c.lensOn)
+      ? proximityPool(state).filter((c) => c.lensOn || c.recentLens || hasRecentLensPresence(c))
       : [];
   const proxReason = (state, c) => {
     if (!state.lens) return "Your Lens is off";
-    if (!c.lensOn) return "Their Lens is off";
+    if (!c.lensOn) return "Last seen with Lens";
     if (state.friends.includes(c.id)) return "Following · Lens on";
     return "Lens on";
   };
@@ -483,7 +489,7 @@ import React, {
     if (base) return base;
     if (!state.lens && !c.lensOn) return "Turn Lens on · they need Lens too";
     if (!state.lens) return "Turn Lens on to rate followed users";
-    if (!c.lensOn) return "They need Lens on for map rating";
+    if (!c.lensOn && !c.recentLens && !hasRecentLensPresence(c)) return "They need Lens on for map rating";
     const left = proxCooldownLeft(state, c.id);
     if (left > 0) return `Rated recently · try again in ${formatCooldown(left)}`;
     return "";
@@ -1068,7 +1074,14 @@ import React, {
   const MAX_VIDEO_SEC = 60;
 
   const pickVideoMime = () => {
-    const candidates = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
+    const candidates = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm;codecs=h264,opus",
+      "video/mp4;codecs=avc1,mp4a.40.2",
+      "video/webm",
+      "video/mp4",
+    ];
     for (const m of candidates) {
       if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(m)) return m;
     }
@@ -2165,10 +2178,25 @@ import React, {
 
       case "STORY_PUBLISHED": {
         const story = action.story;
+        const existing = state.stories.find((s) => s.author === story.author);
+        const existingItems = existing?.items || [];
+        const incomingItems = story?.items || [];
+        const mergedItems = [...existingItems, ...incomingItems]
+          .filter((item, idx, arr) => item?.id && arr.findIndex((x) => x.id === item.id) === idx);
+        const mergedStory = existing
+          ? {
+              ...existing,
+              ...story,
+              id: existing.id || story.id,
+              items: mergedItems.length ? mergedItems : incomingItems,
+              ts: Math.max(existing.ts || 0, story.ts || Date.now()),
+              expiresAt: Math.max(existing.expiresAt || 0, story.expiresAt || 0),
+            }
+          : story;
         const without = state.stories.filter((s) => s.author !== story.author);
         return {
           ...state,
-          stories: [story, ...without],
+          stories: [mergedStory, ...without],
           modal: null,
         };
       }
@@ -4512,24 +4540,41 @@ import React, {
     return ImageIcon;
   };
 
-  function FeedVideo({ src, className, style, feedMode, muted = true }) {
+  function FeedVideo({ src, className, style, feedMode, muted = true, clipStart = 0, clipEnd = 0 }) {
     const ref = useRef(null);
+    const start = Math.max(0, Number(clipStart) || 0);
+    const end = Math.max(start, Number(clipEnd) || 0);
     useEffect(() => {
       const el = ref.current;
+      if (el && start > 0) el.currentTime = start;
       if (!el || !feedMode || typeof IntersectionObserver === "undefined") {
         if (el && feedMode) el.play().catch(() => {});
         return;
       }
       const io = new IntersectionObserver(([entry]) => {
-        if (entry.isIntersecting) el.play().catch(() => {});
+        if (entry.isIntersecting) {
+          if (start > 0 && el.currentTime < start) el.currentTime = start;
+          el.play().catch(() => {});
+        }
         else { el.pause(); el.currentTime = 0; }
       }, { threshold: 0.35, rootMargin: "40px 0px" });
       io.observe(el);
       return () => io.disconnect();
-    }, [src, feedMode]);
+    }, [src, feedMode, start]);
     useEffect(() => {
       if (ref.current) ref.current.muted = muted;
     }, [muted]);
+    const onTimeUpdate = (e) => {
+      const el = e.currentTarget;
+      if (start > 0 && el.currentTime < start) {
+        el.currentTime = start;
+        return;
+      }
+      if (end > start && el.currentTime >= end) {
+        el.currentTime = start;
+        if (feedMode || !el.paused) el.play().catch(() => {});
+      }
+    };
     return (
       <video
         ref={ref}
@@ -4542,6 +4587,8 @@ import React, {
         preload="metadata"
         autoPlay={feedMode && typeof IntersectionObserver === "undefined"}
         controls={!feedMode}
+        onLoadedMetadata={(e) => { if (start > 0) e.currentTarget.currentTime = start; }}
+        onTimeUpdate={onTimeUpdate}
       />
     );
   }
@@ -4599,7 +4646,7 @@ import React, {
 
     const inner = src ? (
       item.mediaType === "video"
-        ? <FeedVideo src={src} className="post-media" feedMode={feedMode} muted={audioMuted} />
+        ? <FeedVideo src={src} className="post-media" feedMode={feedMode} muted={audioMuted} clipStart={capStyle.clipStart} clipEnd={capStyle.clipEnd} />
         : <img src={src} alt="" className="post-media" style={mediaFilter ? { filter: mediaFilter } : undefined} draggable={false} loading="lazy" decoding="async" />
     ) : (
       <span className="feed-post-emoji">{post.emoji || "✨"}</span>
@@ -4808,7 +4855,7 @@ import React, {
             <Avatar c={a} size={58} ring={false} showScore={false} />
           ) : thumb ? (
             item.mediaType === "video"
-              ? <video src={thumb} className="ech-momentum-thumb" muted playsInline preload="metadata" />
+              ? <video src={thumb} className="ech-momentum-thumb" muted playsInline autoPlay loop preload="metadata" />
               : <img src={thumb} alt="" className="ech-momentum-thumb" />
           ) : (
             <Avatar c={a} size={58} ring={false} showScore={false} />
@@ -4829,14 +4876,21 @@ import React, {
           <span className="ech-kicker">{tr("feed.momentum")}</span>
         </div>
         <div className="ech-momentum-strip">
-          <button type="button" className="ech-momentum-item" onClick={() => { sfx.tap(); mine ? onOpenStory(ME_ID) : onCreateStory(); }}>
-            {mine ? renderStoryRing(mine, getAuthor(state, ME_ID), true) : (
-              <div className="ech-momentum-card add">
-                <div className="ech-momentum-add"><Plus size={20} color="#8C6BD8" /></div>
-              </div>
+          <div className="ech-momentum-item ech-momentum-item--mine">
+            <button type="button" className="ech-momentum-story-btn" onClick={() => { sfx.tap(); mine ? onOpenStory(ME_ID) : onCreateStory(); }}>
+              {mine ? renderStoryRing(mine, getAuthor(state, ME_ID), true) : (
+                <div className="ech-momentum-card add">
+                  <div className="ech-momentum-add"><Plus size={20} color="#8C6BD8" /></div>
+                </div>
+              )}
+              <span className="ech-momentum-name">{mineLive ? tr("feed.live") : mine ? tr("feed.yourStory") : tr("feed.addStory")}</span>
+            </button>
+            {mine && !mineLive && (
+              <button type="button" className="ech-momentum-add-more" aria-label={tr("feed.addStory")} onClick={(e) => { e.stopPropagation(); sfx.tap(); onCreateStory(); }}>
+                <Plus size={13} strokeWidth={3} />
+              </button>
             )}
-            <span className="ech-momentum-name">{mineLive ? tr("feed.live") : mine ? tr("feed.yourStory") : tr("feed.addStory")}</span>
-          </button>
+          </div>
           {liveStories.map((s) => {
             const a = getAuthor(state, s.author);
             return (
@@ -5318,10 +5372,11 @@ import React, {
     const { state, dispatch } = useStore();
     const tr = useT();
     const igPane = state.feedIgPane || "home";
+    const unreadMessages = Object.values(state.chatInbox || {}).reduce((sum, meta) => sum + (meta?.unread || 0), 0);
     const tabs = [
       { id: "home", icon: Home, label: tr("nav.home"), action: () => { dispatch({ type: "SCREEN", screen: "feed" }); dispatch({ type: "SET_FEED_PANE", pane: "home" }); } },
       { id: "spark", icon: Flame, label: tr("tabs.spark"), spark: true, action: () => dispatch({ type: "SCREEN", screen: "spark" }) },
-      { id: "map", icon: MapIcon, label: tr("nav.map"), action: () => { resetViewfinderMapView(); dispatch({ type: "SCREEN", screen: "lens" }); } },
+      { id: "map", icon: MapIcon, label: tr("nav.map"), action: () => dispatch({ type: "SCREEN", screen: "lens" }) },
       { id: "explore", icon: Compass, label: tr("nav.discover"), action: () => dispatch({ type: "SCREEN", screen: "explore" }) },
       { id: "messages", icon: Send, label: tr("tabs.messages"), action: () => dispatch({ type: "SCREEN", screen: "messages" }) },
       { id: "profile", icon: User, label: tr("nav.profile"), action: () => dispatch({ type: "SCREEN", screen: "profile" }), avatar: true },
@@ -5345,7 +5400,10 @@ import React, {
                     <Avatar c={state.user} size={24} showScore={false} ring={false} />
                   </span>
                 ) : (
-                  <Icon size={22} strokeWidth={on ? 2.35 : 1.65} />
+                  <span className="ech-dock-icon-wrap">
+                    <Icon size={22} strokeWidth={on ? 2.35 : 1.65} />
+                    {id === "messages" && unreadMessages > 0 && <span className="ech-dock-dot" aria-label={`${unreadMessages} unread messages`} />}
+                  </span>
                 )}
                 <span className={"ech-dock-label" + (on ? " on" : "")}>{label}</span>
               </button>
@@ -6500,6 +6558,8 @@ import React, {
 
     const sel = selected ? visibleMapFriends.find((f) => f.id === selected) || mapFriends.find((f) => f.id === selected) || byId[selected] : null;
     const cooldown = sel ? proxCooldownLeft(state, sel.id) : 0;
+    const selectedFollowUi = sel ? followUiForUser(state, sel.id) : "follow";
+    const selectedIsFollowing = sel ? state.friends.includes(sel.id) : false;
 
     return (
       <div className="viewfinder-panel">
@@ -6571,6 +6631,38 @@ import React, {
           {mapBusy && (
             <div className="viewfinder-loading" aria-hidden><Loader size={28} className="spin" color="#C9A0DC" /></div>
           )}
+          {sel && (
+            <div className="viewfinder-map-actions card">
+              <Avatar c={sel} size={46} ring showScore={false} />
+              <div className="viewfinder-map-actions-main">
+                <b>{sel.name}</b>
+                <span>{sel.handle} · {sel.score?.toFixed?.(1)} ★</span>
+              </div>
+              <div className="viewfinder-map-actions-row">
+                <button type="button" className="viewfinder-action-btn" onClick={() => { sfx.tap(); openUserProfile(dispatch, sel.id); }}>
+                  <User size={16} />
+                  <span>Visit profile</span>
+                </button>
+                <button
+                  type="button"
+                  className={"viewfinder-action-btn" + (selectedIsFollowing || selectedFollowUi === "pending" ? " on" : "")}
+                  disabled={selectedIsFollowing || selectedFollowUi === "pending"}
+                  onClick={() => {
+                    if (selectedIsFollowing || selectedFollowUi === "pending") return;
+                    sfx.tap();
+                    sendFriendRequest(dispatch, state, sel.id);
+                  }}
+                >
+                  {selectedFollowUi === "pending" ? <Clock size={16} /> : selectedIsFollowing ? <UserCheck size={16} /> : <UserPlus size={16} />}
+                  <span>{selectedFollowUi === "pending" ? tr("friends.requestSent") : selectedIsFollowing ? "Following" : tr("friends.add")}</span>
+                </button>
+                <button type="button" className="viewfinder-action-btn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: sel.id } }); }}>
+                  <Send size={16} />
+                  <span>{tr("chat.message")}</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {!mapBusy && visibleMapFriends.length === 0 && mapParties.length === 0 && (
@@ -6589,16 +6681,36 @@ import React, {
               )}
             </div>
             <div className="viewfinder-detail-actions">
-              <button type="button" className="icbtn" onClick={() => { sfx.tap(); openUserProfile(dispatch, sel.id); }}>
+              <button type="button" className="viewfinder-action-btn" onClick={() => { sfx.tap(); openUserProfile(dispatch, sel.id); }}>
                 <User size={16} />
+                <span>Profile</span>
               </button>
+              <button type="button" className="viewfinder-action-btn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: sel.id } }); }}>
+                <Send size={16} />
+                <span>{tr("chat.message")}</span>
+              </button>
+              {!selectedIsFollowing && (
+                <button
+                  type="button"
+                  className={"viewfinder-action-btn" + (selectedFollowUi === "pending" ? " on" : "")}
+                  disabled={selectedFollowUi === "pending"}
+                  onClick={() => {
+                    if (selectedFollowUi === "pending") return;
+                    sfx.tap();
+                    sendFriendRequest(dispatch, state, sel.id);
+                  }}
+                >
+                  {selectedFollowUi === "pending" ? <Clock size={16} /> : <UserPlus size={16} />}
+                  <span>{selectedFollowUi === "pending" ? tr("friends.requestSent") : tr("friends.add")}</span>
+                </button>
+              )}
               {canRateFriendMap(sel) ? (
                 <button
                   type="button"
-                  className="ratebtn"
+                  className="viewfinder-action-btn viewfinder-action-btn--rate"
                   onClick={() => dispatch({ type: "OPEN_MODAL", modal: "rate", payload: { id: sel.id, prox: true } })}
                 >
-                  <Star size={13} /> {tr("viewfinder.rate")}
+                  <Star size={16} /> <span>{tr("viewfinder.rate")}</span>
                 </button>
               ) : (
                 <span className="viewfinder-muted">{!state.lens ? tr("viewfinder.lensOff") : tr("viewfinder.notRateable")}</span>
@@ -8803,6 +8915,14 @@ import React, {
           </div>
           <ChevronRight size={16} color="#C9B8C6" />
         </button>
+        <button type="button" className="card row settings-link" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "tutorial", payload: { auto: false } }); }}>
+          <div className="gate-ic" style={{ background: "linear-gradient(135deg,#FFF4F8,#EFE9FF)", width: 38, height: 38 }}><SparklesIcon size={17} color="#8C6BD8" /></div>
+          <div style={{ flex: 1, textAlign: "left" }}>
+            <b style={{ fontSize: 13.5 }}>Replay app tutorial</b>
+            <p className="muted" style={{ fontSize: 11.5 }}>Learn rating, tapping, Match, map, score, followers, messages, and privacy.</p>
+          </div>
+          <ChevronRight size={16} color="#C9B8C6" />
+        </button>
         <div className="card softnote" style={{ marginTop: 4 }}>
           <Shield size={16} color="#B79CF0" />
           <span className="muted" style={{ fontSize: 12, lineHeight: 1.45 }}>{tr("settings.privacyNote")}</span>
@@ -10179,6 +10299,7 @@ import React, {
               onPointerUp={onShutterUp}
               onPointerLeave={onShutterLeave}
               onPointerCancel={onShutterLeave}
+              onContextMenu={(e) => e.preventDefault()}
             />
             <div className="compose-camera-filters" aria-hidden>
               <span className="compose-camera-filter-dot" />
@@ -11738,6 +11859,7 @@ import React, {
     const recordingRef = useRef(false);
     const layoutRef = useRef([]);
     const [recording, setRecording] = useState(false);
+    const [recordSecs, setRecordSecs] = useState(0);
     const [ready, setReady] = useState(false);
     const [error, setError] = useState(false);
     const [camPrefs, setCamPrefs] = useState(loadCamPrefs);
@@ -11815,8 +11937,23 @@ import React, {
       track.applyConstraints({ advanced: [{ torch: flashOn }] }).catch(() => {});
     }, [flashOn, torchOk, facing, ready]);
 
+    useEffect(() => {
+      if (!recording) return;
+      const iv = setInterval(() => setRecordSecs((s) => s + 1), 1000);
+      return () => clearInterval(iv);
+    }, [recording]);
+
+    const formatRecordTime = (secs) => `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+
     const pickMime = () => {
-      const types = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
+      const types = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm;codecs=h264,opus",
+        "video/mp4;codecs=avc1,mp4a.40.2",
+        "video/webm",
+        "video/mp4",
+      ];
       return types.find((t) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) || "";
     };
 
@@ -11979,11 +12116,13 @@ import React, {
         }
         recordingRef.current = false;
         setRecording(false);
+        setRecordSecs(0);
         setHandsFreeActive(false);
       };
       mr.start(200);
       recordingRef.current = true;
       setRecording(true);
+      setRecordSecs(0);
       sfx.tap();
     };
 
@@ -12029,7 +12168,11 @@ import React, {
 
     const onShutterDown = (e) => {
       e.preventDefault();
+      e.stopPropagation();
       if (e.button !== 0 || !ready || countdown != null) return;
+      e.currentTarget?.setPointerCapture?.(e.pointerId);
+      window.getSelection?.()?.removeAllRanges?.();
+      if (textEditOpen) setTextEditOpen(false);
       shutterPressedRef.current = true;
       if (tool === "handsfree") {
         if (recordingRef.current) stopRecord();
@@ -12049,7 +12192,10 @@ import React, {
       holdTimerRef.current = setTimeout(() => { if (!tool) startRecord(); }, 320);
     };
 
-    const onShutterUp = () => {
+    const onShutterUp = (e) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+      try { e?.currentTarget?.releasePointerCapture?.(e.pointerId); } catch { /* ignore */ }
       clearTimeout(holdTimerRef.current);
       if (!shutterPressedRef.current) return;
       shutterPressedRef.current = false;
@@ -12065,7 +12211,10 @@ import React, {
       else if (ready && !recordingRef.current) startCountdown();
     };
 
-    const onShutterLeave = () => {
+    const onShutterLeave = (e) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+      try { e?.currentTarget?.releasePointerCapture?.(e.pointerId); } catch { /* ignore */ }
       clearTimeout(holdTimerRef.current);
       if (!shutterPressedRef.current) return;
       shutterPressedRef.current = false;
@@ -12227,7 +12376,11 @@ import React, {
         )}
         {recording && !broadcasting && (
           <div className="compose-camera-rec-overlay">
-            <div className="compose-camera-rec-badge">{tool === "boomerang" ? tr("feed.boomerang") : tr("feed.recording")}</div>
+            <div className="compose-camera-rec-badge">
+              <span className="compose-rec-dot" aria-hidden />
+              {tool === "boomerang" ? tr("feed.boomerang") : tr("feed.recording")}
+              <span className="compose-rec-time">{formatRecordTime(recordSecs)}</span>
+            </div>
             {tool === "boomerang" && (
               <button type="button" className="compose-camera-boomerang-end" onClick={endBoomerang}>{tr("feed.endRecording")}</button>
             )}
@@ -12261,6 +12414,7 @@ import React, {
               onPointerUp={onShutterUp}
               onPointerLeave={onShutterLeave}
               onPointerCancel={onShutterLeave}
+              onContextMenu={(e) => e.preventDefault()}
             />
             <div className="compose-camera-filters" aria-hidden>
               <span className="compose-camera-filter-dot" />
@@ -12841,6 +12995,33 @@ import React, {
       return [...new Set(base)];
     }, [customStickers, stickerItems, stickerQuery]);
 
+    const formatTrimTime = (secs) => {
+      const s = Math.max(0, Math.round(Number(secs) || 0));
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    };
+    const trimDuration = mediaType === "video"
+      ? Math.max(0, (clipEnd || videoDuration || 0) - clipStart)
+      : 0;
+    const resetTrim = () => {
+      setClipStart(0);
+      setClipEnd(videoDuration || 0);
+      sfx.tap();
+    };
+    const keepPreviewInsideTrim = (e) => {
+      if (mediaType !== "video") return;
+      const el = e.currentTarget;
+      const start = Math.max(0, clipStart || 0);
+      const end = Math.max(start, clipEnd || videoDuration || 0);
+      if (start > 0 && el.currentTime < start) {
+        el.currentTime = start;
+        return;
+      }
+      if (end > start && el.currentTime >= end) {
+        el.currentTime = start;
+        el.play?.().catch?.(() => {});
+      }
+    };
+
     const onStickerUpload = (e) => {
       const f = e.target.files?.[0];
       if (!f) return;
@@ -13305,7 +13486,7 @@ import React, {
             <div className="story-editor-bg" style={{ backgroundImage: `url(${mediaUrl})` }} aria-hidden />
             <div className="story-editor-media-frame" ref={mediaFrameRef}>
               {mediaType === "video"
-                ? <video src={mediaUrl} className="story-editor-media story-editor-media--fit" muted={videoMuted} playsInline autoPlay loop style={{ filter: mediaFilterCss || undefined }} />
+                ? <video src={mediaUrl} className="story-editor-media story-editor-media--fit" muted={videoMuted} playsInline autoPlay loop style={{ filter: mediaFilterCss || undefined }} onLoadedMetadata={(e) => { if (clipStart > 0) e.currentTarget.currentTime = clipStart; }} onTimeUpdate={keepPreviewInsideTrim} />
                 : <img src={mediaUrl} alt="" className="story-editor-media story-editor-media--fit" style={{ filter: mediaFilterCss || undefined }} draggable={false} />}
               <div className="compose-canvas-filter" style={{ background: filter.overlay !== "none" ? filter.overlay : undefined }} aria-hidden />
               {drawActive && (
@@ -13495,10 +13676,15 @@ import React, {
               )}
               {storyTool === "trim" && mediaType === "video" && (
                 <div className="story-editor-trim">
+                  <div className="story-editor-trim-head">
+                    <span>{formatTrimTime(clipStart)} - {formatTrimTime(clipEnd || videoDuration)}</span>
+                    <b>{formatTrimTime(trimDuration)}</b>
+                  </div>
                   <label className="story-editor-trim-label">{tr("feed.trimStart")} {clipStart.toFixed(1)}s</label>
-                  <input type="range" min={0} max={Math.max(0, (clipEnd || videoDuration) - 0.5)} step={0.1} value={clipStart} onChange={(e) => setClipStart(Math.min(Number(e.target.value), clipEnd - 0.5))} />
-                  <label className="story-editor-trim-label">{tr("feed.trimEnd")} {clipEnd.toFixed(1)}s</label>
+                  <input type="range" min={0} max={Math.max(0, (clipEnd || videoDuration) - 0.5)} step={0.1} value={clipStart} onChange={(e) => setClipStart(Math.max(0, Math.min(Number(e.target.value), (clipEnd || videoDuration || 0) - 0.5)))} />
+                  <label className="story-editor-trim-label">{tr("feed.trimEnd")} {(clipEnd || videoDuration).toFixed(1)}s</label>
                   <input type="range" min={clipStart + 0.5} max={videoDuration || 30} step={0.1} value={clipEnd || videoDuration} onChange={(e) => setClipEnd(Number(e.target.value))} />
+                  <button type="button" className="story-editor-trim-reset" onClick={resetTrim}>Reset trim</button>
                 </div>
               )}
               {storyTool === "draw" && (
@@ -13625,7 +13811,7 @@ import React, {
             {mediaUrl ? (
               <>
                 {mediaType === "video"
-                  ? <video src={mediaUrl} className="compose-canvas-media" muted playsInline autoPlay loop style={{ filter: mediaFilterCss || undefined }} />
+                  ? <FeedVideo src={mediaUrl} className="compose-canvas-media" muted style={mediaFilterCss ? { filter: mediaFilterCss } : undefined} clipStart={clipStart} clipEnd={clipEnd || videoDuration} />
                   : <img src={mediaUrl} alt="" className="compose-canvas-media" style={{ filter: mediaFilterCss || undefined }} draggable={false} />}
                 <div className="compose-canvas-filter" style={{ background: filter.overlay !== "none" ? filter.overlay : undefined }} aria-hidden />
                 {adjust.vignette > 0 && <div className="compose-fx compose-fx-vignette" style={{ opacity: adjust.vignette / 100 }} aria-hidden />}
@@ -13661,6 +13847,22 @@ import React, {
             )}
           </div>
         </div>
+        {mediaUrl && mediaType === "video" && (
+          <div className="compose-trim-panel">
+            <div className="compose-trim-head">
+              <span><Scissors size={14} /> {tr("feed.trimVideo")}</span>
+              <b>{formatTrimTime(trimDuration)}</b>
+            </div>
+            <div className="compose-trim-range-copy">
+              {formatTrimTime(clipStart)} - {formatTrimTime(clipEnd || videoDuration)}
+            </div>
+            <label className="story-editor-trim-label">{tr("feed.trimStart")} {clipStart.toFixed(1)}s</label>
+            <input type="range" min={0} max={Math.max(0, (clipEnd || videoDuration) - 0.5)} step={0.1} value={clipStart} onChange={(e) => setClipStart(Math.max(0, Math.min(Number(e.target.value), (clipEnd || videoDuration || 0) - 0.5)))} />
+            <label className="story-editor-trim-label">{tr("feed.trimEnd")} {(clipEnd || videoDuration).toFixed(1)}s</label>
+            <input type="range" min={clipStart + 0.5} max={videoDuration || 30} step={0.1} value={clipEnd || videoDuration} onChange={(e) => setClipEnd(Number(e.target.value))} />
+            <button type="button" className="story-editor-trim-reset" onClick={resetTrim}>Reset trim</button>
+          </div>
+        )}
         {mediaUrl && selectedOverlay && (
           <div className="compose-overlay-bar">
             <span className="compose-overlay-bar-hint">{tr("compose.pinchHint")}</span>
@@ -14294,6 +14496,245 @@ import React, {
 
   const DOC_TIP_KEYS = ["docs.tip1", "docs.tip2", "docs.tip3", "docs.tip4", "docs.tip5"];
 
+  const QUICK_TOUR_VERSION = "2026-06-full-app";
+  const quickTourUserKey = (user, suffix) => `echelon-quick-tour:${QUICK_TOUR_VERSION}:${user?.id || user?.handle || "anon"}:${suffix}`;
+  const quickTourDone = (user) => {
+    try { return localStorage.getItem(quickTourUserKey(user, "done")) === "1"; } catch { return false; }
+  };
+  const quickTourDismissedThisSession = (user) => {
+    try { return sessionStorage.getItem(quickTourUserKey(user, "dismissed")) === "1"; } catch { return false; }
+  };
+  const markQuickTourDone = (user) => {
+    try { localStorage.setItem(quickTourUserKey(user, "done"), "1"); } catch { /* ignore */ }
+    try { sessionStorage.removeItem(quickTourUserKey(user, "dismissed")); } catch { /* ignore */ }
+  };
+  const dismissQuickTourForSession = (user) => {
+    try { sessionStorage.setItem(quickTourUserKey(user, "dismissed"), "1"); } catch { /* ignore */ }
+  };
+
+  function QuickTourModal({ payload }) {
+    const { state, dispatch } = useStore();
+    const [now] = useTick();
+    const { effective, tier } = useDerived(state, now);
+    const [step, setStep] = useState(0);
+    const [tapDemo, setTapDemo] = useState("single");
+    const [scoreDemo, setScoreDemo] = useState(4);
+    const auto = payload?.auto !== false;
+    const steps = [
+      {
+        icon: SparklesIcon,
+        kicker: "Start here",
+        title: "Welcome to Echelon",
+        body: "This is your quick glow-up tour. Post your best moments, rate what you see, meet people nearby, and watch your score become part of the game.",
+        accent: "#B79CF0",
+        screen: "feed",
+        demo: "overview",
+      },
+      {
+        icon: Star,
+        kicker: "Tap magic",
+        title: "One tap opens stars",
+        body: "Tap a post once and the rating stars appear. Pick the vibe. Tap outside if you changed your mind. Double tap when you just want to send a quick like.",
+        accent: "#FF8FB1",
+        screen: "feed",
+        demo: "taps",
+      },
+      {
+        icon: Gauge,
+        kicker: "Your score",
+        title: "Your vibe has a number",
+        body: "Your score moves with how people rate you and your content. Direct ratings matter, but your photos and videos carry most of the weight.",
+        accent: "#E8B84A",
+        screen: "profile",
+        demo: "score",
+      },
+      {
+        icon: ImageIcon,
+        kicker: "Content",
+        title: "Your posts can carry you",
+        body: "Photos, videos, stories, reels, and profile media all get their own ratings. A great post can lift your score while you sleep.",
+        accent: "#FF9A6C",
+        screen: "feed",
+        demo: "media",
+      },
+      {
+        icon: Flame,
+        kicker: "Match",
+        title: "Find your people fast",
+        body: "Match is quick discovery. Like who catches your eye, pass when it is not it, and hit NEXT to keep the energy moving.",
+        accent: "#FF7E67",
+        screen: "spark",
+        demo: "match",
+      },
+      {
+        icon: MapIcon,
+        kicker: "Map",
+        title: "The map is alive",
+        body: "Turn Lens on to be seen. Profile rings glow by score, and tapping someone on the map gives you Profile, Follow, and Message right there.",
+        accent: "#2ECC71",
+        screen: "lens",
+        demo: "map",
+      },
+      {
+        icon: Users,
+        kicker: "Followers",
+        title: "Not all followers hit the same",
+        body: "Followers matter by quality. A 5-star follow is a bigger boost than a low-score follow, so who joins your circle actually counts.",
+        accent: "#8C6BD8",
+        screen: "friends",
+        demo: "followers",
+      },
+      {
+        icon: Timer,
+        kicker: "Stay fresh",
+        title: "Old glow fades",
+        body: "Fresh ratings and fresh media keep your score warm. If you disappear for too long, the app slowly cools old momentum.",
+        accent: "#6B9FD4",
+        screen: "profile",
+        demo: "decay",
+      },
+      {
+        icon: Send,
+        kicker: "Messages",
+        title: "Chats are instant",
+        body: "Unread chats get a tiny dot so you do not miss them. Open a conversation and you can start typing right away.",
+        accent: "#4DA3FF",
+        screen: "messages",
+        demo: "messages",
+      },
+      {
+        icon: Shield,
+        kicker: "Control",
+        title: "You choose your visibility",
+        body: "Settings is where you tune your @username, language, Lens, map privacy, score visibility, notifications, accounts, cookies, and more.",
+        accent: "#5A4A60",
+        screen: "settings",
+        demo: "control",
+      },
+    ];
+    const current = steps[step];
+    const Icon = current.icon;
+    const pct = ((step + 1) / steps.length) * 100;
+    const close = (completed = false) => {
+      sfx.tap();
+      if (completed) {
+        markQuickTourDone(state.user);
+        sfx.celebrate();
+      } else if (auto) {
+        dismissQuickTourForSession(state.user);
+      }
+      dispatch({ type: "CLOSE_MODAL" });
+    };
+    const goScreen = () => {
+      if (!current.screen) return;
+      if (auto) dismissQuickTourForSession(state.user);
+      sfx.tap();
+      dispatch({ type: "CLOSE_MODAL" });
+      dispatch({ type: "SCREEN", screen: current.screen });
+    };
+    const next = () => {
+      sfx.tap();
+      if (step >= steps.length - 1) close(true);
+      else setStep((n) => n + 1);
+    };
+    const prev = () => {
+      sfx.tap();
+      setStep((n) => Math.max(0, n - 1));
+    };
+    const Demo = () => {
+      if (current.demo === "taps") {
+        return (
+          <div className="quick-tour-demo quick-tour-demo--tap">
+            <div className={"quick-tour-phone-post " + tapDemo}>
+              <div className="quick-tour-post-media"><Heart size={28} fill={tapDemo === "double" ? "#FF5A8A" : "none"} color="#fff" /></div>
+              <div className="quick-tour-stars" aria-hidden>{[1, 2, 3, 4, 5].map((n) => <Star key={n} size={18} fill={tapDemo === "single" && n <= 4 ? "#FFD56B" : "none"} color="#FFD56B" />)}</div>
+            </div>
+            <div className="quick-tour-toggle">
+              <button type="button" className={tapDemo === "single" ? "on" : ""} onClick={() => { sfx.tap(); setTapDemo("single"); }}>Single tap: rate</button>
+              <button type="button" className={tapDemo === "double" ? "on" : ""} onClick={() => { sfx.tap(); setTapDemo("double"); }}>Double tap: like</button>
+            </div>
+          </div>
+        );
+      }
+      if (current.demo === "score") {
+        const direct = Number(scoreDemo);
+        const media = Math.min(5, Math.max(1, direct + 0.4));
+        const total = direct * 0.25 + media * 0.75;
+        return (
+          <div className="quick-tour-demo">
+            <div className="quick-tour-score-orb" style={{ "--tour-accent": current.accent }}>
+              <span>Your score</span>
+              <b>{total.toFixed(2)}</b>
+              <small>25% you · 75% posts</small>
+            </div>
+            <input className="quick-tour-range" type="range" min="1" max="5" step="0.1" value={scoreDemo} onChange={(e) => setScoreDemo(e.target.value)} />
+          </div>
+        );
+      }
+      if (current.demo === "map") {
+        return (
+          <div className="quick-tour-demo quick-tour-map-demo">
+            <span className="quick-tour-map-pin high"><Avatar c={{ name: "Ava", emoji: "✨", score: 4.9 }} size={34} /></span>
+            <span className="quick-tour-map-pin mid"><Avatar c={{ name: "Leo", emoji: "🎧", score: 4.1 }} size={34} /></span>
+            <span className="quick-tour-map-card"><User size={13} /> Profile <UserPlus size={13} /> Follow <Send size={13} /> Message</span>
+          </div>
+        );
+      }
+      if (current.demo === "followers") {
+        return (
+          <div className="quick-tour-demo quick-tour-followers-demo">
+            {[["3★", "0.01%"], ["4★", "0.05%"], ["5★", "0.1%"]].map(([label, value]) => (
+              <div key={label}><b>{label}</b><span>{value}</span></div>
+            ))}
+          </div>
+        );
+      }
+      return (
+        <div className="quick-tour-demo quick-tour-feature-demo" style={{ "--tour-accent": current.accent }}>
+          <div className="quick-tour-feature-orb"><Icon size={30} /></div>
+          <div className="quick-tour-mini-card">
+            <span>{current.kicker}</span>
+            <b>{current.screen ? `Jump into ${current.screen === "spark" ? "Match" : current.screen}` : "Keep going"}</b>
+          </div>
+        </div>
+      );
+    };
+    return (
+      <div className="sheet-overlay quick-tour-overlay" onClick={() => close(false)}>
+        <div className="quick-tour-shell" onClick={(e) => e.stopPropagation()}>
+          <div className="quick-tour-bg" aria-hidden />
+          <div className="quick-tour-progress"><span style={{ width: `${pct}%` }} /></div>
+          <button type="button" className="quick-tour-x" aria-label="Close tour" onClick={() => close(false)}><X size={18} /></button>
+          <div className="quick-tour-hero" style={{ "--tour-accent": current.accent }}>
+            <div className="quick-tour-icon"><Icon size={24} /></div>
+            <div>
+              <span>{current.kicker} · {step + 1}/{steps.length}</span>
+              <h2>{current.title}</h2>
+            </div>
+          </div>
+          <p className="quick-tour-body">{current.body}</p>
+          <Demo />
+          <div className="quick-tour-score-strip">
+            <span>Live score</span>
+            <b style={{ color: tier.ink }}>{effective.toFixed(2)}</b>
+            <small style={{ background: tier.soft, color: tier.ink }}>{tier.label}</small>
+          </div>
+          <div className="quick-tour-actions">
+            <button type="button" className="quick-tour-secondary" onClick={() => close(false)}>{auto ? "Skip for now" : "Close"}</button>
+            <button type="button" className="quick-tour-secondary" onClick={goScreen}>{current.screen ? "Try it" : "Open app"}</button>
+            <button type="button" className="quick-tour-primary" onClick={next}>{step === steps.length - 1 ? "Finish tour" : "Next"}</button>
+          </div>
+          <div className="quick-tour-dots">
+            {steps.map((s, i) => (
+              <button key={s.title} type="button" className={i === step ? "on" : ""} style={{ "--tour-accent": s.accent }} onClick={() => { sfx.tap(); setStep(i); }} aria-label={`Go to step ${i + 1}`} />
+            ))}
+          </div>
+          {step > 0 && <button type="button" className="quick-tour-back" onClick={prev}><ChevronLeft size={15} /> Back</button>}
+        </div>
+      </div>
+    );
+  }
+
   function EchelonGuideModal() {
     const { state, dispatch } = useStore();
     const tr = useT();
@@ -14428,6 +14869,7 @@ import React, {
             <div className="echelon-guide-footer">
               <span className="echelon-guide-footer-label">{tr("docs.moreTitle")}</span>
               <div className="echelon-guide-footer-links">
+                <button type="button" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "tutorial", payload: { auto: false } }); }}>Quick tour</button>
                 <a href="/app/docs.html" target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>{tr("docs.fullPage")}</a>
                 <button type="button" onClick={() => openLegal("privacy")}>{tr("legal.privacy")}</button>
                 <button type="button" onClick={() => openLegal("terms")}>{tr("legal.terms")}</button>
@@ -15439,6 +15881,17 @@ import React, {
     }, [state.sessionReady, state.user?.id, state.user?.handle, state.user?.name]);
 
     useEffect(() => {
+      if (!state.sessionReady || !state.onboarded || !state.user?.id) return;
+      if (isScreenshotDemoMode()) return;
+      if (state.modal) return;
+      if (quickTourDone(state.user) || quickTourDismissedThisSession(state.user)) return;
+      const t = setTimeout(() => {
+        dispatch({ type: "OPEN_MODAL", modal: "tutorial", payload: { auto: true } });
+      }, 650);
+      return () => clearTimeout(t);
+    }, [state.sessionReady, state.onboarded, state.user?.id, state.modal?.type]);
+
+    useEffect(() => {
       const unlock = () => sfx.unlock();
       document.addEventListener("touchstart", unlock, { passive: true });
       document.addEventListener("touchend", unlock, { passive: true });
@@ -15671,8 +16124,8 @@ import React, {
       const pushPresence = () => {
         if (!pos) return;
         api.updatePresence({
-          lat: state.hideMapLocation ? null : pos.lat,
-          lng: state.hideMapLocation ? null : pos.lng,
+          lat: pos.lat,
+          lng: pos.lng,
           lensOn: state.lens,
           hideMapLocation: state.hideMapLocation,
         }).catch(() => {});
@@ -15808,6 +16261,7 @@ import React, {
       story: StoryViewerModal, sharepost: SharePostModal, sparkmatch: SparkMatchModal,
       rsvp: RsvpModal, instagram: InstagramModal, legal: LegalDocModal, cookies: CookiePrefsModal,
       postcomments: PostCommentsModal, postviewer: PostViewerModal, createparty: CreatePartyModal, party: PartyDetailModal, guide: EchelonGuideModal,
+      tutorial: QuickTourModal,
       addaccount: AddAccountModal, igfeatures: IgFeaturesModal,
       profileedit: ProfileEditModal, collections: CollectionsModal, insights: InsightsModal,
       creatordash: CreatorDashboardModal, broadcast: BroadcastChannelModal, privacytools: PrivacyToolsModal,
@@ -15963,6 +16417,61 @@ import React, {
   .install-banner-icon{border-radius:10px;flex-shrink:0;box-shadow:0 4px 12px rgba(183,156,240,.25)}
   .install-banner-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;font-size:11px;color:#9B8FA8;line-height:1.35}
   .install-banner-text b{font-size:12.5px;color:#5A4A60}
+  .quick-tour-overlay{z-index:14000;background:radial-gradient(circle at 20% 0%,rgba(255,143,177,.26),transparent 38%),radial-gradient(circle at 90% 12%,rgba(183,156,240,.28),transparent 34%),rgba(18,12,24,.58);backdrop-filter:blur(14px);padding:12px}
+  .quick-tour-shell{position:relative;width:min(100%,380px);height:min(92dvh,740px);max-height:min(92dvh,760px);overflow:hidden;border-radius:30px;background:#FFFBFE;border:1px solid rgba(255,255,255,.85);box-shadow:0 34px 90px rgba(26,15,34,.36);padding:18px;display:flex;flex-direction:column;gap:14px;animation:sheetIn .32s cubic-bezier(.18,.9,.2,1);isolation:isolate}
+  .quick-tour-bg{position:absolute;inset:0;z-index:-1;background:radial-gradient(circle at 15% 12%,rgba(255,143,177,.22),transparent 34%),radial-gradient(circle at 88% 18%,rgba(127,184,240,.2),transparent 34%),linear-gradient(160deg,#FFFBFE,#F7F2FF 58%,#FFF6EA);pointer-events:none}
+  .quick-tour-progress{height:6px;border-radius:999px;background:rgba(90,74,96,.09);overflow:hidden;flex-shrink:0}
+  .quick-tour-progress span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#FF8FB1,#B79CF0,#7FB8F0);transition:width .25s ease}
+  .quick-tour-x{position:absolute;top:28px;right:18px;width:34px;height:34px;border:none;border-radius:12px;background:rgba(255,255,255,.74);color:#6B5080;display:grid;place-items:center;cursor:pointer;box-shadow:0 4px 14px rgba(90,74,96,.08)}
+  .quick-tour-hero{display:flex;align-items:center;gap:12px;padding-right:38px}
+  .quick-tour-icon{width:48px;height:48px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(135deg,var(--tour-accent),#B79CF0);color:#fff;box-shadow:0 12px 28px rgba(120,90,140,.22);flex-shrink:0}
+  .quick-tour-hero span{display:block;font-size:11px;font-weight:900;text-transform:uppercase;letter-spacing:.08em;color:var(--tour-accent);margin-bottom:3px}
+  .quick-tour-hero h2{margin:0;font-family:var(--font-display);font-size:25px;line-height:1.08;font-weight:900;letter-spacing:-.025em;color:#22172C}
+  .quick-tour-body{margin:0;color:#5A4A60;font-size:13px;line-height:1.52;font-weight:600}
+  .quick-tour-demo{flex:1;min-height:218px;border-radius:26px;background:rgba(255,255,255,.7);border:1px solid rgba(236,232,239,.95);box-shadow:inset 0 0 0 1px rgba(255,255,255,.72),0 10px 32px rgba(120,90,140,.08);display:grid;place-items:center;padding:18px;position:relative;overflow:hidden}
+  .quick-tour-demo--tap{gap:12px}
+  .quick-tour-phone-post{width:132px;height:118px;border-radius:22px;background:#111;box-shadow:0 16px 34px rgba(34,23,44,.18);position:relative;overflow:hidden;display:grid;place-items:center}
+  .quick-tour-post-media{position:absolute;inset:0;background:linear-gradient(135deg,#FF8FB1,#B79CF0 55%,#7FB8F0);display:grid;place-items:center}
+  .quick-tour-phone-post.double .quick-tour-post-media::after{content:"LIKE";position:absolute;bottom:10px;left:50%;transform:translateX(-50%);padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.86);color:#FF5A8A;font-size:10px;font-weight:900}
+  .quick-tour-stars{position:absolute;left:10px;right:10px;bottom:10px;display:flex;justify-content:center;gap:2px;padding:7px;border-radius:999px;background:rgba(20,12,28,.52);backdrop-filter:blur(8px);opacity:0;transform:translateY(8px);transition:.2s}
+  .quick-tour-phone-post.single .quick-tour-stars{opacity:1;transform:translateY(0)}
+  .quick-tour-toggle{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
+  .quick-tour-toggle button,.quick-tour-secondary,.quick-tour-primary,.quick-tour-back{border:none;cursor:pointer;font-weight:900;font-size:12px;border-radius:14px}
+  .quick-tour-toggle button{padding:9px;background:#F7F3FB;color:#6B5080}
+  .quick-tour-toggle button.on{background:linear-gradient(135deg,#FF8FB1,#B79CF0);color:#fff}
+  .quick-tour-score-orb{position:relative;width:168px;height:168px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;background:linear-gradient(135deg,var(--tour-accent),#FF8FB1);color:#fff;box-shadow:0 18px 40px rgba(120,90,140,.25);overflow:hidden}
+  .quick-tour-score-orb::before{content:"";position:absolute;width:54px;height:54px;border-radius:50%;background:rgba(255,255,255,.34);transform:translate(-44px,-48px);filter:blur(.2px)}
+  .quick-tour-score-orb span,.quick-tour-score-orb small{position:relative;z-index:1;font-size:10px;font-weight:900;opacity:.92}
+  .quick-tour-score-orb b{position:relative;z-index:1;font-family:var(--font-display);font-size:43px;line-height:1;font-weight:900}
+  .quick-tour-range{width:84%;accent-color:#B79CF0}
+  .quick-tour-feature-demo{background:linear-gradient(135deg,#FFF8FC,#fff);display:flex;flex-direction:column;justify-content:center;gap:18px}
+  .quick-tour-feature-orb{width:74px;height:74px;border-radius:28px;display:grid;place-items:center;color:#fff;background:linear-gradient(135deg,var(--tour-accent),#B79CF0);box-shadow:0 16px 34px rgba(120,90,140,.22)}
+  .quick-tour-mini-card{position:static;width:100%;border-radius:18px;background:rgba(255,255,255,.58);padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid rgba(255,255,255,.74)}
+  .quick-tour-mini-card span{font-size:11px;font-weight:900;color:#8B7A92;text-transform:uppercase;letter-spacing:.06em}
+  .quick-tour-mini-card b{font-size:13px;color:#2D2336}
+  .quick-tour-map-demo{background:linear-gradient(135deg,#EAF8F1,#F7F2FF)}
+  .quick-tour-map-demo::before{content:"";position:absolute;inset:18px;border-radius:22px;background:linear-gradient(45deg,transparent 48%,rgba(255,255,255,.65) 49% 51%,transparent 52%),linear-gradient(-45deg,transparent 48%,rgba(255,255,255,.55) 49% 51%,transparent 52%);background-size:54px 54px}
+  .quick-tour-map-pin{position:absolute;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;padding:4px;background:linear-gradient(135deg,#FFD56B,#FF8FB1);box-shadow:0 10px 24px rgba(34,23,44,.18)}
+  .quick-tour-map-pin.high{left:52px;top:34px}
+  .quick-tour-map-pin.mid{right:58px;top:58px;background:linear-gradient(135deg,#B79CF0,#7FB8F0)}
+  .quick-tour-map-card{position:absolute;left:18px;right:18px;bottom:18px;display:flex;align-items:center;justify-content:center;gap:7px;padding:10px;border-radius:16px;background:rgba(255,255,255,.9);font-size:11px;font-weight:900;color:#5A4A60;box-shadow:0 10px 28px rgba(34,23,44,.14)}
+  .quick-tour-followers-demo{grid-template-columns:repeat(3,1fr);gap:8px}
+  .quick-tour-followers-demo div{width:100%;height:106px;border-radius:20px;background:linear-gradient(135deg,#FFF4F8,#F3EEFF);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border:1px solid #F0E6F4}
+  .quick-tour-followers-demo b{font-size:20px;color:#6B5080}
+  .quick-tour-followers-demo span{font-size:13px;font-weight:900;color:#8C6BD8}
+  .quick-tour-score-strip{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:18px;background:rgba(255,255,255,.64);border:1px solid rgba(236,232,239,.8)}
+  .quick-tour-score-strip span{font-size:11px;font-weight:900;color:#8B7A92;text-transform:uppercase;letter-spacing:.06em}
+  .quick-tour-score-strip b{margin-left:auto;font-family:var(--font-display);font-size:20px;font-weight:900}
+  .quick-tour-score-strip small{font-size:10px;font-weight:900;border-radius:999px;padding:4px 8px}
+  .quick-tour-actions{display:grid;grid-template-columns:1fr 1fr 1.15fr;gap:8px;flex-shrink:0}
+  .quick-tour-secondary{min-height:42px;background:#F7F3FB;color:#6B5080;padding:8px 10px}
+  .quick-tour-primary{min-height:42px;background:linear-gradient(135deg,#FF8FB1,#B79CF0);color:#fff;padding:8px 12px;box-shadow:0 10px 22px rgba(183,156,240,.28)}
+  .quick-tour-dots{display:flex;justify-content:center;gap:5px;flex-wrap:wrap;flex-shrink:0}
+  .quick-tour-dots button{width:8px;height:8px;border-radius:999px;border:none;background:#DDD3E8;padding:0;cursor:pointer}
+  .quick-tour-dots button.on{width:22px;background:var(--tour-accent)}
+  .quick-tour-back{position:absolute;left:18px;bottom:16px;display:inline-flex;align-items:center;gap:4px;background:transparent;color:#8C6BD8;padding:4px}
+  @media(max-height:720px){.quick-tour-shell{height:min(94dvh,680px);gap:9px;padding:14px;border-radius:24px}.quick-tour-demo{min-height:168px}.quick-tour-hero h2{font-size:21px}.quick-tour-body{font-size:12.5px;line-height:1.42}.quick-tour-score-strip{display:none}.quick-tour-score-orb{width:132px;height:132px}.quick-tour-score-orb b{font-size:36px}}
+  @media(max-width:360px){.quick-tour-actions{grid-template-columns:1fr}.quick-tour-secondary,.quick-tour-primary{min-height:38px}.quick-tour-map-card{font-size:10px;gap:4px}.quick-tour-hero h2{font-size:21px}}
   .install-banner-btn{flex-shrink:0;border:none;border-radius:999px;padding:8px 14px;font-family:var(--font-sans);font-size:11px;font-weight:800;color:#fff;background:linear-gradient(120deg,#FF9DC0,#C6A0F0);cursor:pointer;white-space:nowrap}
   .install-banner-x{width:28px;height:28px;border:none;border-radius:50%;background:#F3ECF6;color:#9B8FA8;display:grid;place-items:center;cursor:pointer;flex-shrink:0}
   @keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
@@ -16178,7 +16687,7 @@ import React, {
   .ech-share-icon--story{border:2px dashed #C8BED8;background:#fff;color:#8C6BD8}
   .ech-share-icon--neutral{background:#F7F3FB;border:1px solid #E4DEE8;color:#6B5080}
   .ech-share-toast{text-align:center;font-size:12px;font-weight:700;color:#4FA98C;margin-top:10px;padding:8px 12px;border-radius:12px;background:rgba(79,169,140,.1)}
-  .compose-camera-portal{position:fixed;inset:0;z-index:99990;background:#000;height:100dvh;overflow:hidden}
+  .compose-camera-portal{position:fixed;inset:0;z-index:99990;background:#000;height:100dvh;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .compose-camera-portal .compose-camera--fullscreen{height:100dvh;max-height:100dvh}
   .compose-camera-aa{font-size:17px;font-weight:800;font-family:var(--font-sans);letter-spacing:-.02em}
   .compose-camera-handsfree .compose-handsfree-box{width:28px;height:28px;border:2px solid #fff;border-radius:6px;display:grid;place-items:center}
@@ -16191,7 +16700,7 @@ import React, {
   .compose-layout-picker button{border:none;background:rgba(255,255,255,.12);color:#fff;width:42px;height:42px;border-radius:12px;cursor:pointer;pointer-events:auto}
   .compose-layout-picker button.on{background:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.9)}
   .compose-layout-picker button.on .compose-layout-preview em{background:#111}
-  .story-gallery{position:fixed;inset:0;left:0;right:0;top:0;bottom:0;width:100vw;max-width:100vw;min-width:100%;height:100dvh;min-height:100dvh;z-index:99990;background:#000;color:#fff;display:flex;flex-direction:column;align-items:stretch;font-family:var(--font-sans);overflow:hidden;box-sizing:border-box}
+  .story-gallery{position:fixed;inset:0;left:0;right:0;top:0;bottom:0;width:100vw;max-width:100vw;min-width:100%;height:100dvh;min-height:100dvh;z-index:99990;background:#000;color:#fff;display:flex;flex-direction:column;align-items:stretch;font-family:var(--font-sans);overflow:hidden;box-sizing:border-box;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .story-gallery-head{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:max(10px,env(safe-area-inset-top)) 14px 10px;width:100%}
   .story-gallery-head h1{margin:0;font-size:17px;font-weight:800;font-family:var(--font-display);letter-spacing:-.03em}
   .story-gallery-x,.story-gallery-settings{border:none;background:transparent;color:#fff;padding:8px;cursor:pointer}
@@ -16395,9 +16904,19 @@ import React, {
   .story-music-track small{opacity:.78;font-size:10px;line-height:1.3;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .story-text-subtools{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
   .story-text-subtool{display:inline-flex;align-items:center;gap:6px;border:none;background:rgba(255,255,255,.14);color:#fff;font-size:11px;font-weight:700;padding:8px 10px;border-radius:10px;cursor:pointer}
-  .story-editor-trim{display:flex;flex-direction:column;gap:8px;padding:4px 0}
+  .story-editor-trim{display:flex;flex-direction:column;gap:9px;padding:4px 0}
+  .story-editor-trim-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:800}
+  .story-editor-trim-head b{font-variant-numeric:tabular-nums;color:#FFD56B}
   .story-editor-trim-label{font-size:11px;font-weight:700;color:rgba(255,255,255,.9)}
-  .story-editor-trim input[type=range]{width:100%}
+  .story-editor-trim input[type=range]{width:100%;accent-color:#FF8FB1}
+  .story-editor-trim-reset{align-self:flex-start;border:none;border-radius:999px;padding:7px 11px;background:rgba(255,255,255,.14);color:#fff;font-size:11px;font-weight:800;cursor:pointer}
+  .compose-trim-panel{margin:8px 0 10px;padding:12px;border-radius:16px;background:linear-gradient(160deg,#111018,#24162C);border:1px solid rgba(255,255,255,.1);box-shadow:0 8px 24px rgba(70,42,90,.14);color:#fff}
+  .compose-trim-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+  .compose-trim-head span{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:#FFD56B}
+  .compose-trim-head b{font-size:13px;font-variant-numeric:tabular-nums}
+  .compose-trim-range-copy{margin:0 0 10px;font-size:12px;font-weight:800;color:rgba(255,255,255,.72);font-variant-numeric:tabular-nums}
+  .compose-trim-panel .story-editor-trim-label{color:rgba(255,255,255,.84)}
+  .compose-trim-panel input[type=range]{width:100%;accent-color:#FF8FB1}
   .post-music-audio{display:none}
   .compose-camera--fullscreen{position:absolute;inset:0;width:100%;height:100%;max-height:none;aspect-ratio:auto;border-radius:0;margin:0}
   .compose-camera--fullscreen .compose-camera-video{object-fit:cover}
@@ -16783,15 +17302,21 @@ import React, {
   .compose-top-btn:disabled{opacity:.35;cursor:not-allowed}
   .compose-top-btn.publish{background:linear-gradient(135deg,#FF9DC0,#B79CF0);color:#fff;box-shadow:0 4px 14px rgba(140,100,160,.22)}
   .compose-top-btn.publish:disabled{opacity:.45}
-  .compose-camera{position:relative;width:100%;aspect-ratio:3/4;max-height:min(62vh,520px);background:#111;border-radius:20px;overflow:hidden;margin:0 auto}
+  .compose-camera{position:relative;width:100%;aspect-ratio:3/4;max-height:min(62vh,520px);background:#111;border-radius:20px;overflow:hidden;margin:0 auto;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none}
+  .compose-camera *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   .compose-camera-video{width:100%;height:100%;object-fit:cover;display:block;position:absolute;inset:0}
   .compose-camera-rec-overlay{position:absolute;top:max(60px,env(safe-area-inset-top));left:14px;right:14px;z-index:6;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .compose-camera-rec-badge{padding:6px 10px;border-radius:999px;background:rgba(255,77,109,.88);color:#fff;font-size:11px;font-weight:800;letter-spacing:.04em}
+  .compose-camera-rec-badge{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border-radius:999px;background:rgba(255,77,109,.9);color:#fff;font-size:11px;font-weight:800;letter-spacing:.04em;box-shadow:0 6px 20px rgba(255,77,109,.28);backdrop-filter:blur(10px)}
+  .compose-rec-dot{width:7px;height:7px;border-radius:50%;background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.18);animation:pulsering 1s infinite}
+  .compose-rec-time{font-variant-numeric:tabular-nums;padding-left:2px;opacity:.95}
   .compose-camera-boomerang-end{border:none;background:rgba(255,255,255,.92);color:#262626;font-size:12px;font-weight:700;padding:8px 14px;border-radius:999px;cursor:pointer;margin-left:auto}
   .compose-camera-controls{display:flex;justify-content:center;align-items:center;gap:28px;padding:0 8px}
   .compose-camera-side{width:44px;height:44px;border-radius:12px;border:none;background:rgba(255,255,255,.18);color:#fff;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(6px)}
-  .compose-shutter{width:68px;height:68px;border-radius:50%;border:4px solid #fff;background:transparent;cursor:pointer;touch-action:none;box-shadow:0 0 0 3px rgba(255,255,255,.35);padding:0}
+  .compose-shutter{position:relative;width:68px;height:68px;border-radius:50%;border:4px solid #fff;background:transparent;cursor:pointer;touch-action:none;box-shadow:0 0 0 3px rgba(255,255,255,.35);padding:0;appearance:none;-webkit-appearance:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;isolation:isolate}
+  .compose-shutter::before{content:"";position:absolute;inset:11px;border-radius:50%;background:rgba(255,255,255,.92);opacity:0;transform:scale(.72);transition:opacity .12s ease,transform .12s ease;pointer-events:none}
+  .compose-shutter:active::before{opacity:.95;transform:scale(.9)}
   .compose-shutter.recording{background:#FF4D6D;border-color:#FFB3C6;animation:shutterRec 1s ease infinite}
+  .compose-shutter.recording::before{opacity:1;background:#fff;border-radius:16px;transform:scale(.58)}
   .compose-camera-hint{text-align:center;font-size:11px;font-weight:700;color:#9B8FA8;margin:8px 0 0}
   .compose-camera-fallback{display:block;margin:10px auto 0;border:none;background:transparent;color:#8C6BD8;font-size:12px;font-weight:700;cursor:pointer;text-decoration:underline}
   .compose-camera-overlay{position:fixed;inset:0;z-index:12000;background:#000;display:flex;flex-direction:column;justify-content:center;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom))}
@@ -16904,16 +17429,29 @@ import React, {
   .viewfinder-map-wrap{flex:1;min-height:min(52vh,360px);border-radius:0;overflow:hidden;border:none;border-top:1px solid #ECE8EF;border-bottom:1px solid #ECE8EF;box-shadow:none;position:relative;background:#E8E4EC}
   .viewfinder-map{width:100%;height:100%;min-height:min(52vh,360px);z-index:0;touch-action:pan-x pan-y}
   .viewfinder-loading{position:absolute;inset:0;display:grid;place-items:center;background:rgba(255,251,254,.72);z-index:2;pointer-events:none}
-  .viewfinder-detail{display:flex;align-items:center;gap:14px;padding:14px 16px;flex-shrink:0;margin:8px max(14px,env(safe-area-inset-left)) 0 max(14px,env(safe-area-inset-right));border-radius:16px;border:1px solid #ECE8EF;box-shadow:0 6px 18px rgba(120,90,140,.06)}
+  .viewfinder-map-actions{position:absolute;left:max(12px,env(safe-area-inset-left));right:max(12px,env(safe-area-inset-right));bottom:12px;z-index:500;display:grid;grid-template-columns:auto 1fr;align-items:center;gap:10px;padding:12px;border-radius:20px;background:rgba(255,251,254,.94);border:1px solid rgba(236,232,239,.92);box-shadow:0 18px 46px rgba(58,40,72,.18);backdrop-filter:blur(18px);pointer-events:auto}
+  .viewfinder-map-actions-main{min-width:0;display:flex;flex-direction:column;gap:2px}
+  .viewfinder-map-actions-main b{font-size:14px;line-height:1.1;color:#2D2336;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .viewfinder-map-actions-main span{font-size:11px;font-weight:700;color:#8B7A92;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .viewfinder-map-actions-row{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .viewfinder-map-actions-row .viewfinder-action-btn{width:100%;padding:9px 8px;min-width:0}
+  .viewfinder-map-actions-row .viewfinder-action-btn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .viewfinder-detail{display:flex;align-items:center;gap:14px;padding:14px 16px;flex-shrink:0;margin:8px max(14px,env(safe-area-inset-left)) 0 max(14px,env(safe-area-inset-right));border-radius:16px;border:1px solid #ECE8EF;box-shadow:0 6px 18px rgba(120,90,140,.06);flex-wrap:wrap}
   .viewfinder-hint{padding:8px max(14px,env(safe-area-inset-left)) 4px max(14px,env(safe-area-inset-right));font-size:11.5px;line-height:1.45}
-  .viewfinder-detail-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
-  .viewfinder-detail-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  .viewfinder-detail-main{flex:1;min-width:150px;display:flex;flex-direction:column;gap:3px}
+  .viewfinder-detail-actions{display:flex;align-items:center;gap:8px;flex:1 0 100%;min-width:0;overflow-x:auto;scrollbar-width:none;padding-top:2px}
+  .viewfinder-detail-actions::-webkit-scrollbar{display:none}
+  .viewfinder-action-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;border:none;border-radius:12px;padding:8px 12px;background:#F7F3FB;color:#6B5080;font-size:11px;font-weight:800;white-space:nowrap;cursor:pointer}
+  .viewfinder-action-btn.on,.viewfinder-action-btn:disabled{opacity:.68;cursor:default}
+  .viewfinder-action-btn--rate{background:linear-gradient(135deg,#FFD56B,#FF8FB1);color:#fff}
+  .viewfinder-action-btn:not(:disabled):active{transform:scale(.96)}
   .viewfinder-hint{text-align:center;font-size:12px;padding:4px 8px 0;margin:0}
   .viewfinder-geo-warn{font-size:11px;color:#c45;text-align:center;margin:0}
   .viewfinder-cooldown{font-size:11px;color:#C9B8C6}
   .viewfinder-muted{font-size:11px;color:#C9B8C6;max-width:88px;text-align:right;line-height:1.3}
   .leaflet-div-icon.vf-marker-icon{background:transparent!important;border:none!important}
-  .vf-pin{position:relative;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;border:3px solid #fff;box-shadow:0 6px 18px rgba(0,0,0,.28);overflow:hidden;background:linear-gradient(135deg,#FFE9F5,#E8DEFF) center/cover no-repeat;cursor:pointer;transition:transform .2s cubic-bezier(.34,1.4,.64,1)}
+  .vf-pin{--vf-ring:linear-gradient(135deg,#FFE9F5,#E8DEFF);position:relative;width:52px;height:52px;border-radius:50%;display:grid;place-items:center;padding:4px;background:var(--vf-ring);box-shadow:0 6px 18px rgba(0,0,0,.28),0 0 0 3px rgba(255,255,255,.82);cursor:pointer;transition:transform .2s cubic-bezier(.34,1.4,.64,1)}
+  .vf-pin-face{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:linear-gradient(135deg,#FFE9F5,#E8DEFF) center/cover no-repeat;border:2px solid #fff}
   .vf-pin-has-img{background-size:cover;background-position:center}
   .vf-pin:hover{transform:scale(1.08)}
   .vf-pin-img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;position:relative;z-index:1}
@@ -16921,11 +17459,10 @@ import React, {
   .vf-pin-emoji{font-size:22px;line-height:1;z-index:1}
   .vf-pin-fallback{background:linear-gradient(135deg,#FFE9F5,#E8DEFF)}
   .leaflet-tooltip.vf-tooltip{background:rgba(58,40,72,.92);color:#fff;border:none;border-radius:10px;padding:6px 10px;font-weight:700;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.2)}
-  .vf-pin-ring{position:absolute;inset:-4px;border-radius:50%;border:2px solid transparent;pointer-events:none}
-  .vf-pin-glow-high .vf-pin-ring{border-color:rgba(255,213,107,.95);box-shadow:0 0 16px rgba(255,213,107,.65),0 0 28px rgba(255,200,80,.35)}
-  .vf-pin-glow-mid .vf-pin-ring{border-color:rgba(183,156,240,.85);box-shadow:0 0 12px rgba(183,156,240,.5)}
-  .vf-pin-glow-low .vf-pin-ring{border-color:rgba(126,207,184,.7);box-shadow:0 0 8px rgba(126,207,184,.35)}
-  .vf-pin-glow-soft .vf-pin-ring{border-color:rgba(255,184,208,.55);box-shadow:0 0 6px rgba(255,184,208,.25)}
+  .vf-pin-glow-high{--vf-ring:linear-gradient(135deg,#FFD56B,#FF9A6C,#FF8FB1);box-shadow:0 6px 18px rgba(0,0,0,.28),0 0 0 3px rgba(255,255,255,.82),0 0 24px rgba(255,213,107,.55)}
+  .vf-pin-glow-mid{--vf-ring:linear-gradient(135deg,#B79CF0,#8C6BD8,#7FB8F0);box-shadow:0 6px 18px rgba(0,0,0,.28),0 0 0 3px rgba(255,255,255,.82),0 0 20px rgba(183,156,240,.5)}
+  .vf-pin-glow-low{--vf-ring:linear-gradient(135deg,#7ECFB8,#BFEEDC,#7FB8F0);box-shadow:0 6px 18px rgba(0,0,0,.28),0 0 0 3px rgba(255,255,255,.82),0 0 16px rgba(126,207,184,.42)}
+  .vf-pin-glow-soft{--vf-ring:linear-gradient(135deg,#FFB8D0,#FFD1E1,#E8DEFF);box-shadow:0 6px 18px rgba(0,0,0,.28),0 0 0 3px rgba(255,255,255,.82),0 0 12px rgba(255,184,208,.36)}
   .vf-pin-on{transform:scale(1.1);z-index:10}
   .vf-party-pin{width:42px;height:42px;border-radius:10px;display:grid;place-items:center;border:3px solid #fff;background:linear-gradient(135deg,#FFF0F6,#E8DEFF);box-shadow:0 6px 18px rgba(140,90,160,.32);cursor:pointer;transition:transform .2s cubic-bezier(.34,1.4,.64,1);font-size:22px;line-height:1}
   .vf-party-pin:hover{transform:scale(1.06)}
@@ -18063,13 +18600,16 @@ import React, {
   .ech-momentum-head .ech-kicker{color:#8C6BD8;font-weight:800}
   .ech-momentum-strip{display:flex;gap:10px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
   .ech-momentum-strip::-webkit-scrollbar{display:none}
-  .ech-momentum-item{flex:0 0 68px;border:none;background:transparent;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;padding:0}
+  .ech-momentum-item{position:relative;flex:0 0 68px;border:none;background:transparent;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;padding:0}
+  .ech-momentum-story-btn{border:none;background:transparent;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;padding:0;font:inherit;color:inherit}
+  .ech-momentum-add-more{position:absolute;right:2px;bottom:17px;z-index:3;width:22px;height:22px;border-radius:50%;border:2px solid #fff;background:linear-gradient(135deg,#B79CF0,#FF8FB1);color:#fff;display:grid;place-items:center;box-shadow:0 4px 12px rgba(140,107,216,.28);cursor:pointer;padding:0}
+  .ech-momentum-add-more:active{transform:scale(.92)}
   .ech-momentum-card{width:60px;height:72px;border-radius:16px;border:2px solid rgba(183,156,240,.28);overflow:hidden;display:grid;place-items:center;background:#fff;position:relative;box-shadow:0 4px 14px rgba(120,90,140,.08)}
   .ech-momentum-card.add{border-style:dashed;background:rgba(255,255,255,.7)}
   .ech-momentum-card.fresh{border-color:#B79CF0;border-width:2.5px;box-shadow:0 0 0 3px rgba(183,156,240,.32),0 4px 14px rgba(120,90,140,.1)}
   .ech-momentum-card.seen{opacity:.72;border-color:rgba(183,156,240,.2)}
   .ech-momentum-card.live{border-color:#FF7EB3;box-shadow:0 0 0 2px rgba(255,126,179,.2)}
-  .ech-momentum-thumb{width:100%;height:100%;object-fit:cover;border-radius:12px;display:block}
+  .ech-momentum-thumb{width:100%;height:100%;object-fit:cover;border-radius:12px;display:block;background:linear-gradient(135deg,#F3EEFF,#FFF0F6)}
   .ech-momentum-add{display:grid;place-items:center;width:100%;height:100%}
   .ech-momentum-name{font-size:10px;font-weight:700;color:#5A4A60;max-width:68px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:center}
   .ech-dock{position:fixed;left:0;right:0;bottom:max(8px,env(safe-area-inset-bottom));width:100%;padding:0 max(12px,env(safe-area-inset-left)) 0 max(12px,env(safe-area-inset-right));z-index:100;pointer-events:none;box-sizing:border-box}
@@ -18080,6 +18620,8 @@ import React, {
   .ech-dock-item--spark.on{color:#D44D7A;background:linear-gradient(135deg,rgba(255,232,238,.95),rgba(255,214,232,.85))}
   .ech-dock-label{font-size:9px;font-weight:700;letter-spacing:-.01em;line-height:1;opacity:.72;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
   .ech-dock-label.on{opacity:1;font-weight:800}
+  .ech-dock-icon-wrap{position:relative;display:grid;place-items:center;line-height:0}
+  .ech-dock-dot{position:absolute;top:-3px;right:-5px;width:8px;height:8px;border-radius:50%;background:#FF3B7A;box-shadow:0 0 0 2px #fff}
   .ech-dock-avatar{display:block;border-radius:9px;overflow:hidden;opacity:.82}
   .ech-dock-avatar.on{opacity:1;box-shadow:0 0 0 2px #B79CF0}
   .ech-profile-screen{display:flex;flex-direction:column;height:100%;min-height:0;background:#fff}

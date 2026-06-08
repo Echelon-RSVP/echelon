@@ -43,7 +43,7 @@ const pinIcon = (friend, selected, mediaUrlFn) => {
       : `<span class="vf-pin-letter">${initial}</span>`;
   return L.divIcon({
     className: "vf-marker-icon",
-    html: `<div class="vf-pin ${glowClass(score)}${selected ? " vf-pin-on" : ""}${src ? " vf-pin-has-img" : " vf-pin-fallback"}"${bgStyle} title="${escapeAttr(name)} · ${score.toFixed(1)}★">${inner}<span class="vf-pin-ring" aria-hidden="true"></span></div>`,
+    html: `<div class="vf-pin ${glowClass(score)}${selected ? " vf-pin-on" : ""}" title="${escapeAttr(name)} · ${score.toFixed(1)}★"><span class="vf-pin-face${src ? " vf-pin-has-img" : " vf-pin-fallback"}"${bgStyle}>${inner}</span></div>`,
     iconSize: [48, 48],
     iconAnchor: [24, 24],
   });
@@ -272,10 +272,6 @@ export default function ViewFinderMap({
         markersRef.current[f.id] = m;
       }
     });
-    if (selectedId && markersRef.current[selectedId]) {
-      const f = filtered.find((x) => x.id === selectedId);
-      if (f) map.panTo([f.lat, f.lng], { animate: true });
-    }
   }, [filtered, selectedId, onSelect, mediaUrlFn]);
 
   useEffect(() => {
@@ -301,10 +297,6 @@ export default function ViewFinderMap({
         partyMarkersRef.current[p.id] = m;
       }
     });
-    if (selectedPartyId && partyMarkersRef.current[selectedPartyId]) {
-      const p = locatedParties.find((x) => x.id === selectedPartyId);
-      if (p) map.panTo([p.lat, p.lng], { animate: true });
-    }
   }, [locatedParties, selectedPartyId, onPartySelect]);
 
   useEffect(() => {

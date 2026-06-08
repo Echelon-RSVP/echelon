@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
   lat DECIMAL(10,7) NULL,
   lng DECIMAL(11,7) NULL,
   location_ts BIGINT NULL,
+  map_hidden TINYINT(1) NOT NULL DEFAULT 0,
   lens_x INT NOT NULL DEFAULT 50,
   lens_y INT NOT NULL DEFAULT 50,
   uid_code VARCHAR(16) NULL,

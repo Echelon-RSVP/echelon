@@ -36,6 +36,7 @@ final class Helpers
             'score' => (float)$row['score'],
             'miles' => (float)$row['miles'],
             'lensOn' => (bool)$row['lens_on'],
+            'mapHidden' => (bool)($row['map_hidden'] ?? false),
             'lensX' => (int)$row['lens_x'],
             'lensY' => (int)$row['lens_y'],
             'uid' => $row['uid_code'],

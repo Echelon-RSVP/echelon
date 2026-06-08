@@ -1,8 +1,10 @@
-import { Client } from "basic-ftp";
-import { readFileSync, readdirSync, statSync } from "fs";
+import SftpClient from "ssh2-sftp-client";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join, relative } from "path";
 
 const LOCAL = join(process.cwd(), "dist");
+const CONFIG_FILE = join(process.cwd(), "deploy-ftp.config.json");
+const DEFAULT_REMOTE = "/home/echelon/htdocs/echelon.rsvp/app";
 
 function walk(dir) {
   const out = [];
@@ -14,43 +16,46 @@ function walk(dir) {
   return out;
 }
 
+function loadConfig() {
+  const fileConfig = existsSync(CONFIG_FILE)
+    ? JSON.parse(readFileSync(CONFIG_FILE, "utf8").replace(/^\uFEFF/, ""))
+    : {};
+  const config = {
+    host: process.env.ECHELON_SSH_HOST || fileConfig.host || "13.140.151.211",
+    port: Number(process.env.ECHELON_SSH_PORT || fileConfig.port || 22),
+    username: process.env.ECHELON_SSH_USER || fileConfig.username || "echelon",
+    password: process.env.ECHELON_SSH_PASS || fileConfig.password,
+    remotePath: process.env.ECHELON_APP_REMOTE || fileConfig.remotePath || DEFAULT_REMOTE,
+  };
+  if (!config.password) {
+    throw new Error("Missing SFTP password. Set ECHELON_SSH_PASS or create ignored deploy-ftp.config.json.");
+  }
+  return config;
+}
+
 async function main() {
-  const client = new Client(60000);
-  client.ftp.verbose = true;
+  const config = loadConfig();
+  const client = new SftpClient();
   try {
-    await client.access({
-      host: "199.188.205.52",
-      user: "echelon",
-      password: "hLabEM@i2B2Mkkn",
-      port: 21,
-      secure: false,
+    await client.connect({
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      password: config.password,
+      readyTimeout: 30000,
     });
 
-    console.log("Connected via FTP");
-    const listing = await client.list("/");
-    console.log("Root:", listing.map((e) => e.name).join(", "));
-
-    await client.ensureDir("public_html/app/assets");
-    await client.cd("/public_html/app");
+    console.log(`Connected via SFTP. Deploying app to ${config.remotePath}`);
+    await client.mkdir(config.remotePath, true);
 
     for (const file of walk(LOCAL)) {
       const rel = relative(LOCAL, file).replace(/\\/g, "/");
-      const parts = rel.split("/");
-      const filename = parts.pop();
+      const remote = `${config.remotePath}/${rel}`;
+      const remoteDir = remote.slice(0, remote.lastIndexOf("/"));
       console.log("Uploading", rel);
-      if (parts.length) {
-        await client.cd("/public_html/app");
-        await client.ensureDir(parts.join("/"));
-        await client.cd("/public_html/app/" + parts.join("/"));
-      } else {
-        await client.cd("/public_html/app");
-      }
-      const { Readable } = await import("stream");
-      const stream = Readable.from(readFileSync(file));
-      await client.uploadFrom(stream, filename);
+      await client.mkdir(remoteDir, true);
+      await client.put(readFileSync(file), remote);
     }
-
-    await client.cd("/public_html/app");
 
     const htaccess = `Options -MultiViews
 RewriteEngine On
@@ -60,12 +65,11 @@ RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . /app/index.html [L]
 `;
-    const { Readable } = await import("stream");
-    await client.uploadFrom(Readable.from(Buffer.from(htaccess)), ".htaccess");
+    await client.put(Buffer.from(htaccess), `${config.remotePath}/.htaccess`);
 
-    console.log("FTP deploy complete.");
+    console.log("SFTP app deploy complete.");
   } finally {
-    client.close();
+    await client.end().catch(() => {});
   }
 }
 

@@ -843,10 +843,17 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
 
     if ($sub === 'map' && $method === 'GET') {
         require_once __DIR__ . '/lib/Geo.php';
+        $cutoff = (int)(microtime(true) * 1000) - (24 * 60 * 60 * 1000);
         $myLat = isset($me['lat']) && $me['lat'] !== null ? (float)$me['lat'] : null;
         $myLng = isset($me['lng']) && $me['lng'] !== null ? (float)$me['lng'] : null;
-        $st = $pdo->prepare('SELECT u.* FROM friendships f JOIN users u ON u.id = f.friend_id WHERE f.user_id = ? AND u.lens_on = 1');
-        $st->execute([$me['id']]);
+        $st = $pdo->prepare(
+            'SELECT u.* FROM friendships f
+             JOIN users u ON u.id = f.friend_id
+             WHERE f.user_id = ? AND u.onboarded = 1
+             AND COALESCE(u.map_hidden, 0) = 0
+             AND u.lat IS NOT NULL AND u.lng IS NOT NULL AND u.location_ts >= ?'
+        );
+        $st->execute([$me['id'], $cutoff]);
         $out = [];
         foreach ($st->fetchAll() as $row) {
             $u = Helpers::userPublic($row);
@@ -859,12 +866,15 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
                     ? round(Geo::haversineMiles($myLat, $myLng, (float)$lat, (float)$lng), 2)
                     : (float)$row['miles'];
                 $u['locationAt'] = isset($row['location_ts']) ? (int)$row['location_ts'] : null;
+                $u['recentLens'] = true;
+                $u['mapHidden'] = !empty($row['map_hidden']);
             } else {
                 $u['lat'] = null;
                 $u['lng'] = null;
             }
             $out[] = $u;
         }
+        usort($out, fn($a, $b) => (($a['miles'] ?? 999999) <=> ($b['miles'] ?? 999999)));
         Response::json($out);
     }
 
@@ -1499,7 +1509,7 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
 {
     require_once __DIR__ . '/lib/Geo.php';
 
-    $staleMs = 180000;
+    $staleMs = 24 * 60 * 60 * 1000;
     $maxRadius = 5.0;
 
     if ($method === 'POST' || $method === 'PATCH') {
@@ -1511,11 +1521,11 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
         $lensOn = array_key_exists('lensOn', $body)
             ? (!empty($body['lensOn']) ? 1 : 0)
             : (int)$me['lens_on'];
-        $hideMapLocation = !empty($body['hideMapLocation']);
+        $hideMapLocation = !empty($body['hideMapLocation']) ? 1 : 0;
 
-        if ($hideMapLocation || $body['lat'] === null || $body['lng'] === null) {
-            $pdo->prepare('UPDATE users SET lat = NULL, lng = NULL, location_ts = NULL, lens_on = ? WHERE id = ?')->execute([
-                $lensOn, $me['id'],
+        if ($body['lat'] === null || $body['lng'] === null) {
+            $pdo->prepare('UPDATE users SET lens_on = ?, map_hidden = ? WHERE id = ?')->execute([
+                $lensOn, $hideMapLocation, $me['id'],
             ]);
             Response::json(['ok' => true, 'ts' => $ts, 'hidden' => true]);
         }
@@ -1524,8 +1534,8 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
         $lng = (float)$body['lng'];
         if (abs($lat) > 90 || abs($lng) > 180) Response::error('Invalid coordinates');
 
-        $pdo->prepare('UPDATE users SET lat = ?, lng = ?, location_ts = ?, lens_on = ? WHERE id = ?')->execute([
-            $lat, $lng, $ts, $lensOn, $me['id'],
+        $pdo->prepare('UPDATE users SET lat = ?, lng = ?, location_ts = ?, lens_on = ?, map_hidden = ? WHERE id = ?')->execute([
+            $lat, $lng, $ts, $lensOn, $hideMapLocation, $me['id'],
         ]);
         Response::json(['ok' => true, 'ts' => $ts]);
     }
@@ -1551,16 +1561,14 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
         $myLng = (float)$myLoc['lng'];
 
         $st = $pdo->prepare(
-            'SELECT u.* FROM friendships f
-             JOIN users u ON u.id = f.friend_id
-             WHERE f.user_id = ? AND u.onboarded = 1
+            'SELECT u.* FROM users u
+             WHERE u.id <> ? AND u.onboarded = 1
              AND u.lat IS NOT NULL AND u.lng IS NOT NULL AND u.location_ts >= ?'
         );
         $st->execute([$me['id'], $cutoff]);
 
         $nearby = [];
         foreach ($st->fetchAll() as $row) {
-            if ($lensOnly && empty($row['lens_on'])) continue;
             $lat = (float)$row['lat'];
             $lng = (float)$row['lng'];
             $miles = Geo::haversineMiles($myLat, $myLng, $lat, $lng);
@@ -1570,6 +1578,8 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
             $pub = Helpers::userPublic($row);
             $pub['miles'] = round($miles, 2);
             $pub['locationAt'] = isset($row['location_ts']) ? (int)$row['location_ts'] : null;
+            $pub['recentLens'] = true;
+            $pub['mapHidden'] = !empty($row['map_hidden']);
             $pub['lensX'] = $hud['lensX'];
             $pub['lensY'] = $hud['lensY'];
             $pub['bearing'] = round($bearing, 1);
@@ -1577,6 +1587,7 @@ function handle_presence(PDO $pdo, array $cfg, string $method, array $parts, arr
         }
 
         usort($nearby, fn($a, $b) => $a['miles'] <=> $b['miles']);
+        $nearby = array_slice($nearby, 0, 100);
         Response::json(['nearby' => $nearby, 'radiusMiles' => $radius, 'needLocation' => false]);
     }
 

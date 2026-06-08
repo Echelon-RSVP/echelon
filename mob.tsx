@@ -14335,15 +14335,16 @@ import React, {
     return (
       <div className="sheet-overlay sheet-overlay--keep-dock" onClick={() => dispatch({ type: "CLOSE_MODAL" })}>
         <div className="sheet echelon-guide" onClick={(e) => e.stopPropagation()}>
-          <div className="echelon-guide-hero">
-            <div className="echelon-guide-hero-icon"><BookOpen size={22} color="#fff" /></div>
-            <div>
-              <h3>{tr("docs.title")}</h3>
-              <p>{tr("docs.lead")}</p>
-            </div>
-            <EchModalClose className="echelon-guide-close echelon-guide-close--hero" onClick={() => dispatch({ type: "CLOSE_MODAL" })} />
-          </div>
           <Scroll className="echelon-guide-scroll">
+            <div className="echelon-guide-hero">
+              <div className="echelon-guide-hero-icon"><BookOpen size={22} color="#fff" /></div>
+              <div>
+                <h3>{tr("docs.title")}</h3>
+                <p>{tr("docs.lead")}</p>
+              </div>
+              <EchModalClose className="echelon-guide-close echelon-guide-close--hero" onClick={() => dispatch({ type: "CLOSE_MODAL" })} />
+            </div>
+
             <button type="button" className="echelon-guide-tipcard" onClick={nextTip}>
               <SparklesIcon size={16} color="#8C6BD8" />
               <div>
@@ -14433,7 +14434,6 @@ import React, {
                 <button type="button" onClick={() => openLegal("cookies")}>{tr("legal.cookies")}</button>
               </div>
             </div>
-            <div className="scroll-pad" />
           </Scroll>
         </div>
       </div>
@@ -17035,26 +17035,26 @@ import React, {
   .spark-height-input{display:flex;align-items:center;gap:8px;margin:8px 0}
   .spark-height-input input{width:100px;padding:10px 12px;border-radius:12px;border:1px solid rgba(183,156,240,.35);font-size:18px;font-weight:800;text-align:center}
   .ech-docs-btn:active{transform:scale(.96)}
-  .sheet-overlay--keep-dock{align-items:center;padding:max(14px,env(safe-area-inset-top)) 18px calc(var(--dock-h,74px) + max(14px,env(safe-area-inset-bottom)))}
-  .sheet-overlay--keep-dock .sheet{width:min(100%,420px)}
-  .echelon-guide{position:relative;max-height:min(78dvh,650px);padding:0;overflow:hidden;display:flex;flex-direction:column;border-radius:26px;box-shadow:0 24px 60px rgba(90,74,96,.22)}
-  .echelon-guide-hero{position:relative;padding:22px 58px 20px 20px;background:linear-gradient(135deg,#B79CF0 0%,#FF8FB1 55%,#FFD56B 100%);color:#fff;display:flex;align-items:flex-start;gap:14px;flex-shrink:0;border-radius:26px 26px 0 0}
+  .sheet-overlay--keep-dock{align-items:stretch;justify-content:stretch;padding:0}
+  .sheet-overlay--keep-dock .sheet{width:100%;max-width:100%}
+  .echelon-guide{position:relative;width:100%;height:100%;max-height:100%;padding:0;overflow:hidden;display:flex;flex-direction:column;border-radius:0;box-shadow:none}
+  .echelon-guide-hero{position:relative;padding:max(22px,env(safe-area-inset-top)) 58px 22px 20px;background:linear-gradient(135deg,#B79CF0 0%,#FF8FB1 55%,#FFD56B 100%);color:#fff;display:flex;align-items:flex-start;gap:14px;flex-shrink:0;border-radius:0}
   .echelon-guide-hero h3{margin:0 0 6px;font-size:18px;font-weight:800;letter-spacing:-.03em;color:#fff}
   .echelon-guide-hero p{margin:0;font-size:13px;line-height:1.5;opacity:.92;color:#fff}
   .echelon-guide-hero-icon{width:44px;height:44px;border-radius:14px;background:rgba(255,255,255,.22);display:grid;place-items:center;flex-shrink:0;backdrop-filter:blur(6px)}
   .echelon-guide-close--hero{top:14px!important;right:14px!important;border-radius:14px!important;background:rgba(255,255,255,.2)!important;color:#fff!important;box-shadow:none!important;border:1px solid rgba(255,255,255,.3)!important;backdrop-filter:blur(10px)}
-  .echelon-guide-scroll{padding:14px 16px 26px;background:linear-gradient(180deg,#FFFBFE 0%,#F8F2FF 100%)}
-  .echelon-guide-tipcard{width:100%;display:flex;align-items:flex-start;gap:10px;padding:12px 14px;margin-bottom:12px;border-radius:16px;border:1px solid rgba(183,156,240,.2);background:linear-gradient(135deg,#FFF8FC,#F3EEFF);cursor:pointer;text-align:left;font:inherit}
+  .echelon-guide-scroll{height:100%;min-height:0;padding:0;background:linear-gradient(180deg,#FFFBFE 0%,#F8F2FF 100%);overflow-y:auto}
+  .echelon-guide-tipcard{width:calc(100% - 32px);display:flex;align-items:flex-start;gap:10px;padding:12px 14px;margin:14px 16px 12px;border-radius:16px;border:1px solid rgba(183,156,240,.2);background:linear-gradient(135deg,#FFF8FC,#F3EEFF);cursor:pointer;text-align:left;font:inherit;box-sizing:border-box}
   .echelon-guide-tipcard-label{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin-bottom:4px}
   .echelon-guide-tipcard p{margin:0;font-size:12px;line-height:1.45;color:#6B5080;font-weight:600}
   .echelon-guide-tier-pill{font-size:10px;font-weight:800;padding:3px 8px;border-radius:999px}
   .echelon-guide-block-label{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin-bottom:8px}
-  .echelon-guide-tiers{margin-bottom:12px;padding:12px 14px;border-radius:16px;background:rgba(255,255,255,.75);border:1px solid rgba(183,156,240,.14)}
+  .echelon-guide-tiers{width:calc(100% - 32px);margin:0 16px 12px;padding:12px 14px;border-radius:16px;background:rgba(255,255,255,.75);border:1px solid rgba(183,156,240,.14);box-sizing:border-box}
   .echelon-guide-tier-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
   .echelon-guide-tier-btn{display:inline-flex;align-items:center;gap:4px;border:1px solid rgba(183,156,240,.2);background:#fff;border-radius:999px;padding:6px 10px;font-size:10px;font-weight:800;color:var(--tier-ink,#6B5080);cursor:pointer}
   .echelon-guide-tier-btn.on{background:var(--tier-soft,#F3EEFF);border-color:rgba(140,107,216,.35);box-shadow:0 4px 12px rgba(140,107,216,.12)}
   .echelon-guide-tier-blurb{margin:0;font-size:12px;line-height:1.45;color:#6B5080;font-weight:600}
-  .echelon-guide-quiz{margin-bottom:12px;padding:14px 16px;border-radius:16px;background:linear-gradient(135deg,#FFF0F6,#EFE9FF);border:1px solid rgba(255,143,177,.22)}
+  .echelon-guide-quiz{width:calc(100% - 32px);margin:0 16px 12px;padding:14px 16px;border-radius:16px;background:linear-gradient(135deg,#FFF0F6,#EFE9FF);border:1px solid rgba(255,143,177,.22);box-sizing:border-box}
   .echelon-guide-quiz b{display:block;font-size:13px;color:#5A4A60;margin-bottom:10px}
   .echelon-guide-quiz-row{display:flex;gap:8px}
   .echelon-guide-quiz-btn{flex:1;border:1px solid rgba(183,156,240,.25);background:#fff;border-radius:12px;padding:10px;font-size:12px;font-weight:800;color:#6B5080;cursor:pointer}
@@ -17077,19 +17077,19 @@ import React, {
   .echelon-guide-gate span{font-size:10px;color:#9B8FA8;font-weight:700}
   .echelon-guide-gate-ic{width:30px;height:30px;border-radius:10px;display:grid;place-items:center;flex-shrink:0}
   .echelon-guide-gate.on b{color:#4A3A58}
-  .echelon-guide-scorecard{margin-bottom:12px;padding:14px 16px;border-radius:18px;background:linear-gradient(135deg,#FFF8E6,#FFF0F6);border:1px solid rgba(232,184,74,.28);box-shadow:0 8px 24px rgba(200,148,26,.1)}
+  .echelon-guide-scorecard{width:calc(100% - 32px);margin:0 16px 12px;padding:14px 16px;border-radius:18px;background:linear-gradient(135deg,#FFF8E6,#FFF0F6);border:1px solid rgba(232,184,74,.28);box-shadow:0 8px 24px rgba(200,148,26,.1);box-sizing:border-box}
   .echelon-guide-scorecard-main{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:6px}
   .echelon-guide-scorecard-label{font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4}
   .echelon-guide-scorecard-main b{font-size:28px;font-weight:800;color:#5A4A60;letter-spacing:-.04em;font-family:var(--font-display)}
   .echelon-guide-scorecard p{margin:0;font-size:12px;line-height:1.5;color:#6B5080;font-weight:600}
-  .echelon-guide-section{padding:14px 16px;margin-bottom:10px;text-align:left;border-radius:16px;background:var(--guide-tint,#fff);border:1px solid rgba(183,156,240,.18);box-shadow:0 4px 16px rgba(120,90,140,.06)}
+  .echelon-guide-section{width:calc(100% - 32px);padding:14px 16px;margin:0 16px 10px;text-align:left;border-radius:16px;background:var(--guide-tint,#fff);border:1px solid rgba(183,156,240,.18);box-shadow:0 4px 16px rgba(120,90,140,.06);box-sizing:border-box}
   .echelon-guide-section--core{border-color:rgba(140,107,216,.32);box-shadow:0 6px 20px rgba(140,107,216,.1)}
   .echelon-guide-section-head{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
   .echelon-guide-icon{width:34px;height:34px;border-radius:11px;background:#fff;display:grid;place-items:center;box-shadow:0 2px 8px rgba(90,74,96,.08);flex-shrink:0}
   .echelon-guide-section-head b,.echelon-guide-section b{display:block;font-size:14px;font-weight:800;color:var(--text-primary);letter-spacing:-.02em;flex:1;min-width:0;text-align:left}
   .echelon-guide-core-pill{font-size:9px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 8px;border-radius:999px;background:rgba(140,107,216,.12);color:#8C6BD8}
   .echelon-guide-section p{margin:0;font-size:13px;line-height:1.55;color:var(--text-secondary)}
-  .echelon-guide-footer{margin-top:4px;margin-bottom:6px;padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.75);border:1px solid rgba(183,156,240,.16)}
+  .echelon-guide-footer{width:calc(100% - 32px);margin:4px 16px 0;padding:14px 16px;border-radius:16px;background:rgba(255,255,255,.75);border:1px solid rgba(183,156,240,.16);box-sizing:border-box}
   .echelon-guide-footer-label{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#9B7FD4;margin-bottom:10px}
   .echelon-guide-footer-links{display:flex;flex-wrap:wrap;gap:8px}
   .echelon-guide-footer-links a,.echelon-guide-footer-links button{font-size:12px;font-weight:700;color:#8C6BD8;background:rgba(243,238,255,.9);border:1px solid rgba(183,156,240,.22);border-radius:999px;padding:7px 12px;cursor:pointer;text-decoration:none}
@@ -17301,7 +17301,8 @@ import React, {
   .phone--call-banner .appbody--call-banner{padding-top:calc(var(--call-banner-h) + max(6px,env(safe-area-inset-top)))}
   .phone--call-banner .ech-user-profile-screen{top:calc(var(--call-banner-h) + max(6px,env(safe-area-inset-top)))}
   .call-engine-err{display:none}
-  .echelon-guide-hero{border-radius:26px 26px 0 0}
+  .echelon-guide-hero{border-radius:0}
+  .echelon-guide-scroll .scroll-pad{height:14px}
   .legal-modal-head h2{font-family:var(--font-display);margin:0;font-size:18px;color:#1A1520;font-weight:800}
   .legal-modal-body{overflow:auto;padding:14px max(14px,env(safe-area-inset-left)) max(24px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-right));-webkit-overflow-scrolling:touch}
   .legal-modal-body h3{font-family:var(--font-display);font-size:14px;color:#5A4A60;margin:16px 0 8px}
@@ -17442,11 +17443,11 @@ import React, {
   /* sheets / modals */
   .backdrop{position:absolute;inset:0;background:rgba(90,60,90,.34);backdrop-filter:blur(3px);display:flex;align-items:flex-end;z-index:20;animation:fade .2s}
   .sheet{width:100%;background:#fff;border-radius:0 28px 0 0;padding:14px 20px 26px;box-shadow:0 -16px 50px rgba(120,80,110,.28);animation:slideup .32s cubic-bezier(.2,.9,.2,1);max-height:88%;overflow-y:auto;scrollbar-width:none;-ms-overflow-style:none}
-  .sheet.echelon-guide{border-radius:0;box-shadow:0 -8px 40px rgba(120,80,110,.22)}
+  .sheet.echelon-guide{width:100%;max-width:100%;height:100%;max-height:100%;padding:0;border-radius:0;box-shadow:none;overflow:hidden}
   .sheet::-webkit-scrollbar{display:none;width:0;height:0}
   .sheet-overlay{position:absolute;inset:0;z-index:25;background:rgba(90,60,90,.34);backdrop-filter:blur(3px);display:flex;flex-direction:column;animation:fade .2s}
   .sheet-overlay--keep-dock{bottom:calc(58px + max(8px,env(safe-area-inset-bottom)));z-index:20}
-  .sheet-overlay--keep-dock .echelon-guide{max-height:100%}
+  .sheet-overlay--keep-dock .echelon-guide{max-height:100%;height:100%}
   .sheet-grab{width:42px;height:5px;border-radius:5px;background:#EBDEE9;margin:0 auto 14px}
   .chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
   .chip{border:1px solid #EEE2EE;background:#FBF6FB;color:#8B7A92;font-weight:700;font-size:12px;padding:8px 13px;border-radius:18px;cursor:pointer;transition:.15s}

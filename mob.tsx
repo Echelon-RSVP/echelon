@@ -4928,7 +4928,14 @@ import React, {
                   <Trash2 size={16} />
                 </button>
               )}
-              <button type="button" className="feed-post-overlay-btn" aria-label="More" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "postoptions", payload: { postId: post.id } }); }}>
+              <button
+                type="button"
+                className="feed-post-overlay-btn"
+                aria-label="More"
+                onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "postoptions", payload: { postId: post.id } }); }}
+              >
                 <MoreHorizontal size={18} />
               </button>
             </div>
@@ -9027,7 +9034,14 @@ import React, {
                   <Trash2 size={18} strokeWidth={1.75} />
                 </button>
               )}
-              <button type="button" className="ech-media-viewer-iconbtn" aria-label="More" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "postoptions", payload: { postId } }); }}>
+              <button
+                type="button"
+                className="ech-media-viewer-iconbtn"
+                aria-label="More"
+                onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "postoptions", payload: { postId } }); }}
+              >
                 <MoreHorizontal size={18} strokeWidth={1.75} />
               </button>
             </div>
@@ -15984,20 +15998,22 @@ import React, {
   .feed-post-media-wrap .media-overlay--tag{pointer-events:auto!important;z-index:9;cursor:pointer;touch-action:manipulation}
   .feed-rating-overlay{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#000;touch-action:none;pointer-events:none;transition:opacity .18s ease}
   .feed-rating-overlay.commit{background:#000}
-  .feed-tap-rate-overlay{position:absolute;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;padding:20px;touch-action:none}
+  .feed-tap-rate-overlay{position:absolute;inset:0;z-index:6;display:flex;align-items:center;justify-content:center;padding:clamp(10px,4vw,18px);touch-action:none;overflow:hidden}
   .feed-tap-rate-backdrop{position:absolute;inset:0;border:none;padding:0;margin:0;background:radial-gradient(circle at 50% 42%,rgba(255,213,107,.18),transparent 32%),linear-gradient(180deg,rgba(0,0,0,.5),rgba(0,0,0,.82));cursor:pointer;backdrop-filter:blur(4px)}
-  .feed-tap-rate-panel{position:relative;z-index:1;width:min(92%,390px);display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 18px 18px;border-radius:28px;background:linear-gradient(135deg,rgba(255,255,255,.18),rgba(255,255,255,.06));border:1px solid rgba(255,255,255,.22);box-shadow:0 22px 70px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.18);pointer-events:auto;backdrop-filter:blur(18px);animation:ratePanelIn .22s cubic-bezier(.2,1,.2,1)}
+  .feed-tap-rate-panel{position:relative;z-index:1;width:min(96%,360px);max-width:calc(100% - 4px);display:flex;flex-direction:column;align-items:center;gap:12px;padding:clamp(14px,4vw,18px) clamp(10px,3vw,16px) clamp(13px,3.5vw,16px);border-radius:26px;background:linear-gradient(135deg,rgba(255,255,255,.2),rgba(255,255,255,.07));border:1px solid rgba(255,255,255,.22);box-shadow:0 22px 70px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.18);pointer-events:auto;backdrop-filter:blur(18px);animation:ratePanelIn .22s cubic-bezier(.2,1,.2,1);box-sizing:border-box;overflow:hidden}
   .feed-tap-rate-panel::before{content:"";position:absolute;inset:-1px;border-radius:inherit;background:linear-gradient(135deg,rgba(255,213,107,.34),rgba(255,143,177,.12),rgba(183,156,240,.24));opacity:.7;pointer-events:none;mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);padding:1px;mask-composite:exclude;-webkit-mask-composite:xor}
-  .feed-tap-rate-panel .ech-rate-stars--xl{gap:8px;justify-content:center;align-items:center;max-width:100%}
-  .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star{min-width:58px;width:58px;height:76px;padding:9px 5px;border-radius:20px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.2);box-shadow:0 10px 26px rgba(0,0,0,.22);animation:rateStarFloat .42s cubic-bezier(.2,1,.2,1) both}
+  .feed-tap-rate-panel .ech-rate-stars--xl{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:clamp(5px,1.8vw,8px);justify-content:center;align-items:stretch;width:100%;max-width:320px;padding:0}
+  .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star{min-width:0;width:100%;height:clamp(58px,18vw,72px);padding:7px 2px;border-radius:clamp(14px,4vw,20px);background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.2);box-shadow:0 10px 26px rgba(0,0,0,.22);animation:rateStarFloat .42s cubic-bezier(.2,1,.2,1) both;justify-content:center}
   .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star:nth-child(2){animation-delay:.025s}
   .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star:nth-child(3){animation-delay:.05s}
   .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star:nth-child(4){animation-delay:.075s}
   .feed-tap-rate-panel .ech-rate-stars--xl .ech-rate-star:nth-child(5){animation-delay:.1s}
-  .feed-tap-rate-panel .ech-rate-star-label{color:rgba(255,255,255,.78);text-shadow:0 1px 8px rgba(0,0,0,.35)}
+  .feed-tap-rate-panel .ech-rate-star-label{color:rgba(255,255,255,.82);font-size:clamp(7px,2.2vw,9px);text-shadow:0 1px 8px rgba(0,0,0,.35)}
+  .feed-tap-rate-panel .ech-rate-stars--xl .ech-star-svg{width:clamp(34px,10.5vw,48px)!important;height:clamp(34px,10.5vw,48px)!important;min-width:0!important;min-height:0!important}
   .feed-tap-rate-panel .ech-star-svg{filter:drop-shadow(0 0 10px rgba(255,255,255,.18))}
   .feed-tap-rate-panel .ech-rate-star:hover .ech-star-svg,.feed-tap-rate-panel .ech-rate-star:active .ech-star-svg{transform:scale(1.12);filter:drop-shadow(0 0 16px rgba(255,213,107,.65))}
   .feed-tap-rate-hint{font-size:12px;font-weight:800;color:rgba(255,255,255,.92);text-align:center;max-width:90%;line-height:1.35;margin:0;text-shadow:0 1px 10px rgba(0,0,0,.55)}
+  @media (max-width:374px){.feed-tap-rate-overlay{padding:9px}.feed-tap-rate-panel{width:min(98%,326px);border-radius:22px}.feed-tap-rate-panel .ech-rate-stars--xl{max-width:292px;gap:4px}.feed-tap-rate-hint{font-size:11px}}
   @keyframes ratePanelIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
   @keyframes rateStarFloat{from{opacity:0;transform:translateY(14px) scale(.9)}to{opacity:1;transform:translateY(0) scale(1)}}
   .feed-post-media-wrap,.reel-slide-media,.ech-media-viewer-media,.story-slide{position:relative}
@@ -18178,9 +18194,11 @@ import React, {
   .ech-party-meta b{display:block;font-size:14px;color:#5A4A60}
   .ech-party-meta p{margin:2px 0 0;font-size:11.5px}
   .ech-party-meta>div{flex:1;min-width:0}
-  .ech-post-options-backdrop{position:fixed;inset:0;z-index:99990;background:rgba(45,35,55,.42);backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;animation:fade .2s}
+  .ech-post-options-backdrop{position:fixed;inset:0;z-index:99990;background:rgba(45,35,55,.42);backdrop-filter:blur(6px);display:flex;align-items:flex-end;justify-content:center;animation:optionsBackdropIn .16s ease both}
   .ech-post-options-backdrop--center{align-items:center;padding:20px max(10px,env(safe-area-inset-left)) max(20px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-right))}
-  .ech-post-options-sheet{width:100%;max-width:100%;font-family:var(--font-sans);background:linear-gradient(180deg,#FFFDFE,#F8F4FC);border-radius:22px 22px 0 0;padding:8px max(10px,env(safe-area-inset-left)) max(18px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-right))}
+  .ech-post-options-sheet{width:100%;max-width:100%;font-family:var(--font-sans);background:linear-gradient(180deg,#FFFDFE,#F8F4FC);border-radius:22px 22px 0 0;padding:8px max(10px,env(safe-area-inset-left)) max(18px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-right));box-shadow:0 -18px 60px rgba(66,45,82,.18);animation:optionsSheetIn .24s cubic-bezier(.2,1,.2,1) both;will-change:transform,opacity}
+  @keyframes optionsBackdropIn{from{opacity:0}to{opacity:1}}
+  @keyframes optionsSheetIn{from{opacity:.88;transform:translateY(22px)}to{opacity:1;transform:translateY(0)}}
   .ech-post-options-grab{width:40px;height:4px;border-radius:999px;background:rgba(183,156,240,.45);margin:6px auto 14px}
   .ech-post-options-top{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
   .ech-post-options-chip{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:14px 12px;border:1px solid rgba(183,156,240,.16);border-radius:16px;background:#fff;color:#5A4A60;cursor:pointer;font-size:11px;font-weight:700;box-shadow:0 4px 14px rgba(120,90,140,.05)}

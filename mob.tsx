@@ -16367,6 +16367,7 @@ import React, {
   html,body,#root{margin:0;padding:0;width:100%;min-height:100%;height:100%;overscroll-behavior:none}
   .phone{width:100%;max-width:100%;height:min(820px,90dvh);min-height:min(820px,90dvh);background:#FFFDFE;border-radius:0;overflow:hidden;
     position:relative;display:flex;flex-direction:column;
+    padding-top:env(safe-area-inset-top,0px);
     font-family:var(--font-sans);font-size:15px;line-height:1.5;letter-spacing:-.018em;font-weight:500;
     font-feature-settings:"kern" 1,"liga" 1,"calt" 1,"ss01" 1;font-variant-ligatures:common-ligatures;
     -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;

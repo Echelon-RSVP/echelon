@@ -48,7 +48,6 @@ jobs:
           node scripts/patch-ios-icon.mjs
           node scripts/patch-ios-auth.mjs
           node scripts/patch-ios-signing.mjs
-          node scripts/patch-ios-strip-native-google.mjs
 
       - name: Install CocoaPods
         env:
@@ -66,18 +65,14 @@ jobs:
           test -f Podfile.lock
           grep -q CapacitorCommunityAppleSignIn Podfile.lock
           grep -q CapacitorCommunityAppleSignIn Podfile.lock
-          if grep -q GoogleSignIn Podfile.lock; then
-            echo "::error::GoogleSignIn must not be in the IPA (ITMS-91061). patch-ios-strip-native-google.mjs did not run."
-            grep GoogleSignIn Podfile.lock || true
-            exit 1
-          fi
-          echo "Native GoogleSignIn excluded; Gmail uses web sign-in in the shell."
+          grep -q GoogleSignIn Podfile.lock
+          echo "Native GoogleSignIn present for Gmail sign-in in the iOS shell."
           test -f App/App.entitlements
           grep -q applesignin App/App.entitlements
           if [ -z "${{ secrets.GOOGLE_IOS_URL_SCHEME }}" ]; then
             echo "::warning::GOOGLE_IOS_URL_SCHEME secret missing. Native Gmail will not work until you add an iOS OAuth client in Google Cloud Console."
           fi
-          echo "Native Sign in with Apple present; Gmail uses web GIS (no GoogleSignIn SDK in IPA)."
+          echo "Native Sign in with Apple and native Gmail are configured."
 
       - name: Validate signing secrets
         env:

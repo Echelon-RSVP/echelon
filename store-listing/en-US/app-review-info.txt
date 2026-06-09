@@ -39,7 +39,7 @@ QA test account:
 Sign in steps:
 1. Open the app and tap Sign in.
 2. Choose email/password (not Sign in with Apple for the demo account).
-3. Enter the credentials above. The account is pre-onboarded with friends, posts, and messages.
+3. Enter the credentials above. The account is pre-onboarded with friends, posts, messages, Lens enabled, and recent Lens locations.
 
 How to test main features:
 1. Feed: scroll posts, open a post, like or comment. Stories row at top (Momentum).
@@ -47,7 +47,7 @@ How to test main features:
 3. Profile: view portfolio, score graph, and settings.
 4. Match: tap Match. The demo account already has height set. Tap a username/handle to open the profile, tap NEXT to pass, or tap the heart to like.
 5. Rate others once every 24 hours: use either of these paths:
-   - Match/Map path: tap the Map/Lens tab. Lens is on by default. Followed users with Lens on appear on the map; tap a user and tap Rate. After rating, the same user is blocked by the 24-hour cooldown.
+   - Match/Map path: tap the Map/Lens tab. Lens is on by default. The review account has Lens friends available on the map, including Iris Moon (@irismoon) and Marcus Bell (@marcusb), both seeded with Lens on and recent locations. Tap a user pin and tap Rate. After rating, the same user is blocked by the 24-hour cooldown.
    - Chat path: open Messages, select an existing chat, tap End Chat, then submit the required rating. The same 24-hour direct rating cooldown applies.
 6. Media ratings: open Feed, single-tap a post to show empty stars, then tap a star. This rates the media item only and does not consume the direct person-rating cooldown.
 
@@ -60,8 +60,12 @@ Face data:
 - The onboarding face scan collects only the selfie/profile photo the user submits.
 - It is used only to create the profile avatar and request an automated image-analysis score suggestion for the initial in-app Echelon Score.
 - Echelon does not collect Apple Face ID data, biometric face templates, faceprints, facial geometry, liveness maps, depth maps, or government ID data.
-- The image may be sent to an AI/image-analysis processor solely for the score suggestion. It is stored on Echelon-controlled storage as the profile avatar until replaced or account deletion. No biometric template is stored.
+- The image may be sent to Google Gemini API solely to return the score suggestion. Hosting providers store the image only on Echelon-controlled infrastructure as the user's profile avatar. We do not sell, advertise with, or track users using face data.
+- The avatar image is kept while the account is active or until replaced/deleted because it is the visible profile avatar. After account deletion, active-system copies are deleted or anonymised within 30 days; encrypted backups may persist up to 24 months for security/disaster recovery/legal integrity, then are purged. Server/security logs are typically retained up to 90 days.
 - See Privacy Policy section "4A. Face data collection, use, sharing, storage, and retention".
+
+Gmail login:
+- This build includes native Google Sign-In in the iOS shell. Reviewers may use Gmail, Sign in with Apple, or the email/password demo account above. For fastest review access, please use the email/password demo account.
 
 Cookies/tracking:
 - The app does not use cookies/local storage for advertising, data brokers, or cross-app/cross-site tracking.

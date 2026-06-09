@@ -28,8 +28,6 @@ export function useNativeAppleSignIn() {
 }
 
 export function useNativeGoogleSignIn() {
-  // ITMS-91061: iOS IPA excludes GoogleSignIn native SDK; Gmail uses web GIS in WKWebView.
-  if (isCapacitorIos()) return false;
   return isCapacitorPluginAvailable("GoogleAuth");
 }
 

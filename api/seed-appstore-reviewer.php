@@ -131,6 +131,25 @@ function ensureFriendships(PDO $pdo, string $userId): int
     return $count;
 }
 
+function ensureLensReviewLocations(PDO $pdo, string $userId): void
+{
+    $now = (int)(microtime(true) * 1000);
+    $rows = [
+        [$userId, 38.722252, -9.139337, 1, 0],
+        ['c1', 38.723150, -9.138210, 1, 0],
+        ['c9', 38.721410, -9.140880, 1, 0],
+        ['c4', 38.724040, -9.136950, 1, 0],
+    ];
+    foreach ($rows as [$id, $lat, $lng, $lensOn, $mapHidden]) {
+        $st = $pdo->prepare('SELECT 1 FROM users WHERE id = ?');
+        $st->execute([$id]);
+        if (!$st->fetch()) continue;
+        $pdo->prepare(
+            'UPDATE users SET lat = ?, lng = ?, location_ts = ?, lens_on = ?, map_hidden = ? WHERE id = ?'
+        )->execute([$lat, $lng, $now, $lensOn, $mapHidden, $id]);
+    }
+}
+
 function ensureScoreHistory(PDO $pdo, string $userId): void
 {
     $st = $pdo->prepare('SELECT COUNT(*) FROM score_history WHERE user_id = ?');
@@ -216,6 +235,7 @@ try {
 
     $userId = ensureReviewUser($pdo);
     $friendCount = ensureFriendships($pdo, $userId);
+    ensureLensReviewLocations($pdo, $userId);
     ensureScoreHistory($pdo, $userId);
     ensureNotifications($pdo, $userId);
     ensureReviewerPost($pdo, $userId);

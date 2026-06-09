@@ -63,11 +63,6 @@ export async function initGoogleAuth(clientIdOrCfg) {
     googleReady = true;
   } catch (err) {
     googleInitError = err;
-    if (isCapacitorIos() && !useNativeGoogleSignIn()) {
-      throw new Error(
-        "Gmail needs the latest TestFlight build with native sign-in. Use Apple or email for now.",
-      );
-    }
     throw err;
   }
 }
@@ -145,7 +140,7 @@ function signInWithGmailWeb() {
 export async function signInWithGmail() {
   if (!googleReady || !googleClientId) {
     if (isCapacitorIos() && !useNativeGoogleSignIn()) {
-      throw new Error("Gmail needs an app update from TestFlight. Use Apple or email for now.");
+      throw new Error("Gmail sign-in is unavailable on this device right now. Use Sign in with Apple or email/password to continue.");
     }
     throw new Error("Gmail sign-in not configured");
   }

@@ -207,7 +207,7 @@ export const STRINGS = {
     "onb.apple": "Continue with Apple",
     "onb.gmail": "Continue with Gmail",
     "onb.gmailNotConfigured": "Gmail sign-in isn't configured on the server yet. Tap Create account below, or Sign in if you already have one.",
-    "onb.gmailIosUnavailable": "Gmail needs a native iOS update in this build. Use Sign in with Apple or email for now.",
+    "onb.gmailIosUnavailable": "Gmail sign-in is loading. If it does not open, use email/password or Sign in with Apple and try Gmail again after the app finishes loading.",
     "onb.login": "Sign in with password",
     "onb.register": "Create account",
     "onb.or": "or",

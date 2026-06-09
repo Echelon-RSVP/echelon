@@ -65,7 +65,7 @@ Face data:
 - See Privacy Policy section "4A. Face data collection, use, sharing, storage, and retention".
 
 iOS sign-in:
-- The App Store iOS shell supports Sign in with Apple and email/password. Gmail is hidden in the iOS shell because Apple's ITMS-91061 notice requires GoogleSignIn/GTMAppAuth/GTMSessionFetcher privacy manifests that are not available in the current native Google plugin dependency chain. Gmail remains available on supported web/PWA environments. For fastest review access, please use the email/password demo account above.
+- The App Store iOS shell supports Sign in with Apple, email/password, and Gmail. Gmail uses a browser-based Google OAuth flow with PKCE and an app URL callback. The IPA does not include GoogleSignIn, GTMAppAuth, or GTMSessionFetcher frameworks, avoiding Apple's ITMS-91061 privacy-manifest issue while still allowing Gmail login. For fastest review access, please use the email/password demo account above.
 
 Cookies/tracking:
 - The app does not use cookies/local storage for advertising, data brokers, or cross-app/cross-site tracking.

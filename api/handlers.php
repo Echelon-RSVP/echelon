@@ -196,8 +196,43 @@ function handle_auth(PDO $pdo, array $cfg, string $method, array $parts): void
         require_once __DIR__ . '/lib/GoogleAuth.php';
         $body = Helpers::jsonBody();
         $idToken = trim($body['idToken'] ?? '');
-        $clientId = trim($cfg['google_client_id'] ?? '');
-        if (!$clientId) Response::error('Google Sign In not configured', 503);
+        $code = trim($body['code'] ?? '');
+        $codeVerifier = trim($body['codeVerifier'] ?? '');
+        $redirectUri = trim($body['redirectUri'] ?? '');
+        $clientId = trim($body['clientId'] ?? $cfg['google_client_id'] ?? '');
+        $allowedClientIds = array_values(array_filter([
+            trim($cfg['google_client_id'] ?? ''),
+            trim($cfg['google_ios_client_id'] ?? ''),
+        ]));
+        if (!$allowedClientIds) Response::error('Google Sign In not configured', 503);
+        if ($clientId && !in_array($clientId, $allowedClientIds, true)) {
+            Response::error('Google client not allowed', 403);
+        }
+        if (!$clientId) $clientId = $allowedClientIds[0];
+        if ($code) {
+            if (!$codeVerifier || !$redirectUri) Response::error('Google OAuth verifier required');
+            $tokenBody = http_build_query([
+                'code' => $code,
+                'client_id' => $clientId,
+                'code_verifier' => $codeVerifier,
+                'redirect_uri' => $redirectUri,
+                'grant_type' => 'authorization_code',
+            ]);
+            $ctx = stream_context_create([
+                'http' => [
+                    'method' => 'POST',
+                    'header' => "Content-Type: application/x-www-form-urlencoded\r\n",
+                    'content' => $tokenBody,
+                    'timeout' => 15,
+                ],
+            ]);
+            $raw = file_get_contents('https://oauth2.googleapis.com/token', false, $ctx);
+            $tok = $raw ? json_decode($raw, true) : null;
+            if (!is_array($tok) || empty($tok['id_token'])) {
+                Response::error('Google OAuth exchange failed', 401);
+            }
+            $idToken = (string)$tok['id_token'];
+        }
         if (!$idToken) Response::error('Google credential required');
         try {
             $claims = GoogleAuth::verify($idToken, $clientId);

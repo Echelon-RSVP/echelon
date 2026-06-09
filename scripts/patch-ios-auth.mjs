@@ -40,7 +40,13 @@ if (fs.existsSync(capConfigPath) && googleIosClientId) {
   console.log("patch-ios-auth: iosClientId set in capacitor.config.json");
 }
 
-const googleScheme = (process.env.GOOGLE_IOS_URL_SCHEME || "").trim();
+function googleSchemeFromClientId(clientId) {
+  const suffix = ".apps.googleusercontent.com";
+  if (!clientId.endsWith(suffix)) return "";
+  return `com.googleusercontent.apps.${clientId.slice(0, -suffix.length)}`;
+}
+
+const googleScheme = (process.env.GOOGLE_IOS_URL_SCHEME || googleSchemeFromClientId(googleIosClientId) || "").trim();
 if (googleScheme) {
   let plist = fs.readFileSync(plistPath, "utf8");
   const urlTypeBlock = `    <dict>

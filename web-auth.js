@@ -4,7 +4,10 @@ const GOOGLE_SRC = "https://accounts.google.com/gsi/client";
 
 let googleReady = false;
 let googleClientId = null;
+let googleIosClientId = null;
+let googleIosRedirectUri = null;
 let googleNative = false;
+let googleBrowser = false;
 let googleInitError = null;
 
 function loadScript(src) {
@@ -37,6 +40,34 @@ async function initGoogleAuthWeb(clientId) {
   googleClientId = clientId;
 }
 
+function base64Url(bytes) {
+  const str = btoa(String.fromCharCode(...bytes));
+  return str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function sha256Base64Url(value) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return base64Url(new Uint8Array(digest));
+}
+
+function randomToken(bytes = 32) {
+  const arr = new Uint8Array(bytes);
+  crypto.getRandomValues(arr);
+  return base64Url(arr);
+}
+
+function iosSchemeFromClientId(clientId) {
+  const suffix = ".apps.googleusercontent.com";
+  if (!clientId?.endsWith(suffix)) return null;
+  return `com.googleusercontent.apps.${clientId.slice(0, -suffix.length)}`;
+}
+
+function iosRedirectUri(clientId) {
+  const scheme = iosSchemeFromClientId(clientId);
+  return scheme ? `${scheme}:/oauth2redirect/google` : null;
+}
+
 export async function initGoogleAuth(clientIdOrCfg) {
   const webClientId =
     typeof clientIdOrCfg === "string" ? clientIdOrCfg : clientIdOrCfg?.googleClientId;
@@ -44,7 +75,17 @@ export async function initGoogleAuth(clientIdOrCfg) {
     typeof clientIdOrCfg === "object" ? clientIdOrCfg?.googleIosClientId : null;
   if (!webClientId) throw new Error("Google Sign In not configured");
   googleInitError = null;
+  googleBrowser = false;
   googleNative = useNativeGoogleSignIn();
+  googleIosClientId = iosClientId || null;
+  googleIosRedirectUri = googleIosClientId ? iosRedirectUri(googleIosClientId) : null;
+
+  if (isCapacitorIos() && googleIosClientId && googleIosRedirectUri) {
+    googleClientId = webClientId;
+    googleReady = true;
+    googleBrowser = true;
+    return;
+  }
 
   if (googleNative) {
     try {
@@ -77,6 +118,74 @@ async function signInWithGmailNative() {
   const token = res?.authentication?.idToken;
   if (!token) throw new Error("Gmail sign-in cancelled");
   return token;
+}
+
+async function signInWithGmailBrowser() {
+  if (!googleIosClientId || !googleIosRedirectUri) {
+    throw new Error("Gmail sign-in is not configured for iOS yet.");
+  }
+  const { Browser } = await import("@capacitor/browser");
+  const { App } = await import("@capacitor/app");
+  const state = randomToken(24);
+  const codeVerifier = randomToken(48);
+  const codeChallenge = await sha256Base64Url(codeVerifier);
+  const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  authUrl.searchParams.set("client_id", googleIosClientId);
+  authUrl.searchParams.set("redirect_uri", googleIosRedirectUri);
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("scope", "openid email profile");
+  authUrl.searchParams.set("state", state);
+  authUrl.searchParams.set("code_challenge", codeChallenge);
+  authUrl.searchParams.set("code_challenge_method", "S256");
+  authUrl.searchParams.set("prompt", "select_account");
+
+  return new Promise(async (resolve, reject) => {
+    let settled = false;
+    let sub = null;
+    const finish = async (fn, value) => {
+      if (settled) return;
+      settled = true;
+      try { await sub?.remove?.(); } catch { /* noop */ }
+      try { await Browser.close(); } catch { /* noop */ }
+      fn(value);
+    };
+    sub = await App.addListener("appUrlOpen", ({ url }) => {
+      try {
+        if (!url?.startsWith(googleIosRedirectUri)) return;
+        const parsed = new URL(url);
+        if (parsed.searchParams.get("state") !== state) {
+          finish(reject, new Error("Gmail sign-in state mismatch"));
+          return;
+        }
+        const err = parsed.searchParams.get("error");
+        if (err) {
+          finish(reject, new Error(err === "access_denied" ? "Gmail sign-in cancelled" : `Gmail sign-in failed: ${err}`));
+          return;
+        }
+        const code = parsed.searchParams.get("code");
+        if (!code) {
+          finish(reject, new Error("Gmail sign-in returned no code"));
+          return;
+        }
+        finish(resolve, {
+          code,
+          codeVerifier,
+          redirectUri: googleIosRedirectUri,
+          clientId: googleIosClientId,
+        });
+      } catch (e) {
+        finish(reject, e);
+      }
+    });
+    try {
+      await Browser.open({ url: authUrl.toString(), presentationStyle: "popover" });
+    } catch (e) {
+      finish(reject, e);
+    }
+    setTimeout(() => {
+      finish(reject, new Error("Gmail sign-in timed out"));
+    }, 180000);
+  });
 }
 
 function signInWithGmailWeb() {
@@ -139,11 +248,13 @@ function signInWithGmailWeb() {
 /** Custom "Continue with Gmail" — native on iOS when compiled in, else web GIS. */
 export async function signInWithGmail() {
   if (!googleReady || !googleClientId) {
-    if (isCapacitorIos() && !useNativeGoogleSignIn()) {
-      throw new Error("Gmail sign-in is unavailable on this device right now. Use Sign in with Apple or email/password to continue.");
+    if (isCapacitorIos()) {
+      throw new Error("Gmail sign-in is not configured for iOS yet.");
     }
     throw new Error("Gmail sign-in not configured");
   }
+
+  if (googleBrowser) return signInWithGmailBrowser();
 
   if (googleNative) {
     try {

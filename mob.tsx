@@ -32,7 +32,6 @@ import React, {
   import { startGeoWatch, geoSupported } from "./proximity.js";
   import { initAppleAuth, signInWithApple, fetchAppleConfig, tryAutoSignInWithApple, shouldAutoSignInWithApple } from "./apple-auth.js";
   import { initGoogleAuth, signInWithGmail, fetchAuthConfig } from "./web-auth.js";
-  import { isEchelonAppStoreShell } from "./native-shell.js";
   import { initPwaInstall, requestInstall, openInExternalBrowser, triggerWebShareInstall, isIos } from "./pwa-install.js";
   import { openInstagramAuth } from "./instagram-auth.js";
   import { isScreenshotDemoMode, buildScreenshotDemoSession, SCREENSHOT_DEMO_USER_ID } from "./screenshot-demo.js";
@@ -3423,8 +3422,6 @@ import React, {
     const [identifier, setIdentifier] = useState("");
     const videoRef = useRef(null);
     const streamRef = useRef(null);
-    const hideGmail = isEchelonAppStoreShell();
-
     const finishAuth = async (token, user) => {
       setToken(token);
       const localTest = token === "echelon-local-test" || user?.id === UI_TEST_USER_ID;
@@ -3480,7 +3477,7 @@ import React, {
         try {
           const cfg = await fetchAuthConfig();
           setAuthCfg(cfg);
-          if (cfg.googleClientId && !isEchelonAppStoreShell()) {
+          if (cfg.googleClientId) {
             await initGoogleAuth(cfg);
             setGmailReady(true);
           }
@@ -3788,11 +3785,9 @@ import React, {
             </span>
           </button>
         )}
-        {!hideGmail && (
-          <button className="gmailbtn" type="button" onClick={doGmail} disabled={signing}>
-            <GmailGlyph size={18} /> {tr("onb.gmail")}
-          </button>
-        )}
+        <button className="gmailbtn" type="button" onClick={doGmail} disabled={signing}>
+          <GmailGlyph size={18} /> {tr("onb.gmail")}
+        </button>
         {authCfg?.methods?.includes("apple") && (
           <button className="applebtn" type="button" onClick={doApple} disabled={signing}>
             <AppleLogoImg size={18} className="applebtn-logo" /> {tr("onb.apple")}

@@ -88,7 +88,11 @@ export const api = {
 
     req("/auth/apple", { method: "POST", body: { idToken, name, email } }),
 
-  authGoogle: (idToken) => req("/auth/google", { method: "POST", body: { idToken } }),
+  authGoogle: (payload) =>
+    req("/auth/google", {
+      method: "POST",
+      body: typeof payload === "string" ? { idToken: payload } : payload,
+    }),
 
   authRegister: (payload) => req("/auth/register", { method: "POST", body: payload }),
 

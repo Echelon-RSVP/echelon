@@ -28,6 +28,9 @@ export function useNativeAppleSignIn() {
 }
 
 export function useNativeGoogleSignIn() {
+  // ITMS-91061: GoogleSignIn/GTMAppAuth/GTMSessionFetcher do not ship privacy
+  // manifests in this plugin version, so the App Store IPA excludes them.
+  if (isCapacitorIos()) return false;
   return isCapacitorPluginAvailable("GoogleAuth");
 }
 

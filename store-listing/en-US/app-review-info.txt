@@ -64,8 +64,8 @@ Face data:
 - The avatar image is kept while the account is active or until replaced/deleted because it is the visible profile avatar. After account deletion, active-system copies are deleted or anonymised within 30 days; encrypted backups may persist up to 24 months for security/disaster recovery/legal integrity, then are purged. Server/security logs are typically retained up to 90 days.
 - See Privacy Policy section "4A. Face data collection, use, sharing, storage, and retention".
 
-Gmail login:
-- This build includes native Google Sign-In in the iOS shell. Reviewers may use Gmail, Sign in with Apple, or the email/password demo account above. For fastest review access, please use the email/password demo account.
+iOS sign-in:
+- The App Store iOS shell supports Sign in with Apple and email/password. Gmail is hidden in the iOS shell because Apple's ITMS-91061 notice requires GoogleSignIn/GTMAppAuth/GTMSessionFetcher privacy manifests that are not available in the current native Google plugin dependency chain. Gmail remains available on supported web/PWA environments. For fastest review access, please use the email/password demo account above.
 
 Cookies/tracking:
 - The app does not use cookies/local storage for advertising, data brokers, or cross-app/cross-site tracking.

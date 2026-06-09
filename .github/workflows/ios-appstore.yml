@@ -65,14 +65,15 @@ jobs:
           test -f Podfile.lock
           grep -q CapacitorCommunityAppleSignIn Podfile.lock
           grep -q CapacitorCommunityAppleSignIn Podfile.lock
-          grep -q GoogleSignIn Podfile.lock
-          echo "Native GoogleSignIn present for Gmail sign-in in the iOS shell."
+          if grep -qE 'GoogleSignIn|GTMAppAuth|GTMSessionFetcher|CodetrixStudioCapacitorGoogleAuth' Podfile.lock; then
+            echo "::error::Google native auth frameworks must not be in the IPA until their privacy manifests are available."
+            grep -E 'GoogleSignIn|GTMAppAuth|GTMSessionFetcher|CodetrixStudioCapacitorGoogleAuth' Podfile.lock || true
+            exit 1
+          fi
+          echo "Native Google auth frameworks excluded for ITMS-91061 compliance."
           test -f App/App.entitlements
           grep -q applesignin App/App.entitlements
-          if [ -z "${{ secrets.GOOGLE_IOS_URL_SCHEME }}" ]; then
-            echo "::warning::GOOGLE_IOS_URL_SCHEME secret missing. Native Gmail will not work until you add an iOS OAuth client in Google Cloud Console."
-          fi
-          echo "Native Sign in with Apple and native Gmail are configured."
+          echo "Native Sign in with Apple present; Gmail is hidden in the iOS App Store shell."
 
       - name: Validate signing secrets
         env:

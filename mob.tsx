@@ -1333,39 +1333,9 @@ import React, {
     year: 365 * 86400000,
   };
 
-  const hashSeed = (str) => {
-    let h = 2166136261;
-    for (let i = 0; i < str.length; i++) {
-      h ^= str.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return h >>> 0;
-  };
-
-  const synthesizeUserHistory = (userId, currentScore, pointCount = 40) => {
-    const now = Date.now();
-    let seed = hashSeed(String(userId || "anon"));
-    const rand = () => {
-      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-      return seed / 4294967296;
-    };
-    const target = clampScore(Number(currentScore) || 3);
-    const span = 320 * 86400000;
-    const points = [];
-    let walk = clampScore(target - 0.35 + rand() * 0.25);
-    for (let i = pointCount - 1; i >= 0; i--) {
-      const t = now - Math.round((i / Math.max(1, pointCount - 1)) * span);
-      if (i === 0) walk = target;
-      else walk = clampScore(walk + (rand() - 0.47) * 0.1);
-      points.push({ t, s: round2(walk) });
-    }
-    return points;
-  };
-
-  const resolveScoreHistory = (history, userId, score) => {
+  const resolveScoreHistory = (history) => {
     const rows = Array.isArray(history) ? history.filter((h) => h && h.t != null && h.s != null) : [];
-    if (rows.length >= 2) return [...rows].sort((a, b) => a.t - b.t);
-    return synthesizeUserHistory(userId, score);
+    return [...rows].sort((a, b) => a.t - b.t);
   };
 
   const filterScoreHistory = (history, range, now = Date.now()) => {
@@ -1706,7 +1676,7 @@ import React, {
           friendRequestsIncoming: p.friendRequests?.incoming || [],
           friendRequestsOutgoing: p.friendRequests?.outgoing || [],
           rsvps: p.rsvps || [],
-          history: p.history?.length ? p.history : state.history,
+          history: Array.isArray(p.history) ? p.history : [],
           notifs: p.notifications?.length ? p.notifications : state.notifs,
           user: {
             ...state.user,
@@ -3257,13 +3227,14 @@ import React, {
     const [menuOpen, setMenuOpen] = useState(false);
     const menuRef = useRef(null);
     const tier = getTier(score);
-    const fullHistory = useMemo(() => resolveScoreHistory(history, userId, score), [history, userId, score]);
+    const fullHistory = useMemo(() => resolveScoreHistory(history), [history]);
     const filtered = useMemo(() => filterScoreHistory(fullHistory, range, now), [fullHistory, range, now]);
     const chartData = useMemo(() => filtered.map((h) => ({
       t: h.t,
       s: h.s,
       label: formatScoreChartLabel(h.t, range),
     })), [filtered, range]);
+    const hasRealTrend = chartData.length >= 2;
     const delta = chartData.length >= 2 ? round2(chartData[chartData.length - 1].s - chartData[0].s) : 0;
 
     const ranges = [
@@ -3289,9 +3260,9 @@ import React, {
         <div className="ech-score-chart-head">
           <div>
             <h3>{tr("profile.scoreTrend")}</h3>
-            <span className={"ech-score-chart-delta" + (delta >= 0 ? " up" : " down")}>
-              {delta >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
-              {delta >= 0 ? "+" : ""}{delta.toFixed(2)}
+            <span className={"ech-score-chart-delta" + (hasRealTrend ? (delta >= 0 ? " up" : " down") : " neutral")}>
+              {hasRealTrend ? (delta >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />) : <Clock size={11} />}
+              {hasRealTrend ? `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}` : tr("profile.scoreTrendNew")}
             </span>
           </div>
           <div className="ech-score-range-wrap" ref={menuRef}>
@@ -3323,8 +3294,11 @@ import React, {
           </div>
         </div>
         <div className="ech-score-chart-card card">
-          {chartData.length < 2 ? (
-            <p className="ech-score-chart-empty muted">{tr("profile.scoreTrendEmpty")}</p>
+          {!hasRealTrend ? (
+            <div className="ech-score-chart-empty">
+              <Sparkles size={18} />
+              <p>{tr("profile.scoreTrendEmpty")}</p>
+            </div>
           ) : (
             <ResponsiveContainer width="100%" height={156}>
               <AreaChart data={chartData} margin={{ top: 10, right: 8, left: -18, bottom: 0 }}>
@@ -18670,6 +18644,7 @@ import React, {
   .ech-score-chart-delta{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px}
   .ech-score-chart-delta.up{color:#4FA98C;background:rgba(79,169,140,.12)}
   .ech-score-chart-delta.down{color:#C44D6E;background:rgba(196,77,110,.12)}
+  .ech-score-chart-delta.neutral{color:#8C6BD8;background:rgba(140,107,216,.12)}
   .ech-score-range-wrap{position:relative;flex-shrink:0}
   .ech-score-range-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(183,156,240,.24);border-radius:12px;padding:8px 12px;background:linear-gradient(135deg,#FFF8FC,#EFE9FF);color:#6B5080;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(140,100,160,.08)}
   .ech-score-range-btn svg{transition:transform .15s ease}
@@ -18679,7 +18654,9 @@ import React, {
   .ech-score-range-item{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;border:none;background:transparent;padding:9px 12px;border-radius:10px;font-size:12px;font-weight:600;color:#5A4A60;cursor:pointer;text-align:left}
   .ech-score-range-item.on{background:linear-gradient(135deg,#EFE9FF,#FFE8F2);color:#6B5080}
   .ech-score-chart-card{padding:10px 6px 4px;border-radius:18px;background:linear-gradient(135deg,#FFF8FC,#F0EBFF);border:1px solid rgba(183,156,240,.16);box-shadow:0 8px 22px rgba(120,90,140,.06)}
-  .ech-score-chart-empty{margin:0;padding:28px 12px;text-align:center;font-size:12px}
+  .ech-score-chart-empty{min-height:156px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;margin:0;padding:28px 18px;text-align:center;color:#8C6BD8}
+  .ech-score-chart-empty svg{filter:drop-shadow(0 6px 14px rgba(140,107,216,.18))}
+  .ech-score-chart-empty p{margin:0;max-width:260px;font-size:12px;line-height:1.5;font-weight:700;color:#7A6B86}
   .ech-discover-screen{display:flex;flex-direction:column;height:100%;min-height:0;background:#fff}
   .ech-discover-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:12px max(12px,env(safe-area-inset-left)) 6px max(12px,env(safe-area-inset-right))}
   .ech-discover-title h1{margin:0;font-size:18px;font-weight:800;color:#5A4A60;letter-spacing:-.03em}

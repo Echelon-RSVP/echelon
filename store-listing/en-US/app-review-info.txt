@@ -41,14 +41,16 @@ Sign in steps:
 2. Choose email/password (not Sign in with Apple for the demo account).
 3. Enter the credentials above. The account is pre-onboarded with friends, posts, messages, Lens enabled, and recent Lens locations.
 
-How to test main features:
-1. Feed: scroll posts, open a post, like or comment. Stories row at top (Momentum).
-2. Messages: open a chat with Naomi or Iris, send a text message.
+How to test main features (iPhone or iPad):
+1. Feed: scroll posts. A purple "How to rate" banner appears under Stories with instructions. Single-tap any post to open stars, then tap a star to rate media.
+2. Messages: tap Messages in the bottom dock. The inbox lists seeded friends (for example Iris Moon). Tap a row to open chat and send a text message. If the inbox is empty, tap Find friends.
 3. Profile: view portfolio, score graph, and settings.
 4. Match: tap Match. The demo account already has height set. Tap a username/handle to open the profile, tap NEXT to pass, or tap the heart to like.
-5. Rate others once every 24 hours: use either of these paths:
-   - Match/Map path: tap the Map/Lens tab. Lens is on by default. The review account has Lens friends available on the map, including Iris Moon (@irismoon) and Marcus Bell (@marcusb), both seeded with Lens on and recent locations. Tap a user pin and tap Rate. After rating, the same user is blocked by the 24-hour cooldown.
-   - Chat path: open Messages, select an existing chat, tap End Chat, then submit the required rating. The same 24-hour direct rating cooldown applies.
+5. Rate others once every 24 hours (person ratings):
+   - Map path (fastest): tap Map in the bottom dock. Lens is on by default. The review account has Lens friends on the map, including Iris Moon (@irismoon) and Marcus Bell (@marcusb). Tap a user pin, then tap Rate.
+   - Profile path: open any user profile from Feed or Map and tap Rate in the bottom action bar.
+   - Chat path: open Messages, select a chat, tap End Chat, then submit the required rating.
+   After rating the same person, the 24-hour direct rating cooldown applies.
 6. Media ratings: open Feed, single-tap a post to show empty stars, then tap a star. This rates the media item only and does not consume the direct person-rating cooldown.
 
 Permissions (only requested when used):

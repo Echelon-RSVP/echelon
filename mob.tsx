@@ -2870,7 +2870,7 @@ import React, {
         </div>
         {lens && showScore !== false && (
           <div className="lens-badge" style={{ background: grad(tier.ring), color: "#fff" }}>
-            <Star size={8} fill="#fff" stroke="none" /> {c.score.toFixed(1)}
+            <Star size={8} fill="#fff" stroke="none" /> {(Number(c.score) || 3).toFixed(1)}
           </div>
         )}
       </div>
@@ -5301,6 +5301,17 @@ import React, {
 
         <StoryBar onCreateStory={() => dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story" } })} onOpenStory={openStory} />
 
+        <div className="ech-feed-rate-coach" role="note" aria-label={tr("feed.rateCoachTitle")}>
+          <Scale size={16} color="#8C6BD8" strokeWidth={2} />
+          <div className="ech-feed-rate-coach-copy">
+            <b>{tr("feed.rateCoachTitle")}</b>
+            <p>{tr("feed.rateCoach")}</p>
+          </div>
+          <button type="button" className="ech-feed-rate-coach-btn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "guide" }); }}>
+            {tr("feed.rateCoachHow")}
+          </button>
+        </div>
+
         {feedPosts.length === 0 ? (
           <div className="feed-empty feed-empty--ig">
             <p>{tr("feed.empty")}</p>
@@ -6719,7 +6730,7 @@ import React, {
         const ta = inbox[a.id]?.lastTs || 0;
         const tb = inbox[b.id]?.lastTs || 0;
         if (tb !== ta) return tb - ta;
-        return a.name.localeCompare(b.name);
+        return String(a.name || "").localeCompare(String(b.name || ""));
       });
     }, [chats, inbox]);
 
@@ -6728,15 +6739,23 @@ import React, {
       : sorted;
 
     useEffect(() => {
-      if (!state.liveData) return;
+      if (!state.liveData) {
+        setInboxReady(true);
+        return;
+      }
+      let cancelled = false;
       const refresh = () => {
         api.chats()
-          .then((rows) => dispatch({ type: "SET_CHAT_INBOX", inbox: inboxFromApi(rows) }))
-          .catch(() => {});
+          .then((rows) => {
+            if (cancelled) return;
+            dispatch({ type: "SET_CHAT_INBOX", inbox: inboxFromApi(rows) });
+            setInboxReady(true);
+          })
+          .catch(() => { if (!cancelled) setInboxReady(true); });
       };
       refresh();
       const iv = setInterval(refresh, 12000);
-      return () => clearInterval(iv);
+      return () => { cancelled = true; clearInterval(iv); };
     }, [state.liveData, dispatch]);
 
     const askDeleteChat = (e, id) => {
@@ -6745,8 +6764,9 @@ import React, {
       dispatch({ type: "OPEN_MODAL", modal: "deletechat", payload: { id } });
     };
 
-    const me = state.user;
-    const [statusText, setStatusText] = useState(getChatStatus(state, ME_ID));
+    const me = state.user || {};
+    const [statusText, setStatusText] = useState(() => getChatStatus(state, ME_ID) || "");
+    const [inboxReady, setInboxReady] = useState(!state.liveData);
 
     return (
       <div className="ech-messages-screen">
@@ -6770,7 +6790,12 @@ import React, {
         </div>
 
         <Scroll className="ech-messages-scroll">
-        {list.length === 0 ? (
+        {!inboxReady ? (
+          <div className="ech-empty-card ech-empty-card--loading">
+            <Loader size={28} className="spin" color="#C9A0DC" />
+            <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, margin: "12px 0 0" }}>{tr("messages.loading")}</p>
+          </div>
+        ) : list.length === 0 ? (
           <div className="ech-empty-card">
             <MessageCircle size={32} color="#C9B8C6" style={{ marginBottom: 10 }} />
             <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, margin: 0 }}>
@@ -6787,12 +6812,15 @@ import React, {
             const meta = inbox[c.id];
             const unread = meta?.unread || 0;
             const preview = meta?.lastPreview || tr("messages.tapToChat");
+            const status = getChatStatus(state, c.id);
             return (
               <div key={c.id} className="msg-row-wrap">
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   className={"ech-msg-row" + (unread > 0 ? " ech-msg-row--unread" : "")}
                   onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: c.id } }); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: c.id } }); } }}
                 >
                   <button
                     type="button"
@@ -6802,20 +6830,20 @@ import React, {
                   >
                     <Avatar c={c} size={48} ring showScore />
                   </button>
-                  <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                  <div className="msg-row-body">
                     <div className="msg-row-top">
                       <button
                         type="button"
                         className="msg-row-name"
                         onClick={(e) => { e.stopPropagation(); openUserProfile(dispatch, c.id); }}
                       >
-                        {c.name}
+                        {c.name || tr("profile.member")}
                       </button>
                       {unread > 0 && <span className="msg-new-badge">NEW</span>}
                     </div>
-                    {getChatStatus(state, c.id) && (
-                      <span className="msg-row-status">{getChatStatus(state, c.id)}</span>
-                    )}
+                    {status ? (
+                      <span className="msg-row-status">{status}</span>
+                    ) : null}
                     <span className="msg-row-preview">{preview}</span>
                     {meta?.lastTs ? (
                       <span className="msg-row-time muted">{formatPostAge(meta.lastTs, Date.now())}</span>
@@ -6824,7 +6852,7 @@ import React, {
                     )}
                   </div>
                   <ChevronRight size={18} color="#C9B8C6" />
-                </button>
+                </div>
                 <button type="button" className="msg-row-delete" aria-label={tr("messages.deleteChat")} onClick={(e) => askDeleteChat(e, c.id)}>
                   <Trash2 size={16} />
                 </button>
@@ -15831,7 +15859,45 @@ import React, {
      9. ROOT APP: store provider, live firehose, lens layer, routing
   ============================================================================ */
   
-  export default function EchelonApp() {
+    class ScreenErrorBoundary extends React.Component {
+    constructor(props) {
+      super(props);
+      this.state = { error: null };
+    }
+
+    static getDerivedStateFromError(error) {
+      return { error };
+    }
+
+    componentDidCatch(error) {
+      try { console.error("[Echelon] screen render error", error); } catch { /* ignore */ }
+    }
+
+    componentDidUpdate(prevProps) {
+      if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+        this.setState({ error: null });
+      }
+    }
+
+    render() {
+      if (this.state.error) {
+        return (
+          <div className="ech-screen-fallback">
+            <AlertCircle size={34} color="#C44D6E" />
+            <h2>{this.props.title || "Something went wrong"}</h2>
+            <p>{this.props.message || "This screen could not load. Try again or go back to Home."}</p>
+            <div className="ech-screen-fallback-actions">
+              <button type="button" className="btn soft" onClick={() => this.setState({ error: null })}>Try again</button>
+              <button type="button" className="btn" onClick={() => { this.setState({ error: null }); this.props.onHome?.(); }}>Home</button>
+            </div>
+          </div>
+        );
+      }
+      return this.props.children;
+    }
+  }
+
+export default function EchelonApp() {
     const [state, dispatch] = useReducer(reducer, undefined, initialState);
     const [tick, setTick] = useState(Date.now());
     const [installCoachOpen, setInstallCoachOpen] = useState(false);
@@ -16268,7 +16334,16 @@ import React, {
                 {!["feed", "alerts", "spark", "lens", "explore", "messages", "profile", "friends", "settings"].includes(state.screen) && <StatusBar />}
                 <div className={"appbody" + (["feed", "alerts", "spark", "lens", "explore", "messages", "profile", "friends", "settings"].includes(state.screen) ? " appbody--ig" : "") + (state.activeCall && state.modal?.type !== "call" ? " appbody--call-banner" : "")}>
                   {state.lens && state.screen !== "lens" && <LensFilm />}
-                  <div className="screen-stack">{screens[state.screen]}</div>
+                  <div className="screen-stack">
+                    <ScreenErrorBoundary
+                      resetKey={state.screen}
+                      title="Screen unavailable"
+                      message="This screen could not load on your device. Try again or return to Home."
+                      onHome={() => dispatch({ type: "SCREEN", screen: "feed" })}
+                    >
+                      {screens[state.screen] ?? screens.feed}
+                    </ScreenErrorBoundary>
+                  </div>
                 </div>
                 {(!state.modal || state.modal?.type === "userprofile" || state.modal?.type === "guide") && <AppIgTabBar />}
               </>
@@ -18481,8 +18556,23 @@ import React, {
   .ech-messages-scroll .ech-cta-soft{width:100%;margin:8px 0 0;border-radius:0;border-left:none;border-right:none;border-top:1px solid #ECE8EF}
   .ech-cta-soft:active{transform:scale(.98)}
   .ech-stat-hero{margin:0 max(12px,env(safe-area-inset-left)) 14px max(12px,env(safe-area-inset-right));padding:16px;border-radius:20px}
-  .ech-messages-screen,.ech-friends-screen,.ech-lens-screen,.ech-settings-screen,.ech-spark-screen{display:flex;flex-direction:column;height:100%;min-height:0;background:transparent}
+  .ech-messages-screen,.ech-friends-screen,.ech-lens-screen,.ech-settings-screen,.ech-spark-screen{display:flex;flex-direction:column;height:100%;min-height:0;background:#fff}
+  .ech-messages-screen .ech-screen-head,.ech-friends-screen .ech-screen-head,.ech-messages-screen .ech-status-bar,.ech-messages-screen .ech-messages-search{flex-shrink:0}
   .ech-messages-screen .ech-screen-head,.ech-friends-screen .ech-screen-head{padding-top:10px}
+  .ech-msg-row[role=button]{cursor:pointer;outline:none}
+  .ech-msg-row[role=button]:focus-visible{box-shadow:inset 0 0 0 2px rgba(140,107,216,.35)}
+  .msg-row-body{flex:1;min-width:0;text-align:left}
+  .ech-empty-card--loading{align-items:center;justify-content:center;min-height:min(42vh,280px)}
+  .ech-screen-fallback{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:28px 22px;text-align:center;background:#fff}
+  .ech-screen-fallback h2{margin:0;font-size:17px;font-weight:800;color:#5A4A60}
+  .ech-screen-fallback p{margin:0;max-width:300px;font-size:13px;line-height:1.55;color:#8A7A98;font-weight:600}
+  .ech-screen-fallback-actions{display:flex;gap:10px;margin-top:8px;width:100%;max-width:280px}
+  .ech-screen-fallback-actions .btn{flex:1}
+  .ech-feed-rate-coach{display:flex;align-items:flex-start;gap:10px;margin:0 0 12px;padding:12px 14px;border-radius:16px;background:linear-gradient(135deg,#F7F2FF,#FFF4F8);border:1px solid rgba(183,156,240,.18)}
+  .ech-feed-rate-coach-copy{flex:1;min-width:0}
+  .ech-feed-rate-coach-copy b{display:block;font-size:12px;font-weight:800;color:#6B5080;margin-bottom:3px}
+  .ech-feed-rate-coach-copy p{margin:0;font-size:11px;line-height:1.45;color:#8A7A98;font-weight:600}
+  .ech-feed-rate-coach-btn{flex-shrink:0;border:none;border-radius:10px;padding:8px 10px;background:#fff;color:#8C6BD8;font-size:10px;font-weight:800;cursor:pointer;box-shadow:0 4px 12px rgba(140,107,216,.12)}
   .ech-messages-search,.ech-friends-search{margin:0 0 12px;border-radius:0;border-left:none;border-right:none}
   .ech-messages-scroll,.ech-friends-scroll{flex:1;min-height:0;padding:0 0 72px!important}
   .ech-lens-scroll,.ech-settings-scroll{flex:1;min-height:0;padding:0 max(12px,env(safe-area-inset-left)) 72px max(12px,env(safe-area-inset-right))!important}
@@ -18930,6 +19020,12 @@ import React, {
   button.ech-user-qbtn--state{cursor:pointer;pointer-events:auto;touch-action:manipulation}
   span.ech-user-qbtn--state{cursor:default;pointer-events:none;touch-action:none}
 
+
+  /* Native shell + iPad: full viewport (fixes blank/centered phone frame on tablet) */
+  html.echelon-native .stage,html.echelon-tablet .stage{min-height:100dvh;height:100dvh;padding:0;gap:0;justify-content:stretch;background:#fff}
+  html.echelon-native .stage-note,html.echelon-tablet .stage-note{display:none}
+  html.echelon-native .phone,html.echelon-tablet .phone{width:100%;max-width:100%;height:100%;min-height:100%;max-height:none;border-radius:0;box-shadow:none}
+  html.echelon-native .ech-dock,html.echelon-tablet .ech-dock{bottom:max(10px,env(safe-area-inset-bottom))}
 
   /* ---- mobile: full-screen native feel ---- */
   @media (max-width:480px),(max-height:740px) and (max-width:640px){

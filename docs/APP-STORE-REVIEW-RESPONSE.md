@@ -65,24 +65,43 @@ Specific quoted text from Cookie Policy:
 
 Because the app does not track users as defined by App Tracking Transparency, ATT is not requested.
 
-### Guideline 2.3 - Accurate Metadata / 24-Hour Rating
+### Guideline 2.1(a) - Blank Messages Tab on iPad
 
-The "Rate others once every 24 hours" feature is implemented and available in the app.
+We reproduced and fixed a layout/render issue that could show a blank Messages screen on iPad.
 
-How to locate it:
+Changes in build 19:
+
+- Full-viewport layout for iPad and the native iOS shell (no centered phone frame with zero-height content).
+- Messages inbox loading and empty states always render visible UI.
+- Safer message row rendering (no nested buttons, safer score/name handling).
+- Screen error fallback if a tab fails to render.
+
+How to verify on iPad:
+
+1. Sign in with the App Review account (`review@echelon.rsvp` / `EchelonReview2026!`).
+2. Tap **Messages** in the bottom dock.
+3. You should see the Messages header, status field, search bar, and either a conversation list (seeded friends such as Iris Moon) or a clear empty state with **Find friends**.
+
+### Guideline 2.3 - Accurate Metadata / Rating Others
+
+The "rate others" feature is implemented. We also made it easier to discover in the app and updated metadata.
+
+How to locate rating in the app:
+
+**Person ratings (once per 24h when eligible)**
 
 1. Sign in with the App Review account.
-2. Open the **Map/Lens** tab. Lens is on by default.
-3. Followed users with Lens on appear on the map. Tap a user, then tap **Rate**.
-4. Submit a star rating. The same user is then blocked by the 24-hour direct rating cooldown.
-5. The same 24-hour direct rating cooldown also applies after chat/call/video-call ratings.
+2. Open **Map** in the bottom dock. Lens is on by default.
+3. Tap a followed user pin (for example Iris Moon or Marcus Bell), then tap **Rate**.
+4. Alternatively, open any profile and tap **Rate** in the bottom action bar.
 
-Media ratings are separate:
+**Media ratings (independent, per post)**
 
 1. Open **Feed**.
-2. Single-tap a post to open empty stars.
-3. Tap a star to rate that media item.
-4. Media ratings are independent and do not consume the direct person-rating 24-hour cooldown.
+2. Under Stories, a purple **How to rate** banner explains the feature.
+3. Single-tap any post to open stars, then tap a star.
+
+We updated the App Store description and App Review Notes to match these steps.
 
 Thank you.
 

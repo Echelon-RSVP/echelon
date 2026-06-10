@@ -5,7 +5,13 @@ Build your reputation through real interactions: posts, stories, messages, and r
 • Feed, stories, and portfolio
 • Direct messages with photos, voice, and video
 • Discover people nearby on the map
-• Rate others once every 24 hours (when eligible)
+• Rate posts: tap any post once, then tap a star
+• Rate people: open Map, tap a friend pin, then Rate (once per 24h when eligible)
 • Friends, blocks, and privacy controls
 
-Echelon is designed for portrait mobile use. Sign in with Apple or Google to get started.
+How to rate in the app:
+1. Feed: tap a post once to open stars, then tap a star to rate that media.
+2. Map: open Map, tap a followed user on the map, then tap Rate.
+3. Profile: open any profile and tap Rate.
+
+Echelon works on iPhone and iPad. Sign in with Apple, Gmail, or email to get started.

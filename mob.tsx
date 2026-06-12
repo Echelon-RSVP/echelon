@@ -15884,6 +15884,13 @@ import React, {
     }
   }
 
+function withTimeout(promise, ms) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+    ]);
+  }
+
 export default function EchelonApp() {
     const [state, dispatch] = useReducer(reducer, undefined, initialState);
     const [tick, setTick] = useState(Date.now());
@@ -15900,6 +15907,12 @@ export default function EchelonApp() {
     useEffect(() => {
       sfx.enabled = state.sound !== false;
     }, [state.sound]);
+
+    // Never leave the launch spinner running if bootstrap stalls (e.g. iPad WKWebView).
+    useEffect(() => {
+      const t = setTimeout(() => dispatch({ type: "SESSION_READY" }), 10000);
+      return () => clearTimeout(t);
+    }, []);
 
     useEffect(() => {
       if (!state.sessionReady || !state.user?.id) return;
@@ -15994,45 +16007,45 @@ export default function EchelonApp() {
         try {
           if (!getToken() && shouldAutoSignInWithApple()) {
             try {
-              const appleCfg = await fetchAppleConfig();
-              if (appleCfg.clientId) {
+              const apple = await withTimeout((async () => {
+                const appleCfg = await fetchAppleConfig();
+                if (!appleCfg.clientId) return null;
                 await initAppleAuth({ clientId: appleCfg.clientId, redirectUri: appleCfg.redirectUri });
-                const apple = await tryAutoSignInWithApple();
-                if (apple?.idToken) {
-                  const { token, user } = await api.authApple({
-                    idToken: apple.idToken,
-                    name: apple.name,
-                    email: apple.email,
+                return tryAutoSignInWithApple();
+              })(), 6000);
+              if (apple?.idToken) {
+                const { token, user } = await withTimeout(
+                  api.authApple({ idToken: apple.idToken, name: apple.name, email: apple.email }),
+                  8000,
+                );
+                setToken(token);
+                if (user.onboarded) {
+                  const data = await withTimeout(api.bootstrap(), 15000);
+                  dispatch({ type: "HYDRATE", payload: data });
+                  dispatch({ type: "ONBOARDED" });
+                } else {
+                  dispatch({
+                    type: "HYDRATE",
+                    payload: {
+                      user,
+                      contacts: [],
+                      gatherings: [],
+                      feed: [],
+                      friends: [],
+                      rsvps: [],
+                      history: [],
+                      notifications: [],
+                      settings: {},
+                    },
                   });
-                  setToken(token);
-                  if (user.onboarded) {
-                    const data = await api.bootstrap();
-                    dispatch({ type: "HYDRATE", payload: data });
-                    dispatch({ type: "ONBOARDED" });
-                  } else {
-                    dispatch({
-                      type: "HYDRATE",
-                      payload: {
-                        user,
-                        contacts: [],
-                        gatherings: [],
-                        feed: [],
-                        friends: [],
-                        rsvps: [],
-                        history: [],
-                        notifications: [],
-                        settings: {},
-                      },
-                    });
-                  }
-                  dispatch({ type: "SESSION_READY" });
-                  return;
                 }
+                dispatch({ type: "SESSION_READY" });
+                return;
               }
             } catch { /* manual sign-in fallback */ }
           }
 
-          const data = await tryBootstrap();
+          const data = await withTimeout(tryBootstrap(), 15000).catch(() => null);
           if (data) dispatch({ type: "HYDRATE", payload: data });
         } catch {
           setToken(null);

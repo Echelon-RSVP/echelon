@@ -16,7 +16,7 @@ function applyShellLayoutClass() {
 }
 applyShellLayoutClass();
 
-if ("serviceWorker" in navigator && !import.meta.env.DEV) {
+if ("serviceWorker" in navigator && !import.meta.env.DEV && !isCapacitorIos()) {
   navigator.serviceWorker.register("/app/sw.js").catch(() => {});
 }
 

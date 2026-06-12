@@ -103,6 +103,24 @@ How to locate rating in the app:
 
 We updated the App Store description and App Review Notes to match these steps.
 
+### Guideline 2.1(a) - App Completeness (iPad launch loading)
+
+We fixed an iPad launch hang where the app could stay on the loading spinner indefinitely.
+
+Root cause: on cold start in the native iOS shell, the app attempted automatic Sign in with Apple, which could block before the sign-in screen appeared on iPad.
+
+Changes in build 21:
+
+- Removed interactive Apple sign-in from the automatic launch path. Apple sign-in only runs when the user taps the button.
+- Added bootstrap timeouts so the sign-in screen always appears even if network calls stall.
+- Disabled service worker registration in the Capacitor iOS shell to avoid stale cached shells.
+
+How to verify on iPad:
+
+1. Install build 21 (fresh install or update from build 20).
+2. Launch the app. The sign-in screen should appear within a few seconds.
+3. Sign in with `review@echelon.rsvp` / `EchelonReview2026!` via email/password.
+
 ### Guideline 1.2 - User Generated Content (objectification)
 
 We removed features that could be interpreted as objectifying or mean-spirited toward real people.

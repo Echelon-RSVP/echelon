@@ -28,7 +28,21 @@ async function req(path, opts = {}) {
 
   }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers, body });
+  const timeoutMs = opts.timeoutMs ?? 0;
+  const { timeoutMs: _drop, ...fetchOpts } = opts;
+  const ctrl = timeoutMs > 0 ? new AbortController() : null;
+  const to = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...fetchOpts,
+      headers,
+      body,
+      signal: ctrl ? ctrl.signal : fetchOpts.signal,
+    });
+  } finally {
+    if (to) clearTimeout(to);
+  }
 
   let data = {};
 
@@ -106,7 +120,7 @@ export const api = {
 
   logout: () => req("/auth/logout", { method: "POST" }),
 
-  bootstrap: () => req("/bootstrap"),
+  bootstrap: () => req("/bootstrap", { timeoutMs: 15000 }),
 
   me: () => req("/me"),
 

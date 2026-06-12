@@ -1,4 +1,4 @@
-const CACHE = "echelon-v2";
+const CACHE = "echelon-v3";
 const SHELL = ["/app/", "/app/manifest.webmanifest", "/app/icons/icon-192.png", "/app/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {

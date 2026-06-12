@@ -119,13 +119,18 @@ export function shouldAutoSignInWithApple() {
   return isEchelonAppStoreShell() && useNativeAppleSignIn();
 }
 
-/** Native App Store shell: silent Apple sign-in only when the native plugin exists. */
+/** Native App Store shell: restore a cached Apple credential only. Never prompts on launch. */
 export async function tryAutoSignInWithApple() {
   if (!shouldAutoSignInWithApple()) return null;
 
   const native = window.EchelonNative;
-  if (native?.getAppleCredential) {
-    const cred = await native.getAppleCredential();
+  if (!native?.getAppleCredential) return null;
+
+  try {
+    const cred = await Promise.race([
+      native.getAppleCredential(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("apple-credential-timeout")), 4000)),
+    ]);
     if (cred?.idToken) {
       return {
         idToken: cred.idToken,
@@ -133,26 +138,24 @@ export async function tryAutoSignInWithApple() {
         email: cred.email || null,
       };
     }
+  } catch {
+    /* fall through to manual sign-in */
   }
-
-  if (!appleReady || !appleNative) return null;
-
-  try {
-    return await signInWithAppleNative();
-  } catch (err) {
-    const code = err?.code || err?.message || "";
-    if (String(code).includes("1001") || String(code).toLowerCase().includes("cancel")) {
-      return null;
-    }
-    return null;
-  }
+  return null;
 }
 
 export async function fetchAppleConfig() {
   const base =
     (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE) ||
     "/api/v1";
-  const res = await fetch(`${base}/auth/apple/config`);
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 8000);
+  let res;
+  try {
+    res = await fetch(`${base}/auth/apple/config`, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(to);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Apple Sign In not configured");
   return data;

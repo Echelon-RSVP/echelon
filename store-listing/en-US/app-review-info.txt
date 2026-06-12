@@ -24,17 +24,18 @@ hi@echelon.rsvp
 
 === Notes (paste into Notes field) ===
 
-Echelon is a social reputation app. Users sign in, browse a feed, message friends, discover people, and rate other users. Direct person ratings are limited to once every 24 hours per rated person across Lens/map, chat, calls, and video calls. Media ratings are independent and can be submitted once per media item.
+Echelon is a positive social community app. Users share posts and stories, message friends, discover people on the map, and grow an Echelon Score from media ratings and respectful participation.
 
-Demo accounts (email/password login):
+Important compliance note (Guideline 1.2):
+- Echelon does NOT support rating, ranking, or judging people.
+- Users can rate posts, stories, and reels (media only).
+- Onboarding captures a profile photo for the avatar only. No appearance analysis or attractiveness scoring.
+- Match pass/Next does not reduce another user's score.
+- Forced post-chat and post-call person ratings have been removed.
 
-App Review account:
+Demo account (email/password login):
 - Email: review@echelon.rsvp
 - Password: EchelonReview2026!
-
-QA test account:
-- Identifier: test (or @test)
-- Password: test
 
 Sign in steps:
 1. Open the app and tap Sign in.
@@ -42,41 +43,32 @@ Sign in steps:
 3. Enter the credentials above. The account is pre-onboarded with friends, posts, messages, Lens enabled, and recent Lens locations.
 
 How to test main features (iPhone or iPad):
-1. Feed: scroll posts. A purple "How to rate" banner appears under Stories with instructions. Single-tap any post to open stars, then tap a star to rate media.
-2. Messages: tap Messages in the bottom dock. The inbox lists seeded friends (for example Iris Moon). Tap a row to open chat and send a text message. If the inbox is empty, tap Find friends.
+1. Feed: scroll posts. A purple "Rate posts & stories" banner explains media ratings. Single-tap any post to open stars, then tap a star.
+2. Messages: tap Messages in the bottom dock. Open a chat and send a text message.
 3. Profile: view portfolio, score graph, and settings.
-4. Match: tap Match. The demo account already has height set. Tap a username/handle to open the profile, tap NEXT to pass, or tap the heart to like.
-5. Rate others once every 24 hours (person ratings):
-   - Map path (fastest): tap Map in the bottom dock. Lens is on by default. The review account has Lens friends on the map, including Iris Moon (@irismoon) and Marcus Bell (@marcusb). Tap a user pin, then tap Rate.
-   - Profile path: open any user profile from Feed or Map and tap Rate in the bottom action bar.
-   - Chat path: open Messages, select a chat, tap End Chat, then submit the required rating.
-   After rating the same person, the 24-hour direct rating cooldown applies.
-6. Media ratings: open Feed, single-tap a post to show empty stars, then tap a star. This rates the media item only and does not consume the direct person-rating cooldown.
+4. Match: tap Match. Tap NEXT to pass or tap the heart to like. Mutual likes become chats. Passing does not affect scores.
+5. Map: tap Map. Tap a friend pin for Profile, Follow, and Message. There is no Rate button for people.
+6. Media ratings only: Echelon does not offer person ratings anywhere in the app.
 
 Permissions (only requested when used):
-- Camera/microphone: chat media and stories.
+- Camera/microphone: profile photo, chat media, and stories.
 - Photo library: attach images.
 - Location: optional, for Lens/map discovery of followed users who have Lens on.
 
-Face data:
-- The onboarding face scan collects only the selfie/profile photo the user submits.
-- It is used only to create the profile avatar and request an automated image-analysis score suggestion for the initial in-app Echelon Score.
-- Echelon does not collect Apple Face ID data, biometric face templates, faceprints, facial geometry, liveness maps, depth maps, or government ID data.
-- The image may be sent to Google Gemini API solely to return the score suggestion. Hosting providers store the image only on Echelon-controlled infrastructure as the user's profile avatar. We do not sell, advertise with, or track users using face data.
-- The avatar image is kept while the account is active or until replaced/deleted because it is the visible profile avatar. After account deletion, active-system copies are deleted or anonymised within 30 days; encrypted backups may persist up to 24 months for security/disaster recovery/legal integrity, then are purged. Server/security logs are typically retained up to 90 days.
-- See Privacy Policy section "4A. Face data collection, use, sharing, storage, and retention".
+Profile photo privacy:
+- Onboarding stores a profile photo as the user's avatar only.
+- Echelon does not send onboarding photos to AI appearance-analysis services.
+- See Privacy Policy section "4A. Profile photo collection, use, sharing, storage, and retention".
 
 iOS sign-in:
-- The App Store iOS shell supports Sign in with Apple, email/password, and Gmail. Gmail uses a browser-based Google OAuth flow with PKCE and an app URL callback. The IPA does not include GoogleSignIn, GTMAppAuth, or GTMSessionFetcher frameworks, avoiding Apple's ITMS-91061 privacy-manifest issue while still allowing Gmail login. For fastest review access, please use the email/password demo account above.
+- The App Store iOS shell supports Sign in with Apple, email/password, and Gmail via browser OAuth with PKCE.
 
 Cookies/tracking:
 - The app does not use cookies/local storage for advertising, data brokers, or cross-app/cross-site tracking.
-- The cookie prompt is for strictly necessary storage and optional functional preferences only. Analytics are not currently deployed.
-- See Cookie Policy sections 3, 4, 5, and 6.
 
 User safety: users can block, mute, report posts, and delete their own messages.
 
-The iOS app loads the web experience from https://echelon.rsvp/app/ inside a native shell. No special configuration is required.
+The iOS app loads the web experience from https://echelon.rsvp/app/ inside a native shell.
 
 Support: hi@echelon.rsvp
 

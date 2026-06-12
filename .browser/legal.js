@@ -109,9 +109,9 @@ const EN_PRIVACY = {
       "Depending on your settings and use of the Service, we may process the following categories of personal data:",
     ], list: [
       "Identity and account data: display name, username/handle, profile emoji or avatar, email address (where used), authentication identifiers from Sign in with Apple, Google Sign-In, or email/password registration, account creation date, onboarding status.",
-      "Face data / onboarding imagery: a selfie or profile photo you submit during onboarding, processed to create your avatar and generate an initial in-app Echelon Score suggestion via automated image analysis. We do not collect Face ID data, faceprints, face geometry templates, biometric identifiers, liveness maps, depth maps, or government identity verification data.",
+      "Profile photo / onboarding imagery: a selfie or profile photo you submit during onboarding to create your avatar. We do not analyze your appearance for scoring, and we do not collect Face ID data, faceprints, face geometry templates, biometric identifiers, liveness maps, depth maps, or government identity verification data.",
       "Echelon Score and reputation data: numeric score, tier, rating history (stars, sentiment tags, timestamps), score changes, boost status, reputation hold or lock flags, and derived access levels within the Service.",
-      "Social graph and interaction data: friend connections, friend requests sent or received, ratings you give or receive, comments, likes, bookmarks, shares, story views, and feed interactions.",
+      "Social graph and interaction data: friend connections, friend requests sent or received, media ratings you give or receive on posts/stories/reels, comments, likes, bookmarks, shares, story views, and feed interactions.",
       "Messaging data: direct message text, photos, videos, voice notes, reactions, reply metadata, read receipts, typing indicators, and ephemeral message settings (disappearing timers, view-once media). Recipients may capture content before it expires; we cannot control copies on their devices.",
       "Location and proximity data: when you enable Lens or proximity features, approximate or precise geolocation (latitude/longitude), proximity scan activity, nearby user discovery within configured radius, and timestamps of location updates.",
       "Instagram / Meta data (optional): if you connect Instagram, we may receive and store your Instagram user ID, handle, access tokens, verification status, and content you authorise us to sync to your feed.",
@@ -120,14 +120,12 @@ const EN_PRIVACY = {
       "Communications: in-app notifications (\"Pulse\" alerts), support emails, and records of data subject requests.",
       "Cookie and consent records: your cookie preferences and version of consent given.",
     ]},
-    { heading: "4A. Face data collection, use, sharing, storage, and retention", paragraphs: [
-      "What face data we collect: during onboarding or a user-initiated retry, you may submit a selfie/profile photo. The submitted image may contain your face. We do not collect Apple Face ID data, biometric face templates, faceprints, facial geometry measurements, liveness maps, depth maps, or government ID data.",
-      "Why we store face data: we store the submitted image only as your visible profile avatar and account media so your profile can function inside Echelon. We store the resulting numeric onboarding score and score history as account/reputation data so your Echelon Score can be displayed and audited in the app. We do not store any biometric identifier, faceprint, facial geometry template, or face-recognition template.",
-      "How we use face data: the submitted image is used only to create or update your profile avatar and to request an automated image-analysis score suggestion used as your initial in-app Echelon Score. The score is an entertainment/community metric inside Echelon only and is not used for identity verification, access to real-world services, credit, employment, housing, insurance, or legal decisions.",
-      "Which third parties receive face data: if automated image analysis is enabled, the onboarding image may be sent to Google LLC / Google Ireland Limited through the Google Gemini API, acting as our AI/image-analysis processor, solely to return the score suggestion. Our hosting providers may store the image on Echelon-controlled server storage as part of operating echelon.rsvp. We do not sell face data, share it with data brokers, use it for advertising, use it to track users across apps or websites, or share it with Meta/Instagram or Apple for face analysis.",
-      "Why third parties receive face data: Google Gemini receives the image only to perform the requested image analysis and return a score suggestion. Hosting providers receive/store the image only so Echelon can display your avatar, operate backups, secure the service, and restore the service after incidents.",
-      "Third-party storage of face data: Google Gemini API processing is configured for service processing, not advertising or cross-app tracking. Google may process submitted content transiently to provide the response and may keep limited abuse-prevention, safety, or service logs according to Google's Cloud/AI service terms; Echelon does not authorise Google to use face data to create faceprints or identify users. Hosting providers store the avatar only on Echelon-controlled infrastructure and backups under our instructions.",
-      "Echelon storage and retention: the uploaded image is stored on Echelon-controlled server storage as your profile avatar until you replace it, remove it where available, or delete your account. This retention period is necessary because the image is your profile avatar. After account deletion, face images and account data are deleted or anonymised from active systems within 30 days; encrypted backups may persist for up to 24 months for security, disaster recovery, legal defence, and integrity reasons, then are purged on the normal backup rotation. Server/security logs are typically retained up to 90 days.",
+    { heading: "4A. Profile photo collection, use, sharing, storage, and retention", paragraphs: [
+      "What profile photo data we collect: during onboarding or a user-initiated retry, you may submit a selfie/profile photo. The submitted image may contain your face. We do not collect Apple Face ID data, biometric face templates, faceprints, facial geometry measurements, liveness maps, depth maps, or government ID data.",
+      "Why we store profile photos: we store the submitted image only as your visible profile avatar and account media so your profile can function inside Echelon. We do not use profile photos to judge appearance, generate attractiveness scores, or create biometric identifiers.",
+      "How we use profile photos: the submitted image is used only to create or update your profile avatar. Your Echelon Score is based on media ratings and positive community activity, not on automated analysis of your face or body.",
+      "Which third parties receive profile photos: hosting providers may store the image on Echelon-controlled server storage as part of operating echelon.rsvp. We do not send onboarding photos to AI appearance-analysis services. We do not sell profile photos, share them with data brokers, use them for advertising, or use them to track users across apps or websites.",
+      "Echelon storage and retention: the uploaded image is stored on Echelon-controlled server storage as your profile avatar until you replace it, remove it where available, or delete your account. After account deletion, profile photos and account data are deleted or anonymised from active systems within 30 days; encrypted backups may persist for up to 24 months for security, disaster recovery, legal defence, and integrity reasons, then are purged on the normal backup rotation. Server/security logs are typically retained up to 90 days.",
     ]},
     { heading: "5. Sources of data", paragraphs: [
       "We collect data directly from you, automatically through your use of the Service, from other users (e.g. ratings they submit about you), and from third parties you choose to connect (Apple, Google, Meta/Instagram).",
@@ -213,10 +211,11 @@ const EN_TERMS = {
       "Fortune Comet does not guarantee the accuracy, fairness, completeness, or timeliness of any score, rating, or user-generated content. Ratings express the subjective opinions of individual users, not ours.",
       "Features such as events, Lens overlays, score-ranked discovery, and access tiers are provided for in-app experience only and do not create legal entitlements to real-world goods, services, or privileges unless explicitly stated in a separate written agreement.",
     ]},
-    { heading: "2A. Face scan and onboarding photo", paragraphs: [
-      "During onboarding or a user-initiated retry, you may submit a selfie/profile photo. This image is used only to create your profile avatar and request an automated image-analysis score suggestion for your initial in-app Echelon Score.",
-      "The face scan is not identity verification, age verification, liveness verification, or biometric authentication. We do not create or store faceprints, facial geometry templates, biometric identifiers, or Apple Face ID data.",
-      "Full collection, sharing, storage, and retention details are provided in the Privacy Policy section \"4A. Face data collection, use, sharing, storage, and retention\".",
+    { heading: "2A. Profile photo and onboarding", paragraphs: [
+      "During onboarding or a user-initiated retry, you may submit a selfie/profile photo. This image is used only to create your profile avatar.",
+      "Echelon does not analyze your appearance for scoring and does not support person-to-person ratings. Your Echelon Score reflects media ratings and positive community activity.",
+      "The profile photo step is not identity verification, age verification, liveness verification, or biometric authentication. We do not create or store faceprints, facial geometry templates, biometric identifiers, or Apple Face ID data.",
+      "Full collection, sharing, storage, and retention details are provided in the Privacy Policy section \"4A. Profile photo collection, use, sharing, storage, and retention\".",
     ]},
     { heading: "3. Eligibility", paragraphs: [
       "You must be at least 16 years old and have legal capacity to enter a binding contract in your jurisdiction.",
@@ -228,9 +227,10 @@ const EN_TERMS = {
       "You are solely responsible for maintaining the confidentiality of your credentials and for all activity under your account. Notify us immediately at hi@echelon.rsvp of any unauthorised use.",
       "We may refuse registration, reclaim usernames, or require verification where we reasonably suspect fraud, impersonation, or policy violations.",
     ]},
-    { heading: "5. Echelon Score, ratings, and community rules", paragraphs: [
-      "Your Echelon Score may increase or decrease based on ratings from other users and automated in-app rules. Score changes may affect visibility, feature access, and interactions within the Service.",
-      "You agree to give ratings honestly and in good faith, without coercion, bribery, bots, or manipulation. Organised score manipulation is prohibited.",
+    { heading: "5. Echelon Score, media ratings, and community rules", paragraphs: [
+      "Your Echelon Score may increase or decrease based on media ratings on your posts/stories/reels, follower activity, and in-app participation rules. Echelon does not support rating, ranking, or judging people.",
+      "You agree to rate media honestly and in good faith, without coercion, bribery, bots, or manipulation. Organised score manipulation is prohibited.",
+      "You agree to interact respectfully. Harassment, bullying, body-shaming, hate, or content intended to objectify or demean others is prohibited.",
       "We may apply reputation holds, locks, cooldowns, or feature restrictions to protect community integrity.",
     ]},
     { heading: "6. User-generated content", paragraphs: [

@@ -103,6 +103,27 @@ How to locate rating in the app:
 
 We updated the App Store description and App Review Notes to match these steps.
 
+### Guideline 1.2 - User Generated Content (objectification)
+
+We removed features that could be interpreted as objectifying or mean-spirited toward real people.
+
+Changes in build 20:
+
+- Removed person-to-person ratings across the app (Map, profiles, chat end, calls, Lens proximity).
+- Ratings are now media-only: posts, stories, and reels.
+- Removed AI appearance/attractiveness analysis during onboarding. Profile photo is avatar-only; starting score is neutral.
+- Match pass/Next no longer reduces another user's score.
+- Updated in-app copy, documentation, Privacy Policy, Terms, and App Store metadata to reflect respectful community participation.
+- Removed punitive low-score UI treatment.
+
+How to verify:
+
+1. Sign in with `review@echelon.rsvp` / `EchelonReview2026!`
+2. Feed: single-tap a post to rate media. No person rating controls exist.
+3. Map: tap a user pin. Options are Profile, Follow, and Message only.
+4. Match: like or pass without score penalties.
+5. Onboarding: profile photo only, no appearance scoring.
+
 Thank you.
 
 Echelon Support  

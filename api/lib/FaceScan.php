@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 final class FaceScan
 {
-    private const PROMPT = 'You are Echelon\'s onboarding radiance engine. Analyze this selfie for conventional attractiveness: symmetry, skin clarity, grooming, expression warmth, photogenic presence. Return JSON only: {"score": number from 1.0 to 5.0 in steps of 0.05, "note": "one short warm sentence"}. Most people score 2.8-4.2. Always return a score even in moderate lighting or partial face visibility — estimate generously from what you can see.';
+    private const PROMPT = 'Deprecated. Echelon no longer uses appearance analysis for onboarding scores.';
 
     public static function analyze(string $jpegBytes, string $apiKey, string $model = 'gemini-2.5-flash'): array
     {

@@ -253,8 +253,9 @@ import React, {
      1. CONFIG: social stratification, feature gates, emotional vocabulary
   ============================================================================ */
   
-  // Tiers map a score onto a social caste. The boundaries echo the episode:
-  // 4.5+ is the rarefied air, below 2.6 you become a person to be avoided.
+  // Engagement tiers from community participation and content quality (not appearance).
+  const ENABLE_PERSON_RATINGS = false;
+
   const TIERS = [
     {
       key: "elite", label: "Elite", min: 4.5,
@@ -262,7 +263,7 @@ import React, {
       grad: ["#FFE9A8", "#FFD6E4"],
       ring: ["#F4C84B", "#FF9DC0"],
       icon: Crown,
-      blurb: "The radiant few. Doors open before you knock.",
+      blurb: "Top community contributor. Keep sharing great content.",
     },
     {
       key: "high", label: "High", min: 4.0,
@@ -270,7 +271,7 @@ import React, {
       grad: ["#E6DBFF", "#D8ECFF"],
       ring: ["#B79CF0", "#7FB8F0"],
       icon: Sparkles,
-      blurb: "Trusted, pleasant, going places. Keep smiling.",
+      blurb: "Strong engagement and well-rated posts.",
     },
     {
       key: "mid", label: "Mid", min: 2.6,
@@ -278,15 +279,15 @@ import React, {
       grad: ["#D7F2E6", "#EFF6E4"],
       ring: ["#7FD4B4", "#BFE08A"],
       icon: Gauge,
-      blurb: "Acceptable. A little more warmth wouldn't hurt.",
+      blurb: "Growing presence. Post and connect to level up.",
     },
     {
-      key: "low", label: "Low", min: 1.0,
-      accent: "#B07E7E", ink: "#7A4F4F", soft: "#EFE6E6",
-      grad: ["#E7D7D7", "#E2DDE2"],
-      ring: ["#C9A0A0", "#B8AEC0"],
-      icon: ShieldAlert,
-      blurb: "Below community standards. Please reflect and improve.",
+      key: "low", label: "Starter", min: 1.0,
+      accent: "#8C6BD8", ink: "#5A4A78", soft: "#F3EEFF",
+      grad: ["#EFE9FF", "#FFF4F8"],
+      ring: ["#B79CF0", "#FF8FB1"],
+      icon: Sparkles,
+      blurb: "Welcome! Your score grows from posts and positive activity.",
     },
   ];
   
@@ -436,6 +437,7 @@ import React, {
   const hasHigherScoreThan = (state, c) => scoreForCompare(state.user.score) > scoreForCompare(c?.score ?? 0);
 
   const canRateFeed = (state, c) => {
+    if (!ENABLE_PERSON_RATINGS) return false;
     if (state.user.locked || state.user.score < MIN_RATER_SCORE) return false;
     if (!c?.id || !state.friends.includes(c.id)) return false;
     return true;
@@ -1414,7 +1416,7 @@ import React, {
   const passesSparkFilters = (state, c, prefs = null) => {
     const p = prefs || sparkPrefsFromState(state);
     const score = c.score ?? 0;
-    if (score < p.minScore || score > p.maxScore) return false;
+    if (ENABLE_PERSON_RATINGS && (score < p.minScore || score > p.maxScore)) return false;
     const height = c.heightM ?? c.height_m;
     if (height == null || height < p.minHeightM || height > p.maxHeightM) return false;
     const age = c.age ?? ageFromBirthYear(c.birthYear ?? c.birth_year);
@@ -5302,7 +5304,7 @@ import React, {
         <StoryBar onCreateStory={() => dispatch({ type: "OPEN_MODAL", modal: "mediapick", payload: { mode: "story" } })} onOpenStory={openStory} />
 
         <div className="ech-feed-rate-coach" role="note" aria-label={tr("feed.rateCoachTitle")}>
-          <Scale size={16} color="#8C6BD8" strokeWidth={2} />
+          <Star size={16} color="#8C6BD8" strokeWidth={2} />
           <div className="ech-feed-rate-coach-copy">
             <b>{tr("feed.rateCoachTitle")}</b>
             <p>{tr("feed.rateCoach")}</p>
@@ -5873,6 +5875,7 @@ import React, {
           >
             <div className="spark-filters spark-filters--fun card">
               <p className="spark-filters-title">{tr("spark.filtersTitle")}</p>
+              {ENABLE_PERSON_RATINGS && (
               <div className="spark-filter-block">
                 <span className="spark-filter-label">{tr("spark.filterRating")}</span>
                 <div className="spark-min-stars">
@@ -5890,6 +5893,7 @@ import React, {
                 </div>
                 <b className="spark-range-val">{tr("spark.minScoreLabel", { score: Math.round(prefs.minScore) })}</b>
               </div>
+              )}
               <div className="spark-filter-block">
                 <span className="spark-filter-label">{tr("spark.filterAge")}</span>
                 <input type="range" min="18" max="99" value={prefs.maxAge} onChange={(e) => updatePref("maxAge", +e.target.value)} />
@@ -6400,7 +6404,7 @@ import React, {
           </>
         )}
 
-        {!state.lens && (
+        {ENABLE_PERSON_RATINGS && !state.lens && (
           <p className="lens-rate-note"><EyeOff size={14} /> Turn on Lens to rate followed users.</p>
         )}
 
@@ -6408,15 +6412,15 @@ import React, {
           <p className="lens-rate-note warn">{state.geoError}</p>
         )}
 
-        {state.lens && state.proximityScan && !state.geoError && rateable.length === 0 && state.liveData && (
+        {ENABLE_PERSON_RATINGS && state.lens && state.proximityScan && !state.geoError && rateable.length === 0 && state.liveData && (
           <p className="lens-rate-note">No followed users with Lens on to rate.</p>
         )}
 
-        {state.proximityScan && rateable.length > 0 && (
+        {ENABLE_PERSON_RATINGS && state.proximityScan && rateable.length > 0 && (
           <SectionLabel>Tap to rate</SectionLabel>
         )}
 
-        {state.proximityScan && rateable.map((c) => {
+        {ENABLE_PERSON_RATINGS && state.proximityScan && rateable.map((c) => {
           const dist = milesOf(state, c);
           const rateNearby = (stars) => {
             if (!canRateProximity(state, c)) return;
@@ -6449,7 +6453,7 @@ import React, {
           );
         })}
 
-        {notRateable.length > 0 && (
+        {ENABLE_PERSON_RATINGS && notRateable.length > 0 && (
           <>
             <SectionLabel>Not rateable</SectionLabel>
             {notRateable.map((c) => (
@@ -6689,7 +6693,7 @@ import React, {
                   <span>{selectedFollowUi === "pending" ? tr("friends.requestSent") : tr("friends.add")}</span>
                 </button>
               )}
-              {canRateFriendMap(sel) ? (
+              {ENABLE_PERSON_RATINGS && canRateFriendMap(sel) ? (
                 <button
                   type="button"
                   className="viewfinder-action-btn viewfinder-action-btn--rate"
@@ -6697,9 +6701,7 @@ import React, {
                 >
                   <Star size={16} /> <span>{tr("viewfinder.rate")}</span>
                 </button>
-              ) : (
-                <span className="viewfinder-muted">{!state.lens ? tr("viewfinder.lensOff") : tr("viewfinder.notRateable")}</span>
-              )}
+              ) : null}
             </div>
           </div>
         ) : (
@@ -9581,6 +9583,12 @@ import React, {
       }).catch(() => {});
     }, [c?.id, isProx, postId, state.liveData, payload.afterChat, payload.afterCall]);
 
+    useEffect(() => {
+      if (!ENABLE_PERSON_RATINGS && !postId) dispatch({ type: "CLOSE_MODAL" });
+    }, [postId, dispatch]);
+
+    if (!ENABLE_PERSON_RATINGS && !postId) return null;
+
     const interactionCooldownMs = cooldownUntil ? Math.max(0, cooldownUntil - Date.now()) : cooldownMs;
 
     const title = payload.afterChat
@@ -9957,7 +9965,7 @@ import React, {
     const isSelf = u.id === state.user.id;
     const friend = state.friends.includes(u.id);
     const locked = !isSelf && (u.profileLocked || u.privateProfile || u.blocked);
-    const showRateBtn = canShowProfileRate(state, u, rateGate.can);
+    const showRateBtn = ENABLE_PERSON_RATINGS && canShowProfileRate(state, u, rateGate.can);
 
     const openChat = () => {
       if (locked || blocked) return;
@@ -10999,22 +11007,10 @@ import React, {
       pushMessage({ from: ME_ID, mediaUrl: stickerUrl, mediaType: "sticker" });
     };
 
-    const endChat = async () => {
+    const endChat = () => {
       stopPlayback();
       sfx.tap();
-      if (state.liveData) {
-        try {
-          const r = await api.canRate(c.id, "chat");
-          if (!r.canRate) {
-            dispatch({ type: "CLOSE_MODAL" });
-            return;
-          }
-        } catch {
-          dispatch({ type: "CLOSE_MODAL" });
-          return;
-        }
-      }
-      dispatch({ type: "OPEN_MODAL", modal: "rate", payload: { id: c.id, forced: true, afterChat: true } });
+      dispatch({ type: "CLOSE_MODAL" });
     };
 
     const askDeleteChat = () => {
@@ -11522,19 +11518,10 @@ import React, {
       dispatch({ type: "END_CALL" });
     };
 
-    const finishCall = async () => {
+    const finishCall = () => {
       sfx.tap();
-      const wasConnected = accepted && secs >= 1;
       endCallSession();
       dispatch({ type: "CLOSE_MODAL" });
-      if (!wasConnected) return;
-      if (state.liveData) {
-        try {
-          const r = await api.canRate(c.id, "call");
-          if (!r.canRate) return;
-        } catch { return; }
-      }
-      dispatch({ type: "OPEN_MODAL", modal: "rate", payload: { id: c.id, forced: true, afterCall: true, callAccepted: true } });
     };
 
     const minimizeCall = () => {
@@ -14527,7 +14514,7 @@ import React, {
         icon: SparklesIcon,
         kicker: "Start here",
         title: "Welcome to Echelon",
-        body: "This is your quick glow-up tour. Post your best moments, rate what you see, meet people nearby, and watch your score become part of the game.",
+        body: "This is your quick tour. Post your best moments, rate posts and stories you enjoy, meet people nearby, and grow your community score through positive participation.",
         accent: "#B79CF0",
         screen: "feed",
         demo: "overview",
@@ -14545,7 +14532,7 @@ import React, {
         icon: Gauge,
         kicker: "Your score",
         title: "Your vibe has a number",
-        body: "Your score moves with how people rate you and your content. Direct ratings matter, but your photos and videos carry most of the weight.",
+        body: "Your score reflects your posts, stories, and positive community activity. Rate media you enjoy. Echelon does not support rating or judging people.",
         accent: "#E8B84A",
         screen: "profile",
         demo: "score",
@@ -14563,7 +14550,7 @@ import React, {
         icon: Flame,
         kicker: "Match",
         title: "Find your people fast",
-        body: "Match is quick discovery. Like who catches your eye, pass when it is not it, and hit NEXT to keep the energy moving.",
+        body: "Match is quick discovery. Like people you want to connect with, pass when it is not a fit, and hit NEXT to keep browsing. No one loses points when you pass.",
         accent: "#FF7E67",
         screen: "spark",
         demo: "match",
@@ -14581,7 +14568,7 @@ import React, {
         icon: Users,
         kicker: "Followers",
         title: "Not all followers hit the same",
-        body: "Followers matter by quality. A 5-star follow is a bigger boost than a low-score follow, so who joins your circle actually counts.",
+        body: "Followers gently boost your engagement score. Build a circle of people you genuinely want to connect with.",
         accent: "#8C6BD8",
         screen: "friends",
         demo: "followers",
@@ -16320,7 +16307,7 @@ export default function EchelonApp() {
         <InstallHelpCtx.Provider value={installHelpApi}>
         <Styles />
         <div className="stage">
-          <div className={"phone" + (getTier(state.user.score).key === "low" ? " grim" : "") + (state.reduceMotion ? " calm" : "") + (state.activeCall && state.modal?.type !== "call" ? " phone--call-banner" : "")}>
+          <div className={"phone" + (state.reduceMotion ? " calm" : "") + (state.activeCall && state.modal?.type !== "call" ? " phone--call-banner" : "")}>
             {state.activeCall && <CallSession />}
             <CallBanner />
             {!state.sessionReady ? (
@@ -16360,7 +16347,7 @@ export default function EchelonApp() {
               onOpen={() => { sfx.tap(); setRatingToast(null); dispatch({ type: "SCREEN", screen: "alerts" }); }}
             />
           </div>
-          <p className="stage-note">Reputation as currency, by design.</p>
+          <p className="stage-note">Share, connect, and grow through positive community participation.</p>
         </div>
         </InstallHelpCtx.Provider>
         </TickCtx.Provider>

@@ -450,43 +450,29 @@ function handle_bootstrap(PDO $pdo, array $cfg, string $method, array $parts, ar
 function handle_me(PDO $pdo, array $cfg, string $method, array $parts, array $me): void
 {
     if (($parts[0] ?? '') === 'face-retry' && $method === 'POST') {
-        require_once __DIR__ . '/lib/FaceScan.php';
         if (empty($me['face_scan_fallback']) || !empty($me['face_scan_retry_used'])) {
-            Response::error('Face scan retry not available', 403);
+            Response::error('Profile photo retry not available', 403);
         }
         $body = Helpers::jsonBody();
         $image = $body['image'] ?? '';
-        if (!$image || !is_string($image)) Response::error('Face scan photo required');
-        $apiKey = trim($cfg['google_ai_api_key'] ?? $cfg['openai_api_key'] ?? '');
-        if (!$apiKey) Response::error('Face analysis not configured on server', 503);
-        $model = trim($cfg['google_ai_model'] ?? 'gemini-2.5-flash');
+        if (!$image || !is_string($image)) Response::error('Profile photo required');
         $binary = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', $image), true);
-        if (!$binary || strlen($binary) < 1000) Response::error('Invalid face scan image');
-        try {
-            $analysis = FaceScan::analyze($binary, $apiKey, $model);
-            $score = (float)$analysis['score'];
-            $dir = rtrim($cfg['upload_dir'], '/\\');
-            if (!is_dir($dir)) mkdir($dir, 0755, true);
-            $fname = 'face_' . bin2hex(random_bytes(10)) . '.jpg';
-            file_put_contents($dir . DIRECTORY_SEPARATOR . $fname, $binary);
-            $avatarUrl = Helpers::absUrl(rtrim($cfg['upload_url'], '/') . '/' . $fname);
-            $pdo->prepare('UPDATE users SET score = ?, avatar_url = ?, face_scan_fallback = 0, face_scan_retry_used = 1 WHERE id = ?')->execute([
-                $score, $avatarUrl, $me['id'],
-            ]);
-            $ts = (int)(microtime(true) * 1000);
-            $pdo->prepare('INSERT INTO score_history (user_id, score, recorded_at) VALUES (?, ?, ?)')->execute([$me['id'], $score, $ts]);
-            $fresh = $pdo->prepare('SELECT * FROM users WHERE id = ?');
-            $fresh->execute([$me['id']]);
-            Response::json([
-                'user' => Helpers::userPublic($fresh->fetch()),
-                'score' => $score,
-                'note' => $analysis['note'] ?? 'Your radiance score was updated.',
-            ]);
-        } catch (Throwable $e) {
-            error_log('Face retry: ' . $e->getMessage());
-            $pdo->prepare('UPDATE users SET face_scan_retry_used = 1 WHERE id = ?')->execute([$me['id']]);
-            Response::error('Face scan could not be processed. Your score remains 3.0.', 422);
-        }
+        if (!$binary || strlen($binary) < 1000) Response::error('Invalid profile photo');
+        $dir = rtrim($cfg['upload_dir'], '/\\');
+        if (!is_dir($dir)) mkdir($dir, 0755, true);
+        $fname = 'face_' . bin2hex(random_bytes(10)) . '.jpg';
+        file_put_contents($dir . DIRECTORY_SEPARATOR . $fname, $binary);
+        $avatarUrl = Helpers::absUrl(rtrim($cfg['upload_url'], '/') . '/' . $fname);
+        $pdo->prepare('UPDATE users SET avatar_url = ?, face_scan_fallback = 0, face_scan_retry_used = 1 WHERE id = ?')->execute([
+            $avatarUrl, $me['id'],
+        ]);
+        $fresh = $pdo->prepare('SELECT * FROM users WHERE id = ?');
+        $fresh->execute([$me['id']]);
+        Response::json([
+            'user' => Helpers::userPublic($fresh->fetch()),
+            'score' => (float)$me['score'],
+            'note' => 'Profile photo updated. Your Echelon Score reflects posts and positive community activity.',
+        ]);
     }
 
     if ($method === 'GET') {
@@ -551,32 +537,20 @@ function handle_me(PDO $pdo, array $cfg, string $method, array $parts, array $me
 function handle_onboard(PDO $pdo, array $cfg, string $method, array $parts, array $me): void
 {
     if ($method !== 'POST') Response::error('Method not allowed', 405);
-    require_once __DIR__ . '/lib/FaceScan.php';
 
     $body = Helpers::jsonBody();
     $image = $body['image'] ?? '';
-    if (!$image || !is_string($image)) Response::error('Face scan photo required');
-
-    $apiKey = trim($cfg['google_ai_api_key'] ?? $cfg['openai_api_key'] ?? '');
-    if (!$apiKey) Response::error('Face analysis not configured on server', 503);
-    $model = trim($cfg['google_ai_model'] ?? 'gemini-2.5-flash');
+    if (!$image || !is_string($image)) Response::error('Profile photo required');
 
     $binary = base64_decode(preg_replace('#^data:image/\w+;base64,#i', '', $image), true);
-    if (!$binary || strlen($binary) < 1000) Response::error('Invalid face scan image');
+    if (!$binary || strlen($binary) < 1000) Response::error('Invalid profile photo');
 
+    $score = 3.0;
+    $analysis = [
+        'score' => $score,
+        'note' => 'Welcome to Echelon! Your score grows from posts, stories, and positive community participation.',
+    ];
     $fallback = false;
-    try {
-        $analysis = FaceScan::analyze($binary, $apiKey, $model);
-    } catch (Throwable $e) {
-        error_log('Onboard face scan: ' . $e->getMessage());
-        $analysis = [
-            'score' => 3.0,
-            'note' => 'Welcome to Echelon. Your starting score is 3.0 — you can retry your face scan once in Settings.',
-        ];
-        $fallback = true;
-    }
-
-    $score = (float)$analysis['score'];
     $dir = rtrim($cfg['upload_dir'], '/\\');
     if (!is_dir($dir)) mkdir($dir, 0755, true);
     $fname = 'face_' . bin2hex(random_bytes(10)) . '.jpg';
@@ -653,12 +627,15 @@ function handle_ratings(PDO $pdo, array $cfg, string $method, array $parts, arra
     $tag = $body['tag'] ?? null;
     $context = $body['context'] ?? 'feed';
     $postId = isset($body['postId']) && $body['postId'] !== '' ? (string)$body['postId'] : null;
-    $allowed = ['feed', 'chat', 'call', 'proximity', 'story'];
+    $allowed = ['feed', 'chat', 'call', 'proximity', 'story', 'explore'];
     if (!in_array($context, $allowed, true)) $context = 'feed';
     if (!$targetId || $stars < 1 || $stars > 5) Response::error('Invalid rating');
     if ($targetId === $me['id']) Response::error('Cannot rate yourself');
 
     $isUiTestPost = $postId === 'ptest_ui';
+    if (!$postId && !$isUiTestPost) {
+        Response::error('Echelon supports media ratings only. Rate a post, story, or reel instead.', 403);
+    }
 
     if ($postId && !$isUiTestPost) {
         $chk = $pdo->prepare('SELECT 1 FROM ratings WHERE rater_id = ? AND post_id = ? LIMIT 1');

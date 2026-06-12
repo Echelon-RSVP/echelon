@@ -263,23 +263,7 @@ final class Spark
 
     public static function maybeApplySwipeScoreNudge(PDO $pdo, string $fromUserId, array $target, string $action): bool
     {
-        $now = (int)(microtime(true) * 1000);
-        $rate = $action === 'pass' ? self::PASS_SCORE_RATE : self::LIKE_SCORE_RATE;
-        $next = Scoring::applyPercentDelta((float)$target['score'], $rate);
-        $pdo->prepare('UPDATE users SET score = ? WHERE id = ?')->execute([$next, $target['id']]);
-
-        $pdo->prepare(
-            'INSERT INTO spark_score_nudges (from_user_id, to_user_id, action, ts) VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE action = VALUES(action), ts = VALUES(ts)'
-        )->execute([$fromUserId, $target['id'], $action, $now]);
-
-        try {
-            $pdo->prepare('INSERT INTO score_history (user_id, score, recorded_at) VALUES (?, ?, ?)')->execute([
-                $target['id'], $next, $now,
-            ]);
-        } catch (Throwable $e) {
-            // optional
-        }
-        return true;
+        // App Store Guideline 1.2: Match swipes must not change another user's score.
+        return false;
     }
 }

@@ -1,17 +1,16 @@
-Echelon is where your best self is finally measurable.
+Echelon is a positive social community for sharing posts, stories, and real connections.
 
-Build your reputation through real interactions: posts, stories, messages, and ratings from people who know you. Your score moves in real time and unlocks access across the app.
+Post photos and videos, message friends, discover people on the map, and grow your Echelon Score through content quality and respectful participation.
 
 • Feed, stories, and portfolio
 • Direct messages with photos, voice, and video
-• Discover people nearby on the map
-• Rate posts: tap any post once, then tap a star
-• Rate people: open Map, tap a friend pin, then Rate (once per 24h when eligible)
+• Discover friends nearby on the map
+• Rate posts and stories (media only, not people)
+• Match to meet people with mutual likes
 • Friends, blocks, and privacy controls
 
-How to rate in the app:
+How ratings work:
 1. Feed: tap a post once to open stars, then tap a star to rate that media.
-2. Map: open Map, tap a followed user on the map, then tap Rate.
-3. Profile: open any profile and tap Rate.
+2. Echelon does not support rating, ranking, or judging people.
 
 Echelon works on iPhone and iPad. Sign in with Apple, Gmail, or email to get started.

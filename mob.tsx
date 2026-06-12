@@ -30,7 +30,7 @@ import React, {
   } from "recharts";
   import { api, setToken, tryBootstrap, getToken, mediaUrl as resolveMediaUrl } from "./api.js";
   import { startGeoWatch, geoSupported } from "./proximity.js";
-  import { initAppleAuth, signInWithApple, fetchAppleConfig, tryAutoSignInWithApple, shouldAutoSignInWithApple } from "./apple-auth.js";
+  import { initAppleAuth, signInWithApple, fetchAppleConfig } from "./apple-auth.js";
   import { initGoogleAuth, signInWithGmail, fetchAuthConfig } from "./web-auth.js";
   import { initPwaInstall, requestInstall, openInExternalBrowser, triggerWebShareInstall, isIos } from "./pwa-install.js";
   import { openInstagramAuth } from "./instagram-auth.js";
@@ -15908,9 +15908,15 @@ export default function EchelonApp() {
       sfx.enabled = state.sound !== false;
     }, [state.sound]);
 
-    // Never leave the launch spinner running if bootstrap stalls (e.g. iPad WKWebView).
+    // Fresh installs (App Review): show sign-in immediately instead of waiting on bootstrap.
     useEffect(() => {
-      const t = setTimeout(() => dispatch({ type: "SESSION_READY" }), 10000);
+      if (!getToken()) dispatch({ type: "SESSION_READY" });
+    }, []);
+
+    // Returning sessions: never leave the launch spinner running if bootstrap stalls.
+    useEffect(() => {
+      if (!getToken()) return undefined;
+      const t = setTimeout(() => dispatch({ type: "SESSION_READY" }), 5000);
       return () => clearTimeout(t);
     }, []);
 
@@ -16005,46 +16011,6 @@ export default function EchelonApp() {
         }
 
         try {
-          if (!getToken() && shouldAutoSignInWithApple()) {
-            try {
-              const apple = await withTimeout((async () => {
-                const appleCfg = await fetchAppleConfig();
-                if (!appleCfg.clientId) return null;
-                await initAppleAuth({ clientId: appleCfg.clientId, redirectUri: appleCfg.redirectUri });
-                return tryAutoSignInWithApple();
-              })(), 6000);
-              if (apple?.idToken) {
-                const { token, user } = await withTimeout(
-                  api.authApple({ idToken: apple.idToken, name: apple.name, email: apple.email }),
-                  8000,
-                );
-                setToken(token);
-                if (user.onboarded) {
-                  const data = await withTimeout(api.bootstrap(), 15000);
-                  dispatch({ type: "HYDRATE", payload: data });
-                  dispatch({ type: "ONBOARDED" });
-                } else {
-                  dispatch({
-                    type: "HYDRATE",
-                    payload: {
-                      user,
-                      contacts: [],
-                      gatherings: [],
-                      feed: [],
-                      friends: [],
-                      rsvps: [],
-                      history: [],
-                      notifications: [],
-                      settings: {},
-                    },
-                  });
-                }
-                dispatch({ type: "SESSION_READY" });
-                return;
-              }
-            } catch { /* manual sign-in fallback */ }
-          }
-
           const data = await withTimeout(tryBootstrap(), 15000).catch(() => null);
           if (data) dispatch({ type: "HYDRATE", payload: data });
         } catch {

@@ -37,9 +37,10 @@ Demo account (email/password login):
 - Email: review@echelon.rsvp
 - Password: EchelonReview2026!
 
-Launch / loading:
-- The app should reach the sign-in screen within a few seconds on iPad. It does not auto-prompt Sign in with Apple on launch.
-- If you see a brief loading spinner, wait up to 10 seconds; the sign-in screen will appear.
+Launch / loading (iPad):
+- On a fresh install with no saved session, the sign-in screen appears immediately (no extended spinner).
+- The app does not auto-prompt Sign in with Apple on launch.
+- Build 22 fixes the launch hang reported on iPad Air (build 20).
 
 Sign in steps (iPhone or iPad):
 1. Open the app and wait for the sign-in screen (should appear within a few seconds on launch).
@@ -47,9 +48,8 @@ Sign in steps (iPhone or iPad):
 3. Enter the credentials above. The account is pre-onboarded with friends, posts, messages, Lens enabled, and recent Lens locations.
 
 iPad launch note (Guideline 2.1):
-- Build 21 fixes a launch hang on iPad caused by automatic Sign in with Apple on cold start.
-- The app no longer prompts for Apple sign-in until the user taps Sign in with Apple.
-- If you see a brief loading spinner on first launch, it should resolve to the sign-in screen within 10 seconds.
+- Build 22 removes automatic Sign in with Apple on cold start (root cause of the infinite spinner on build 20).
+- Fresh installs go straight to the sign-in screen. Apple sign-in only runs when the user taps the button.
 
 How to test main features (iPhone or iPad):
 1. Feed: scroll posts. A purple "Rate posts & stories" banner explains media ratings. Single-tap any post to open stars, then tap a star.

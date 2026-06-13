@@ -557,10 +557,10 @@ function handle_onboard(PDO $pdo, array $cfg, string $method, array $parts, arra
     file_put_contents($dir . DIRECTORY_SEPARATOR . $fname, $binary);
     $avatarUrl = Helpers::absUrl(rtrim($cfg['upload_url'], '/') . '/' . $fname);
 
-    $pdo->prepare('UPDATE users SET onboarded = 1, lens_on = 1, score = ?, avatar_url = ?, face_scan_fallback = ? WHERE id = ?')->execute([
+    $pdo->prepare('UPDATE users SET onboarded = 1, lens_on = 0, score = ?, avatar_url = ?, face_scan_fallback = ? WHERE id = ?')->execute([
         $score, $avatarUrl, $fallback ? 1 : 0, $me['id'],
     ]);
-    $pdo->prepare('UPDATE user_settings SET lens = 1 WHERE user_id = ?')->execute([$me['id']]);
+    $pdo->prepare('UPDATE user_settings SET lens = 0 WHERE user_id = ?')->execute([$me['id']]);
     $ts = (int)(microtime(true) * 1000);
     $pdo->prepare('INSERT INTO score_history (user_id, score, recorded_at) VALUES (?, ?, ?)')->execute([$me['id'], $score, $ts]);
 
@@ -858,16 +858,21 @@ function handle_friends(PDO $pdo, array $cfg, string $method, array $parts, arra
         $cutoff = (int)(microtime(true) * 1000) - (24 * 60 * 60 * 1000);
         $myLat = isset($me['lat']) && $me['lat'] !== null ? (float)$me['lat'] : null;
         $myLng = isset($me['lng']) && $me['lng'] !== null ? (float)$me['lng'] : null;
+        $blocked = Helpers::blockedUserIds($pdo, $me['id']);
+        $blockedBy = Helpers::blockedByUserIds($pdo, $me['id']);
+        $exclude = array_unique([...$blocked, ...$blockedBy]);
         $st = $pdo->prepare(
             'SELECT u.* FROM friendships f
              JOIN users u ON u.id = f.friend_id
              WHERE f.user_id = ? AND u.onboarded = 1
              AND COALESCE(u.map_hidden, 0) = 0
+             AND COALESCE(u.lens_on, 0) = 1
              AND u.lat IS NOT NULL AND u.lng IS NOT NULL AND u.location_ts >= ?'
         );
         $st->execute([$me['id'], $cutoff]);
         $out = [];
         foreach ($st->fetchAll() as $row) {
+            if (in_array($row['id'], $exclude, true)) continue;
             $u = Helpers::userPublic($row);
             $lat = $row['lat'] ?? null;
             $lng = $row['lng'] ?? null;

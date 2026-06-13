@@ -51,18 +51,31 @@ iPad launch note (Guideline 2.1):
 - Build 22 removes automatic Sign in with Apple on cold start (root cause of the infinite spinner on build 20).
 - Fresh installs go straight to the sign-in screen. Apple sign-in only runs when the user taps the button.
 
+User safety (Guideline 5.1.2):
+- Age rating: set to 18+ (map shows mutual followers' approximate locations when manually checked in).
+- Privacy Policy URL: https://echelon.rsvp/app/privacy.html
+- Block: tap a user on Map → Block, or open their profile → Block.
+- Map check-in: users are hidden by default. Tap "Check in on map" to share location. Consent dialog on first use with Decline option. Tap "Check out" or leave Map to hide. No automatic check-in.
+
+How to test Map (Guideline 5.1.2):
+1. Sign in, open Map tab.
+2. Confirm you are hidden until you tap "Check in on map".
+3. First check-in shows a consent dialog with Allow and Not now.
+4. After allowing, your pin appears. Tap Check out to hide.
+5. Tap a friend pin → Profile, Follow, Message, Block.
+
 How to test main features (iPhone or iPad):
 1. Feed: scroll posts. A purple "Rate posts & stories" banner explains media ratings. Single-tap any post to open stars, then tap a star.
 2. Messages: tap Messages in the bottom dock. Open a chat and send a text message.
 3. Profile: view portfolio, score graph, and settings.
 4. Match: tap Match. Tap NEXT to pass or tap the heart to like. Mutual likes become chats. Passing does not affect scores.
-5. Map: tap Map. Tap a friend pin for Profile, Follow, and Message. There is no Rate button for people.
+5. Map: manual check-in only. Block is available on the map action sheet and on profiles.
 6. Media ratings only: Echelon does not offer person ratings anywhere in the app.
 
 Permissions (only requested when used):
 - Camera/microphone: profile photo, chat media, and stories.
 - Photo library: attach images.
-- Location: optional, for Lens/map discovery of followed users who have Lens on.
+- Location: only when the user taps Check in on map (optional; can decline consent or system permission).
 
 Profile photo privacy:
 - Onboarding stores a profile photo as the user's avatar only.

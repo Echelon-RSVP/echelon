@@ -144,9 +144,12 @@ const EN_PRIVACY = {
       "Community ratings reflect the subjective opinions of other users. Fortune Comet does not endorse ratings and is not responsible for their accuracy or fairness.",
     ]},
     { heading: "8. Location, Lens, and proximity features", paragraphs: [
-      "Location data is collected only when you activate Lens, proximity scanning, or related features, or when you explicitly enable location-dependent functionality. You can disable Lens and proximity features in Settings.",
-      "Nearby user discovery uses approximate distance calculations. We do not guarantee the accuracy of location data, which depends on device sensors, network conditions, and user settings.",
-      "Continuous background location tracking is not required for basic use of the Service.",
+      "Map location sharing is optional and intended for users 18 and older. Your pin is hidden by default.",
+      "To appear on the Map, you must manually check in each time you want to share your location. Leaving the Map screen or tapping Check out ends sharing. There is no automatic or persistent check-in.",
+      "Before the first check-in, we ask for your permission to share your approximate location with mutual followers on the map. You may decline.",
+      "Location data is collected only while you are checked in on Map or when you use optional proximity scanning. We do not require continuous background location for basic use.",
+      "Nearby discovery uses approximate distance calculations. Accuracy depends on device sensors, network conditions, and your settings.",
+      "You can block other users from their profile or from the Map. Blocked users cannot see your map pin and you will not see theirs.",
     ]},
     { heading: "9. Messaging and ephemeral content", paragraphs: [
       "Messages may include disappearing timers or view-once media. While we delete or restrict access on our servers according to your settings, we cannot guarantee deletion from a recipient's device, screenshots, screen recordings, or external copies.",

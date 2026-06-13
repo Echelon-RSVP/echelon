@@ -29,7 +29,7 @@ import React, {
     AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine,
   } from "recharts";
   import { api, setToken, tryBootstrap, getToken, mediaUrl as resolveMediaUrl } from "./api.js";
-  import { startGeoWatch, geoSupported } from "./proximity.js";
+  import { startGeoWatch, geoSupported, getCurrentPosition } from "./proximity.js";
   import { initAppleAuth, signInWithApple, fetchAppleConfig } from "./apple-auth.js";
   import { initGoogleAuth, signInWithGmail, fetchAuthConfig } from "./web-auth.js";
   import { initPwaInstall, requestInstall, openInExternalBrowser, triggerWebShareInstall, isIos } from "./pwa-install.js";
@@ -47,7 +47,7 @@ import React, {
     Camera, CalendarHeart, Info, Gauge, Loader,
     Instagram, BadgeCheck, Volume2, VolumeX, Ticket, Radar, Crosshair, BellOff, Moon, Shield,
     Video, Image as ImageIcon, Play, Pause, Send, Mic, MicOff, Smile, LogOut, Smartphone, Share,
-    Clock, UserMinus, UserPlus, UserCheck, Share2, Bookmark, Sparkles as SparklesIcon, MoreHorizontal, Trash2, Timer, Flame,
+    Clock, UserMinus, UserPlus, UserCheck, Share2, Bookmark, Sparkles as SparklesIcon, MoreHorizontal, Trash2, Timer, Flame, Ban,
     Map as MapIcon, Compass, QrCode, AlertCircle,
     BookOpen, SlidersHorizontal, Ruler, Type, AtSign, AlignLeft, AlignCenter, AlignRight, GripVertical, Minus, PlusCircle,
     RotateCcw, LayoutGrid, Infinity, Link2, Download, Music2, Pencil, SquarePlay, ChevronUp, Circle,
@@ -253,6 +253,8 @@ import React, {
      1. CONFIG: social stratification, feature gates, emotional vocabulary
   ============================================================================ */
   
+  const MAP_CONSENT_KEY = "echelon-map-location-consent";
+
   // Engagement tiers from community participation and content quality (not appearance).
   const ENABLE_PERSON_RATINGS = false;
 
@@ -420,6 +422,7 @@ import React, {
   const isMapVisibleFriend = (f) => {
     if (!f) return false;
     if (f.mapHidden || f.hideMapLocation) return false;
+    if (!f.lensOn && !f.recentLens) return false;
     if (f.lat == null || f.lng == null) return false;
     const ts = friendLocationTs(f);
     if (!ts || Number.isNaN(ts)) return false;
@@ -1598,7 +1601,8 @@ import React, {
     appToast: null,
     shareSuccess: null, // { message, composeMode }
     exploreTab: "posts",
-    lens: true,
+    lens: false,
+    mapCheckedIn: false,
     live: true,
     sound: true,
     proximityAlerts: true,
@@ -1697,7 +1701,8 @@ import React, {
             heightM: u.heightM ?? state.user.heightM,
           },
           lang: s.lang || state.lang,
-          lens: s.lens ?? state.lens,
+          lens: false,
+          mapCheckedIn: false,
           live: s.live ?? state.live,
           sound: s.sound ?? state.sound,
           proximityAlerts: s.proximityAlerts ?? state.proximityAlerts,
@@ -1810,6 +1815,8 @@ import React, {
       case "SET_LENS_TARGET":
         return { ...state, lensTarget: action.id };
       case "TOGGLE_LENS": return { ...state, lens: !state.lens };
+      case "MAP_CHECK_IN": return { ...state, mapCheckedIn: true, lens: true, hideMapLocation: false };
+      case "MAP_CHECK_OUT": return { ...state, mapCheckedIn: false, lens: false };
       case "TOGGLE_HIDE_MAP_LOCATION": {
         const next = !state.hideMapLocation;
         if (state.liveData) {
@@ -5120,12 +5127,11 @@ import React, {
         </span>
         <button
           type="button"
-          className={"ech-lens-toggle" + (state.lens ? " on" : "")}
-          onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_LENS" }); }}
-          aria-pressed={state.lens}
-          title={state.lens ? "Lens on" : "Lens off"}
+          className="ech-lens-toggle"
+          onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "lens" }); }}
+          title={tr("viewfinder.title")}
         >
-          {state.lens ? <Eye size={15} /> : <EyeOff size={15} />}
+          <MapPin size={15} />
         </button>
       </div>
     );
@@ -6482,10 +6488,12 @@ import React, {
     const [selected, setSelected] = useState(null);
     const [selectedParty, setSelectedParty] = useState(null);
     const [mapBusy, setMapBusy] = useState(false);
+    const [checkInBusy, setCheckInBusy] = useState(false);
+    const [showMapConsent, setShowMapConsent] = useState(false);
 
     const visibleMapFriends = useMemo(
-      () => mapFriends.filter(isMapVisibleFriend),
-      [mapFriends],
+      () => mapFriends.filter((f) => isMapVisibleFriend(f) && !(state.blocked || []).includes(f.id)),
+      [mapFriends, state.blocked],
     );
 
     const canRateFriendMap = (f) => {
@@ -6549,6 +6557,82 @@ import React, {
     const cooldown = sel ? proxCooldownLeft(state, sel.id) : 0;
     const selectedFollowUi = sel ? followUiForUser(state, sel.id) : "follow";
     const selectedIsFollowing = sel ? state.friends.includes(sel.id) : false;
+    const selectedBlocked = sel ? (state.blocked || []).includes(sel.id) : false;
+
+    const pushMapCheckout = () => {
+      if (!state.liveData) return;
+      api.updatePresence({ lat: null, lng: null, lensOn: false, hideMapLocation: true }).catch(() => {});
+      api.patchMe({ lensOn: false }).catch(() => {});
+    };
+
+    const handleMapCheckOut = () => {
+      sfx.tap();
+      dispatch({ type: "MAP_CHECK_OUT" });
+      pushMapCheckout();
+    };
+
+    const runMapCheckIn = async () => {
+      setCheckInBusy(true);
+      dispatch({ type: "SET_GEO_ERROR", message: null });
+      try {
+        const pos = await getCurrentPosition();
+        dispatch({ type: "SET_GEO_POS", pos: { lat: pos.lat, lng: pos.lng } });
+        dispatch({ type: "MAP_CHECK_IN" });
+        if (state.liveData) {
+          await api.updatePresence({
+            lat: pos.lat,
+            lng: pos.lng,
+            lensOn: true,
+            hideMapLocation: false,
+          });
+          await api.patchMe({ lensOn: true }).catch(() => {});
+        }
+        sfx.success();
+      } catch (e) {
+        const msg = e?.message?.includes("denied") || e?.code === 1
+          ? tr("viewfinder.locationDenied")
+          : (e?.message || tr("viewfinder.checkInError"));
+        dispatch({ type: "SET_GEO_ERROR", message: msg });
+        sfx.penalty();
+      } finally {
+        setCheckInBusy(false);
+        setShowMapConsent(false);
+      }
+    };
+
+    const handleMapCheckIn = () => {
+      sfx.tap();
+      if (state.mapCheckedIn) {
+        handleMapCheckOut();
+        return;
+      }
+      let consented = false;
+      try { consented = localStorage.getItem(MAP_CONSENT_KEY) === "1"; } catch { /* ignore */ }
+      if (!consented) {
+        setShowMapConsent(true);
+        return;
+      }
+      runMapCheckIn();
+    };
+
+    const acceptMapConsent = () => {
+      try { localStorage.setItem(MAP_CONSENT_KEY, "1"); } catch { /* ignore */ }
+      runMapCheckIn();
+    };
+
+    const blockMapUser = async (userId) => {
+      if (!userId) return;
+      sfx.tap();
+      try {
+        if (state.liveData) await api.blockUser(userId);
+        dispatch({ type: "BLOCK_USER", id: userId });
+        setSelected(null);
+        setMapFriends((rows) => rows.filter((f) => f.id !== userId));
+        sfx.success();
+      } catch {
+        sfx.penalty();
+      }
+    };
 
     return (
       <div className="viewfinder-panel">
@@ -6563,12 +6647,15 @@ import React, {
           </div>
           <button
             type="button"
-            className={"lens-toggle-chip" + (state.lens ? " on" : "")}
-            onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_LENS" }); }}
+            className={"lens-toggle-chip" + (state.mapCheckedIn ? " on" : "")}
+            onClick={handleMapCheckIn}
+            disabled={checkInBusy}
           >
-            {state.lens
-              ? <><EyeOff size={13} /> {tr("viewfinder.lensOn")}</>
-              : <><Eye size={13} /> {tr("viewfinder.lensOffChip")}</>}
+            {checkInBusy
+              ? <><Loader size={13} className="spin" /> {tr("viewfinder.checkingIn")}</>
+              : state.mapCheckedIn
+                ? <><EyeOff size={13} /> {tr("viewfinder.checkOut")}</>
+                : <><MapPin size={13} /> {tr("viewfinder.checkIn")}</>}
           </button>
         </div>
 
@@ -6576,27 +6663,26 @@ import React, {
           <MapPin size={15} color="#8C6BD8" className="viewfinder-privacy-pin" />
           <div className="viewfinder-privacy-copy">
             <p className="viewfinder-privacy-lead">
-              {state.lens ? tr("viewfinder.lensVisibleNote") : tr("viewfinder.lensHiddenNote")}
+              {state.mapCheckedIn ? tr("viewfinder.checkedIn") : tr("viewfinder.notCheckedIn")}
             </p>
-            <div className="viewfinder-privacy-settings">
-              <label className="viewfinder-privacy-toggle">
-                <span>{tr("viewfinder.hideMyLocation")}</span>
-                <button
-                  type="button"
-                  className={state.hideMapLocation ? "switch on" : "switch"}
-                  role="switch"
-                  aria-checked={state.hideMapLocation}
-                  onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_HIDE_MAP_LOCATION" }); }}
-                >
-                  <span className="knob" />
-                </button>
-              </label>
-              {state.hideMapLocation && (
-                <small className="viewfinder-privacy-sub">{tr("viewfinder.hideMyLocationSub")}</small>
-              )}
-            </div>
+            <small className="viewfinder-privacy-sub">{tr("viewfinder.manualCheckInNote")}</small>
           </div>
         </div>
+
+        {showMapConsent && (
+          <div className="viewfinder-consent card" role="dialog" aria-labelledby="map-consent-title">
+            <h4 id="map-consent-title" style={{ margin: "0 0 8px", fontSize: 15 }}>{tr("viewfinder.consentTitle")}</h4>
+            <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, margin: "0 0 12px" }}>{tr("viewfinder.consentBody")}</p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" className="btn primary" disabled={checkInBusy} onClick={acceptMapConsent}>
+                {tr("viewfinder.consentAccept")}
+              </button>
+              <button type="button" className="btn soft" disabled={checkInBusy} onClick={() => { sfx.tap(); setShowMapConsent(false); }}>
+                {tr("viewfinder.consentDecline")}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="viewfinder-map-wrap">
           <ViewFinderMap
@@ -6608,7 +6694,7 @@ import React, {
             selectedPartyId={selectedParty}
             searchQuery={mapQuery}
             resolveMediaUrl={resolveMediaUrl}
-            showYou={!state.hideMapLocation}
+            showYou={state.mapCheckedIn}
             onSelect={(f) => { sfx.tap(); setSelectedParty(null); setSelected(f.id); registerUsers([f]); }}
             onPartySelect={(p) => {
               sfx.tap();
@@ -6648,6 +6734,14 @@ import React, {
                 <button type="button" className="viewfinder-action-btn" onClick={() => { sfx.tap(); dispatch({ type: "OPEN_MODAL", modal: "chat", payload: { id: sel.id } }); }}>
                   <Send size={16} />
                   <span>{tr("chat.message")}</span>
+                </button>
+                <button
+                  type="button"
+                  className={"viewfinder-action-btn viewfinder-action-btn--block" + (selectedBlocked ? " on" : "")}
+                  onClick={() => blockMapUser(sel.id)}
+                >
+                  <Ban size={16} />
+                  <span>{selectedBlocked ? tr("block.blocked") : tr("block.block")}</span>
                 </button>
               </div>
             </div>
@@ -8539,12 +8633,11 @@ import React, {
                 </button>
                 <button
                   type="button"
-                  className={"ech-profile-lens" + (state.lens ? " on" : "")}
-                  onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_LENS" }); }}
-                  aria-pressed={state.lens}
-                  aria-label={tr("settings.lens")}
+                  className="ech-profile-lens"
+                  onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "lens" }); }}
+                  aria-label={tr("viewfinder.title")}
                 >
-                  {state.lens ? <Eye size={15} /> : <EyeOff size={15} />}
+                  <MapPin size={15} />
                 </button>
               </div>
             </div>
@@ -8808,8 +8901,16 @@ import React, {
           <FaceScanRetryCard dispatch={dispatch} tr={tr} />
         )}
 
-        <SectionLabel>{tr("settings.lensSec")}</SectionLabel>
-        <Toggle label={tr("settings.lens")} sub={tr("settings.lensSub")} on={state.lens} onClick={() => dispatch({ type: "TOGGLE_LENS" })} icon={Eye} />
+        <SectionLabel>{tr("settings.mapSec")}</SectionLabel>
+        <div className="card" style={{ padding: "12px 14px" }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55 }}>{tr("settings.mapPrivacyBody")}</p>
+          <button type="button" className="btn soft" style={{ marginTop: 10, width: "100%" }} onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "lens" }); }}>
+            <MapPin size={15} /> {tr("settings.openMap")}
+          </button>
+          <a className="btn soft" style={{ marginTop: 8, width: "100%", textAlign: "center", textDecoration: "none", display: "inline-flex", justifyContent: "center", gap: 6 }} href="/app/privacy.html" target="_blank" rel="noopener noreferrer">
+            {tr("settings.privacyPolicy")}
+          </a>
+        </div>
         <Toggle label={tr("settings.live")} sub={tr("settings.liveSub")} on={state.live} onClick={() => dispatch({ type: "TOGGLE_LIVE" })} icon={Gauge} />
         <Toggle label={tr("settings.sound")} sub={tr("settings.soundSub")} on={state.sound} onClick={() => dispatch({ type: "TOGGLE_SOUND" })} icon={state.sound ? Volume2 : VolumeX} />
   
@@ -8889,13 +8990,6 @@ import React, {
         <Toggle label={tr("settings.autoScan")} sub={tr("settings.autoScanSub")} on={state.proximityAutoScan} onClick={() => dispatch({ type: "TOGGLE_PROXIMITY_AUTOSCAN" })} icon={Radar} />
 
         <SectionLabel>{tr("settings.privacySec")}</SectionLabel>
-        <Toggle
-          label={tr("settings.hideMapLocation")}
-          sub={state.hideMapLocation ? tr("settings.hideMapLocationOn") : tr("settings.hideMapLocationOff")}
-          on={state.hideMapLocation}
-          onClick={() => dispatch({ type: "TOGGLE_HIDE_MAP_LOCATION" })}
-          icon={MapPin}
-        />
         <Toggle label={tr("settings.privateProfile")} sub={state.privateProfile ? tr("settings.privateProfileOn") : tr("settings.privateProfileOff")} on={state.privateProfile} onClick={() => dispatch({ type: "TOGGLE_PRIVATE_PROFILE" })} icon={Lock} />
         <Toggle label={tr("settings.showScore")} sub={state.publicScore ? tr("settings.showScoreOn") : tr("settings.showScoreOff")} on={state.publicScore} onClick={() => dispatch({ type: "TOGGLE_PUBLIC_SCORE" })} icon={state.publicScore ? Eye : EyeOff} />
         <Toggle label={tr("settings.showTier")} sub={tr("settings.showTierSub")} on={state.publicTier} onClick={() => dispatch({ type: "TOGGLE_PUBLIC_TIER" })} icon={Crown} />
@@ -14924,12 +15018,11 @@ import React, {
             {unread > 0 && <span className="bell-badge">{unread > 9 ? "9+" : unread}</span>}
           </button>
           <button
-            className={state.lens ? "lensbtn on" : "lensbtn"}
-            onClick={() => { sfx.tap(); dispatch({ type: "TOGGLE_LENS" }); }}
-            title={state.lens ? "Turn Lens off" : "Turn Lens on"}
-            aria-pressed={state.lens}
+            className="lensbtn"
+            onClick={() => { sfx.tap(); dispatch({ type: "SCREEN", screen: "lens" }); }}
+            title={tr("viewfinder.title")}
           >
-            {state.lens ? <Eye size={16} /> : <EyeOff size={16} />}
+            <MapPin size={16} />
           </button>
           <span className="mini-score" style={{ background: tier.soft, color: tier.ink }}>
             <Star size={11} fill={tier.accent} stroke="none" /> {effective.toFixed(2)}
@@ -16113,10 +16206,23 @@ export default function EchelonApp() {
       if (wantScan && !state.proximityScan) dispatch({ type: "START_PROXIMITY" });
     }, [state.onboarded, state.proximityAutoScan, state.screen, state.liveData, state.proximityScan]);
 
-    // Live geolocation + followed Lens users
+    const prevScreen = useRef(state.screen);
+    useEffect(() => {
+      if (prevScreen.current === "lens" && state.screen !== "lens" && state.mapCheckedIn) {
+        dispatch({ type: "MAP_CHECK_OUT" });
+        if (state.liveData) {
+          api.updatePresence({ lat: null, lng: null, lensOn: false, hideMapLocation: true }).catch(() => {});
+          api.patchMe({ lensOn: false }).catch(() => {});
+        }
+      }
+      prevScreen.current = state.screen;
+    }, [state.screen, state.mapCheckedIn, state.liveData]);
+
+    // Live geolocation while manually checked in on Map
     useEffect(() => {
       if (!state.liveData || !state.onboarded) return;
-      const scanning = state.proximityScan || state.screen === "lens";
+      const onMapCheckedIn = state.screen === "lens" && state.mapCheckedIn;
+      const scanning = state.proximityScan || onMapCheckedIn;
       if (!scanning) return;
 
       if (!geoSupported()) {
@@ -16132,8 +16238,8 @@ export default function EchelonApp() {
         api.updatePresence({
           lat: pos.lat,
           lng: pos.lng,
-          lensOn: state.lens,
-          hideMapLocation: state.hideMapLocation,
+          lensOn: state.mapCheckedIn,
+          hideMapLocation: !state.mapCheckedIn,
         }).catch(() => {});
       };
 
@@ -16170,14 +16276,7 @@ export default function EchelonApp() {
         stopWatch();
         clearInterval(pollIv);
       };
-    }, [state.liveData, state.onboarded, state.proximityScan, state.screen, state.lens, state.hideMapLocation]);
-
-    // Sync Lens on/off to server for real proximity matching
-    useEffect(() => {
-      if (!state.liveData || !state.onboarded) return;
-      api.patchMe({ lensOn: state.lens }).catch(() => {});
-      api.patchSettings({ lens: state.lens }).catch(() => {});
-    }, [state.lens, state.liveData, state.onboarded]);
+    }, [state.liveData, state.onboarded, state.proximityScan, state.screen, state.mapCheckedIn]);
 
     // Auto-sync Instagram posts & stories for rating (every 5 min when enabled)
     useEffect(() => {

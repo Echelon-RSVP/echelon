@@ -103,6 +103,23 @@ How to locate rating in the app:
 
 We updated the App Store description and App Review Notes to match these steps.
 
+### Guideline 5.1.2(i) - Map location privacy
+
+We updated Map (Lens) to meet location-sharing requirements:
+
+- Manual check-in only: users are hidden until they tap "Check in on map". Check out or leaving Map ends sharing. No automatic check-in.
+- Consent dialog on first check-in with Allow and Not now.
+- Block available on Map action sheet and user profiles.
+- Privacy Policy: https://echelon.rsvp/app/privacy.html
+- Age rating: set to 18+ in App Store Connect (see store-listing/age-rating-18plus.txt).
+
+How to verify:
+
+1. Map tab → hidden until Check in on map.
+2. Consent → Allow or Not now.
+3. After check-in, pin visible → Check out hides it.
+4. Tap friend pin → Block button present.
+
 ### Guideline 2.1(a) - App Completeness (iPad launch loading)
 
 We fixed an iPad launch hang where the app could stay on the loading spinner indefinitely.

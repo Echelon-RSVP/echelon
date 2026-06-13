@@ -1,0 +1,11 @@
+App Store Connect → App Information → Age Rating
+
+Guideline 5.1.2(i): Echelon shows mutual followers' approximate locations on a map when users manually check in.
+
+Action required:
+1. Open Age Rating questionnaire in App Store Connect.
+2. If no content descriptor applies, use "Override to a Higher Age Rating" and set the app to 18+.
+3. Save and submit with the next build.
+
+Privacy Policy URL (App Information):
+https://echelon.rsvp/app/privacy.html
